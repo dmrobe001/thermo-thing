@@ -117,7 +117,8 @@ function renderInspector(){
       <h3>Cable</h3><p class="sub">tetherball · tension only</p>
       <div class="card"><div class="cardhead">state</div>
         <div class="field force"><span class="lab">tension</span><span class="val" id="cb_T">—</span></div>
-        <div class="field"><span class="lab">total length</span><span class="val">${cb.Ltot.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">total length</span><span class="val" id="cb_Ltot">${cb.Ltot.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">current length</span><span class="val" id="cb_Lcur">—</span></div>
         <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">—</span></div>
         <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">—</span></div>
         <p class="muted" style="margin:8px 0 0">Fixed total length wraps the post. Orbiting in the winding direction spools it in; the ball is free (slack) until it reaches the paid-out length.</p>
@@ -170,6 +171,8 @@ function updateInspectorLive(){
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);
+      document.getElementById('cb_Ltot').textContent=cb.Ltot.toFixed(3);
+      document.getElementById('cb_Lcur').textContent=cableCurrentLength(cb,f).toFixed(3);
       document.getElementById('cb_L').textContent=(cb._Lallow!=null?cb._Lallow:(f?f.Lfree:0)).toFixed(3);
       document.getElementById('cb_W').textContent=(f&&f.mode==='tangent'?f.wb/(2*Math.PI):0).toFixed(2); } }
 }

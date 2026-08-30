@@ -109,6 +109,13 @@ function cableFrame(cb,qangRef,wbRef){
   };
 }
 
+// Current geometric cable path length for this configuration.
+function cableCurrentLength(cb,f){
+  const cf=f||cableFrame(cb); if(!cf) return 0;
+  if(cf.mode==='tangent') return cf.Lfree + cf.rs*Math.max(0,cf.wb);
+  return Math.hypot(cf.T[0]-cf.Qctrl_x, cf.T[1]-cf.Qctrl_y);
+}
+
 // ---- §06.4 · slotFrame ----
 // resolve a slot's world line frame: slider point on A, plus a line (anchor + unit
 // direction) fixed in body B — or in the world when line.id is null
