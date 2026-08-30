@@ -49,11 +49,13 @@ function substep(h){
     // Migrate old saves that stored wrap but not localAngle: derive localAngle
     // from the then-current tangent angle and the saved wrap.
     if(cb.localAngle===undefined){
-      const f0=cableFrame(cb);   // called with localAngle undefined → wb=0 fallback
-      if(!f0){ cb._active=false; cb._C=0; cb._cols=null; continue; }
+      const f0=cableFrame(cb,cb._psiRaw);   // called with localAngle undefined → wb=0 fallback
+      if(!f0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._psiRaw=undefined; continue; }
       cb.localAngle=f0.qang-f0.S.th+(cb.wrap||0)*cb.side;
+      cb._psiRaw=f0.qang;
     }
-    const f=cableFrame(cb); if(!f){ cb._active=false; cb._C=0; cb._cols=null; continue; }
+    const f=cableFrame(cb,cb._psiRaw); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._psiRaw=undefined; continue; }
+    cb._psiRaw=f.qang;
     const wb=f.wb;
     cb._wrap=wb;                             // signed wound angle for rendering
     cb.wrap=Math.max(0,wb);                  // non-negative display field (inspector)

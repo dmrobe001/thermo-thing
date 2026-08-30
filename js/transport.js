@@ -14,7 +14,13 @@ function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
   if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=0;b.vy=0;b.w=0; } }
   gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i]; });
-  cables.forEach((c,i)=>{ if(saved.cW[i]!=null) c.wrap=saved.cW[i]; c._psiRaw=undefined; }); }
+  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; });
+  cables.forEach((c,i)=>{
+    if(saved.cW[i]!=null) c.wrap=saved.cW[i];
+    c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
+    c._Lallow=null; c._wrap=0; c._psiRaw=undefined;
+  });
+}
 
 // ---- §16.2 · transport (play / step / reset) ----
 const btnPlay=document.getElementById('btnPlay');
