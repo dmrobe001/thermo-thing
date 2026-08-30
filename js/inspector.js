@@ -171,5 +171,5 @@ function updateInspectorLive(){
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.abs(cb._lam[0])/sim.h:0).toFixed(2);
       document.getElementById('cb_L').textContent=(cb._Lallow!=null?cb._Lallow:(f?f.Lfree:0)).toFixed(3);
-      document.getElementById('cb_W').textContent=(f?Math.max(0,f.wb)/(2*Math.PI):0).toFixed(2); } }
+      document.getElementById('cb_W').textContent=(f&&f.mode==='tangent'?f.wb/(2*Math.PI):0).toFixed(2); } }
 }
