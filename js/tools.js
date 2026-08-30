@@ -134,7 +134,7 @@ function pickCableHandle(wx,wy){
 function applyCableHandle(ad,wx,wy){
   const cb=ad.cb; const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return;
   const raw=Math.atan2(wy-S.y, wx-S.x)-S.th;
-  if(cb.localAngle===undefined){ cb.localAngle=raw; return; }
+  if(cb.localAngle===undefined) cb.localAngle=raw;
   let d=raw-cb.localAngle;
   while(d>Math.PI) d-=Math.PI*2;
   while(d<-Math.PI) d+=Math.PI*2;
