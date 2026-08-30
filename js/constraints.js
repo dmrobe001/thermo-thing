@@ -36,7 +36,7 @@ function gasFrame(g){
 // ---- §06.3 · cableFrame ----
 // cable geometry: the spool stores a control-point angle in its local frame
 // (cb.localAngle).  The natural tangent from tether T to the spool gives angle
-// qang; the wound amount wb = (qang − qctrl)·side.
+// qang; the wound amount wb = (qctrl − qang)·side.
 //   wb ≥ 0  →  "tangent mode": cable runs T→Q (natural tangent point); the
 //              wound arc Q→Q_ctrl holds the rest of the total length.
 //   wb < 0  →  "direct mode": control point has swung past the tangent toward
@@ -64,20 +64,20 @@ function cableFrame(cb){
   const qctrl=S.th+localAngle;
   const rx_ctrl=rs*Math.cos(qctrl), ry_ctrl=rs*Math.sin(qctrl);
   const Qctrl_x=S.x+rx_ctrl, Qctrl_y=S.y+ry_ctrl;
-  const wb=(qang-qctrl)*cb.side;          // signed wound angle (radians)
+  const wb=(qctrl-qang)*cb.side;          // signed wound angle (radians)
   const is=bodyIndex(cb.spool.id);
   let cols, Qx, Qy, ux, uy, mode;
   if(wb>=0){
     // Tangent mode — correct Jacobian for d(Lfree + rs·wb)/dt:
-    //   ∂/∂vS = −(Dx·Lfree − rs·side·Dy)/d², −(Dy·Lfree + rs·side·Dx)/d², −rs·side
-    //   ∂/∂vT =  (Dx·Lfree − rs·side·Dy)/d²,  (Dy·Lfree + rs·side·Dx)/d², moment arm
+    //   ∂/∂vS = −(Dx·Lfree + rs·side·Dy)/d², −(Dy·Lfree − rs·side·Dx)/d², +rs·side
+    //   ∂/∂vT =  (Dx·Lfree + rs·side·Dy)/d²,  (Dy·Lfree − rs·side·Dx)/d², moment arm
     mode='tangent';
     Qx=S.x+rs*Math.cos(qang); Qy=S.y+rs*Math.sin(qang);
     ux=(T[0]-Qx)/(Lfree||1); uy=(T[1]-Qy)/(Lfree||1);
-    const Jx=(Dx*Lfree - rs*cb.side*Dy)/d2;
-    const Jy=(Dy*Lfree + rs*cb.side*Dx)/d2;
+    const Jx=(Dx*Lfree + rs*cb.side*Dy)/d2;
+    const Jy=(Dy*Lfree - rs*cb.side*Dx)/d2;
     cols=[];
-    if(!S.static) cols.push([is, -Jx, -Jy, -rs*cb.side]);
+    if(!S.static) cols.push([is, -Jx, -Jy, rs*cb.side]);
     if(tb&&!tb.static) cols.push([ti, Jx, Jy, Jx*(-tryy)+Jy*trx]);
   } else {
     // Direct mode — cable goes T→Q_ctrl (a material point on the spool rim)
