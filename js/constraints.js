@@ -44,7 +44,7 @@ function gasFrame(g){
 // Returns null when the tether sits inside the spool.
 // The Jacobian correctly couples spool rotation to cable length (torque term
 // −rs·side on the spool ω column, derived from d(Lfree+rs·wb)/dt).
-function cableFrame(cb,qangRef){
+function cableFrame(cb,qangRef,wbRef){
   const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return null;
   const rs=S.r;
   let T, tb=null, trx=0, tryy=0, ti=-1;
@@ -71,7 +71,14 @@ function cableFrame(cb,qangRef){
   const qctrl=S.th+localAngle;
   const rx_ctrl=rs*Math.cos(qctrl), ry_ctrl=rs*Math.sin(qctrl);
   const Qctrl_x=S.x+rx_ctrl, Qctrl_y=S.y+ry_ctrl;
-  const wb=(qctrl-qang)*cb.side;          // signed wound angle (radians)
+  const wbRaw=(qctrl-qang)*cb.side;       // signed wound angle (radians)
+  let wb=wbRaw;
+  if(wbRef!=null){
+    const twopi=Math.PI*2;
+    wb += Math.round((wbRef-wb)/twopi)*twopi;
+  }
+  const Lallow=cb.Ltot-rs*wb;
+  const fullyWound=Lallow<=1e-6;
   const is=bodyIndex(cb.spool.id);
   let cols, Qx, Qy, ux, uy, mode;
   if(wb>=0){
@@ -96,7 +103,10 @@ function cableFrame(cb,qangRef){
     if(!S.static) cols.push([is, -ux, -uy, ux*ry_ctrl-uy*rx_ctrl]);
     if(tb&&!tb.static) cols.push([ti, ux, uy, -ux*tryy+uy*trx]);
   }
-  return {S,rs,T,Qx,Qy,Lfree,ux,uy,cols,qang,qctrl,wb,Qctrl_x,Qctrl_y,rx_ctrl,ry_ctrl,mode,localAngle};
+  return {
+    S,rs,T,Qx,Qy,Lfree,ux,uy,cols,qang,qctrl,wb,wbRaw,Lallow,fullyWound,
+    Qctrl_x,Qctrl_y,rx_ctrl,ry_ctrl,mode,localAngle,tb,ti,trx,tryy,is
+  };
 }
 
 // ---- §06.4 · slotFrame ----

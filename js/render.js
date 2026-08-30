@@ -87,7 +87,8 @@ function jointDot(x,y,col){ const [sx,sy]=w2s(x,y);
 // ---- §11.4 · gas & cable (drawCable, drawGas, drawGasForce) ----
 function drawCable(cb){
   const f=cableFrame(cb); if(!f)return;
-  const taut = cb._lam && cb._lam.length && Math.abs(cb._lam[0])>1e-5;
+  const lamMag = cb._lam&&cb._lam.length ? Math.hypot(...cb._lam) : 0;
+  const taut = lamMag>1e-5;
   const col = cb.sel? '#5aa9f0' : (taut? '#e0c060' : '#8a94a6');
   const [tx,ty]=w2s(f.T[0],f.T[1]);
   ctx.strokeStyle=col; ctx.lineWidth= taut?2.5:1.8;

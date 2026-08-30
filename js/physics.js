@@ -45,33 +45,57 @@ function substep(h){
   //    point in its local frame (cb.localAngle); the wound amount wb is derived
   //    from the current tangent angle and cb.localAngle each step — no explicit
   //    wrap accumulation needed.  Unilateral: active only when taut and pulling.
+  const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
   for(const cb of cables){ cb._rows=[];
     // Migrate old saves that stored wrap but not localAngle: derive localAngle
     // from the then-current tangent angle and the saved wrap.
     if(cb.localAngle===undefined){
-      const f0=cableFrame(cb,cb._psiRaw);   // called with localAngle undefined → wb=0 fallback
-      if(!f0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._psiRaw=undefined; continue; }
+      const f0=cableFrame(cb,cb._psiRaw,cb._wbRef);   // called with localAngle undefined → wb=0 fallback
+      if(!f0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
       cb.localAngle=f0.qang-f0.S.th+(cb.wrap||0)*cb.side;
       cb._psiRaw=f0.qang;
+      cb._wbRef=cb.wrap||0;
     }
-    const f=cableFrame(cb,cb._psiRaw); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._psiRaw=undefined; continue; }
+    const f=cableFrame(cb,cb._psiRaw,cb._wbRef); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
     cb._psiRaw=f.qang;
+    cb._wbRef=f.wb;
     const wb=f.wb;
     cb._wrap=wb;                             // signed wound angle for rendering
     cb.wrap=Math.max(0,wb);                  // non-negative display field (inspector)
-    let C;
-    if(f.mode==='tangent'){
+    let C, active, cols, cols2=null;
+    if(f.fullyWound){
+      const Cx=f.T[0]-f.Qctrl_x, Cy=f.T[1]-f.Qctrl_y;
+      const vQx=f.S.vx-f.S.w*f.ry_ctrl, vQy=f.S.vy+f.S.w*f.rx_ctrl;
+      const vTx=f.tb ? (f.tb.vx-f.tb.w*f.tryy) : 0;
+      const vTy=f.tb ? (f.tb.vy+f.tb.w*f.trx) : 0;
+      const d=Math.hypot(Cx,Cy);
+      const nx=d>1e-9 ? Cx/d : (f.ux||1), ny=d>1e-9 ? Cy/d : (f.uy||0);
+      const sepRate=nx*(vTx-vQx)+ny*(vTy-vQy);
+      cols=[];
+      cols2=[];
+      if(!f.S.static){ cols.push([f.is,-1,0, f.ry_ctrl]); cols2.push([f.is,0,-1,-f.rx_ctrl]); }
+      if(f.tb && !f.tb.static){ cols.push([f.ti,1,0,-f.tryy]); cols2.push([f.ti,0,1,f.trx]); }
+      C=Cx;
+      active = (Math.hypot(Cx,Cy)>1e-4 || sepRate>0) && (cols.length>0 || cols2.length>0);
+      cb._C2=Cy;
+      cb._hinge=true;
+      cb._Lallow=0;
+    } else if(f.mode==='tangent'){
       const Lused=f.Lfree+f.rs*wb;
       C=Lused-cb.Ltot;
       cb._Lallow=cb.Ltot-f.rs*wb;
+      cols=f.cols;
+      active = C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0);
+      cb._hinge=false;
     } else {
       const dc=Math.hypot(f.T[0]-f.Qctrl_x, f.T[1]-f.Qctrl_y);
       C=dc-cb.Ltot;
       cb._Lallow=cb.Ltot;
+      cols=f.cols;
+      active = C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0);
+      cb._hinge=false;
     }
-    cb._C=C; cb._cols=f.cols;
-    let Jv=0; for(const c of f.cols){ const b=bodies[c[0]]; Jv+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; }
-    cb._active = C>-1e-4 && (C>1e-4 || Jv>0);
+    cb._C=C; cb._cols=cols; cb._cols2=cols2; cb._active=active;
   }
 
   // ---- §08.3 · constraint assembly -> Schur solve -> impulse apply ----
@@ -82,7 +106,12 @@ function substep(h){
     constraints[ci]._rows=[];
     for(const r of rs){ constraints[ci]._rows.push(rows.length); rows.push(r); }
   }
-  for(const cb of cables){ if(cb._active){ cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C}); } }
+  for(const cb of cables){
+    if(cb._active){
+      cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C});
+      if(cb._cols2){ cb._rows.push(rows.length); rows.push({cols:cb._cols2, C:(cb._C2||0)}); }
+    }
+  }
   const m=rows.length;
   if(m>0){
     // per-row body->j map for K assembly
