@@ -65,8 +65,7 @@ function substep(h){
       cb.wrap=0;
       cb._psiRaw=undefined;
       cb._wbRef=undefined;
-      f=cableFrame(cb,cb._psiRaw,cb._wbRef);
-      if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
+      f=fFlip;
     }
     cb._psiRaw=f.qang;
     cb._wbRef=f.wb;
