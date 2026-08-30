@@ -57,10 +57,10 @@ function cableFrame(cb,qangRef){
   const qangRaw=phi + cb.side*beta;
   let qang=qangRaw;
   if(qangRef!=null){
-    let d=qangRaw-qangRef;
-    while(d>Math.PI) d-=Math.PI*2;
-    while(d<-Math.PI) d+=Math.PI*2;
-    qang=qangRef+d;
+    let dAngle=qangRaw-qangRef;
+    while(dAngle>Math.PI) dAngle-=Math.PI*2;
+    while(dAngle<-Math.PI) dAngle+=Math.PI*2;
+    qang=qangRef+dAngle;
   }
   const Lfree=Math.sqrt(Math.max(0,d*d-rs*rs));
   const d2=d*d;
