@@ -139,6 +139,7 @@ function applyCableHandle(ad,wx,wy){
   while(d>Math.PI) d-=Math.PI*2;
   while(d<-Math.PI) d+=Math.PI*2;
   cb.localAngle+=d;
+  const f=cableFrame(cb); if(f) cb.Ltot=cableCurrentLength(cb,f);
 }
 function pickHandle(wx,wy){
   const tol=11/cam.scale;
