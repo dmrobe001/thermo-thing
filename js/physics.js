@@ -56,7 +56,18 @@ function substep(h){
       cb._psiRaw=f0.qang;
       cb._wbRef=cb.wrap||0;
     }
-    const f=cableFrame(cb,cb._psiRaw,cb._wbRef); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
+    let f=cableFrame(cb,cb._psiRaw,cb._wbRef); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
+    if(f.wb<-1e-4){
+      cb.side*=-1;
+      const fFlip=cableFrame(cb);
+      if(!fFlip){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
+      cb.localAngle=fFlip.qang-fFlip.S.th;
+      cb.wrap=0;
+      cb._psiRaw=undefined;
+      cb._wbRef=undefined;
+      f=cableFrame(cb,cb._psiRaw,cb._wbRef);
+      if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
+    }
     cb._psiRaw=f.qang;
     cb._wbRef=f.wb;
     const wb=f.wb;
