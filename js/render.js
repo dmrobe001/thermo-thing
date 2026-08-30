@@ -99,7 +99,7 @@ function drawCable(cb){
     const sweep=Math.min(Math.max(0,f.wb), Math.PI*6);
     if(sweep>0){
       ctx.lineWidth=1.8; ctx.beginPath();
-      for(let i=0;i<=24;i++){ const a=f.qang - cb.side*(sweep*i/24);
+      for(let i=0;i<=24;i++){ const a=f.qang + cb.side*(sweep*i/24);
         const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a)); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
       ctx.stroke();
     }

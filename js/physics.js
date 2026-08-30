@@ -51,7 +51,7 @@ function substep(h){
     if(cb.localAngle===undefined){
       const f0=cableFrame(cb);   // called with localAngle undefined → wb=0 fallback
       if(!f0){ cb._active=false; cb._C=0; cb._cols=null; continue; }
-      cb.localAngle=f0.qang-f0.S.th-(cb.wrap||0)*cb.side;
+      cb.localAngle=f0.qang-f0.S.th+(cb.wrap||0)*cb.side;
     }
     const f=cableFrame(cb); if(!f){ cb._active=false; cb._C=0; cb._cols=null; continue; }
     const wb=f.wb;
