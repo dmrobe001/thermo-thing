@@ -45,6 +45,7 @@ function substep(h){
   //    point in its local frame (cb.localAngle); the wound amount wb is derived
   //    from the current tangent angle and cb.localAngle each step — no explicit
   //    wrap accumulation needed.  Unilateral: active only when taut and pulling.
+  const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
   for(const cb of cables){ cb._rows=[];
     // Migrate old saves that stored wrap but not localAngle: derive localAngle
     // from the then-current tangent angle and the saved wrap.
@@ -61,7 +62,6 @@ function substep(h){
     const wb=f.wb;
     cb._wrap=wb;                             // signed wound angle for rendering
     cb.wrap=Math.max(0,wb);                  // non-negative display field (inspector)
-    const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
     let C, active, cols, cols2=null;
     if(f.fullyWound){
       const Cx=f.T[0]-f.Qctrl_x, Cy=f.T[1]-f.Qctrl_y;
