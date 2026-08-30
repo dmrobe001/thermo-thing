@@ -1,0 +1,1725 @@
+<!DOCTYPE html>
+<!-- ============================================================================
+     MECHANISM  BENCH  —  SOURCE MAP  (read this first)
+     ============================================================================
+     One self-contained page, in three stretches: document head, then all CSS,
+     then the whole simulator as one script element. You navigate it by SECTION
+     MARKERS, never by line number (line numbers rot; the markers do not).
+
+     HOW THE MARKERS WORK
+       Every section header carries a token:  §NN  for a top-level section,
+       §NN.M  for a sub-section, written with the section sign "§" (the same
+       sigil the design spec uses). A token appears in exactly three places:
+       this index, that section's own header comment, and — for a section that
+       has children — its local sub-index inside that header.
+
+       To jump, search the file for the token exactly as printed:
+         · search  §08     → this index line, the §08 header, and its sub-index
+         · search  §08.3   → straight to that one sub-section, nothing else
+       Read a section header before its body: it lists the sub-sections beneath
+       it, so you can grep onward without ever scanning the code between.
+
+       Top-level numbers are ZERO-PADDED (§04, never §4). Two consequences:
+         · searching §04 will not also stop on §14, and
+         · any UNpadded mention like "(see §3.4)" or "(§9)" is a reference into
+           the DESIGN SPEC (mechanical-sandbox-spec.md), not into this file.
+
+     TOP-LEVEL SECTIONS
+       §01  DOCUMENT HEAD ............ charset, viewport, title
+       §02  STYLES ................... all CSS, one UI region per sub-section
+       §03  BODY MARKUP .............. the static DOM the script animates
+       §04  WORLD STATE & GLOBALS .... bodies/constraints/gases/cables, sim, camera
+       §05  GEOMETRY HELPERS ......... rotation, body factory, world<->screen maps
+       §06  CONSTRAINT ROWS .......... every joint expressed as Jacobian rows
+       §07  LINEAR SOLVE ............. dense Gauss-Jordan on the Schur complement
+       §08  PHYSICS SUBSTEP .......... forces -> constraint solve -> integrate -> heat
+       §09  PROJECTION & REACTIONS ... position-drift fix; multiplier -> force readout
+       §10  MAIN LOOP ................ fixed-step accumulator + per-frame calls
+       §11  RENDER ................... canvas drawing for every element type
+       §12  HUD ...................... energy ledger, status line, spark plot
+       §13  TOOLS & INPUT ............ tool table, picking, handles, pointer handlers
+       §14  SELECTION & INSPECTOR .... selection state and the right-hand panel
+       §15  EXAMPLES ................. prebuilt machines loadable from the panel
+       §16  TRANSPORT & BOOT ......... play/step/reset, snapshots, keyboard, startup
+     ============================================================================ -->
+<html lang="en">
+<head>
+<!-- ============================================================================
+     §01 · DOCUMENT HEAD
+     ============================================================================ -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mechanism Bench</title>
+<style>
+  /* ==========================================================================
+     §02 · STYLES
+     All CSS lives here, grouped to mirror the on-screen regions.
+       §02.1  design tokens (:root custom properties)
+       §02.2  layout shell (reset, <body>, #app grid)
+       §02.3  top bar
+       §02.4  left tool rail
+       §02.5  canvas / stage / hint / status
+       §02.6  energy ledger (the signature readout)
+       §02.7  right inspector
+       §02.8  responsive (narrow-viewport overrides)
+     ========================================================================== */
+
+  /* ---- §02.1 · design tokens ---- */
+  :root{
+    --ink:#13161c;          /* canvas ground */
+    --panel:#1a1e26;        /* chrome */
+    --panel-2:#212734;      /* raised */
+    --hair:rgba(255,255,255,.09);
+    --hair-2:rgba(255,255,255,.05);
+    --hi:#e7eaf0;           /* primary text */
+    --mid:#98a2b2;          /* secondary text */
+    --low:#5d6878;          /* tertiary */
+    --accent:#5aa9f0;       /* interactive / selected */
+    --accent-dim:#2b4a6b;
+    --force:#ec5b52;        /* reaction vectors, delete */
+    --ok:#57c78a;           /* energy trace */
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  /* ---- §02.2 · layout shell ---- */
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--ink);color:var(--hi);font-family:var(--sans);overflow:hidden}
+  #app{display:grid;grid-template-columns:56px 1fr 288px;grid-template-rows:auto 1fr;height:100%}
+
+  /* ---- §02.3 · top bar ---- */
+  #top{grid-column:1/4;display:flex;flex-wrap:wrap;align-items:center;gap:10px;row-gap:6px;padding:7px 14px;
+       background:var(--panel);border-bottom:1px solid var(--hair);z-index:5}
+  #top .brand{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--mid);text-transform:uppercase}
+  #top .brand b{color:var(--hi);font-weight:600}
+  .sep{width:1px;height:22px;background:var(--hair)}
+  .group{display:flex;align-items:center;gap:6px}
+  .tbtn{font-family:var(--mono);font-size:11px;letter-spacing:.03em;color:var(--mid);
+        background:var(--panel-2);border:1px solid var(--hair);border-radius:6px;
+        padding:6px 10px;cursor:pointer;user-select:none;transition:.12s}
+  .tbtn:hover{color:var(--hi);border-color:var(--accent-dim)}
+  .tbtn.on{color:var(--ink);background:var(--accent);border-color:var(--accent)}
+  .tbtn.wide{padding:6px 12px}
+  label.toggle{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11px;color:var(--mid);cursor:pointer}
+  label.toggle input{accent-color:var(--accent)}
+  #gravWrap{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--low)}
+  #gravWrap input[type=range]{width:80px;accent-color:var(--accent)}
+  .spacer{flex:1}
+
+  /* ---- §02.4 · left tool rail ---- */
+  #rail{grid-row:2;background:var(--panel);border-right:1px solid var(--hair);
+        display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0}
+  .tool{width:40px;height:40px;border-radius:8px;border:1px solid transparent;background:transparent;
+        color:var(--mid);cursor:pointer;display:grid;place-items:center;position:relative}
+  .tool:hover{background:var(--panel-2);color:var(--hi)}
+  .tool.on{background:var(--accent);color:var(--ink)}
+  .tool svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .tool .kbd{position:absolute;bottom:2px;right:3px;font-family:var(--mono);font-size:8px;color:currentColor;opacity:.5}
+  .tool .tip{position:absolute;left:48px;white-space:nowrap;background:var(--panel-2);border:1px solid var(--hair);
+        color:var(--hi);font-family:var(--mono);font-size:11px;padding:4px 8px;border-radius:6px;
+        opacity:0;pointer-events:none;transition:.1s;transform:translateX(-4px);z-index:20}
+  .tool:hover .tip{opacity:1;transform:translateX(0)}
+  .rail-sep{width:24px;height:1px;background:var(--hair);margin:4px 0}
+
+  /* ---- §02.5 · canvas / stage / hint / status ---- */
+  #stage{grid-row:2;position:relative;overflow:hidden}
+  #c{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
+  #hint{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);text-align:center;
+        color:var(--low);font-size:13px;line-height:1.7;pointer-events:none;max-width:340px}
+  #hint b{color:var(--mid);font-weight:500}
+  #status{position:absolute;left:12px;bottom:10px;font-family:var(--mono);font-size:11px;color:var(--low);
+          background:rgba(19,22,28,.7);padding:4px 8px;border-radius:6px;pointer-events:none}
+
+  /* ---- §02.6 · energy ledger (the signature readout) ---- */
+  #ledger{position:absolute;right:12px;top:12px;width:210px;background:rgba(26,30,38,.86);
+          border:1px solid var(--hair);border-radius:10px;padding:10px 12px;backdrop-filter:blur(6px)}
+  #ledgerHead{display:flex;align-items:center;gap:8px;cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--low);text-transform:uppercase}
+  #ledgerHead #eTotHead{margin-left:auto;color:var(--ok);font-size:12px;letter-spacing:0;font-variant-numeric:tabular-nums}
+  #ledgerHead .car{transition:.15s;display:inline-block;color:var(--mid)}
+  #ledger.collapsed .car{transform:rotate(-90deg)}
+  #ledger.collapsed #ledgerBody{display:none}
+  #ledgerBody{margin-top:8px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:12px;margin:3px 0}
+  .row .k{color:var(--mid)}
+  .row .v{color:var(--hi);font-variant-numeric:tabular-nums}
+  .row.total{margin-top:6px;padding-top:6px;border-top:1px solid var(--hair-2)}
+  .row.total .k{color:var(--hi)}
+  .row.total .v{color:var(--ok)}
+  #spark{display:block;width:100%;height:34px;margin-top:8px;border-radius:5px;background:rgba(0,0,0,.25)}
+
+  /* ---- §02.7 · right inspector ---- */
+  #panel{grid-row:2;background:var(--panel);border-left:1px solid var(--hair);overflow-y:auto;padding:14px}
+  #panel h3{margin:0 0 4px;font-size:13px;letter-spacing:.02em}
+  #panel .sub{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--low);text-transform:uppercase;margin:0 0 12px}
+  .card{background:var(--panel-2);border:1px solid var(--hair);border-radius:8px;padding:12px;margin-bottom:10px}
+  .card .cardhead{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--low);text-transform:uppercase;margin-bottom:8px}
+  .field{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:12px;margin:5px 0}
+  .field .lab{color:var(--mid)}
+  .field .val{color:var(--hi);font-variant-numeric:tabular-nums}
+  .field.force .val{color:var(--force)}
+  .chk{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--mid);cursor:pointer;margin-top:8px}
+  .chk input{accent-color:var(--accent)}
+  .del{width:100%;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--force);
+       background:transparent;border:1px solid rgba(236,91,82,.4);border-radius:6px;padding:7px;cursor:pointer}
+  .del:hover{background:rgba(236,91,82,.12)}
+  .muted{color:var(--low);font-size:12px;line-height:1.6}
+  .examples{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .examples button{font-family:var(--mono);font-size:11px;color:var(--mid);text-align:left;
+       background:var(--panel-2);border:1px solid var(--hair);border-radius:6px;padding:8px 10px;cursor:pointer}
+  .examples button:hover{color:var(--hi);border-color:var(--accent-dim)}
+
+  /* ---- §02.8 · responsive (narrow-viewport overrides) ---- */
+  @media (max-width:820px){
+    #app{grid-template-columns:44px 1fr;grid-template-rows:auto 1fr auto}
+    #panel{grid-row:3;grid-column:1/3;border-left:none;border-top:1px solid var(--hair);max-height:42vh}
+    #top{padding:6px 8px;gap:8px}
+    #top .brand, #top #modehint{display:none}
+    #gravWrap #gravRead{display:none}
+    #gravWrap input[type=range]{width:56px}
+    #ledger{width:148px;top:8px;right:8px;padding:8px 10px}
+    #rail{overflow-y:auto}
+  }
+</style>
+</head>
+<body>
+<!-- ============================================================================
+     §03 · BODY MARKUP
+     The fixed DOM skeleton. Everything dynamic (tool buttons, inspector cards,
+     canvas pixels) is written by the script; only these containers are static.
+       §03.1  top bar        (transport, toggles, gravity, mode hint)
+       §03.2  tool rail      (empty; filled by §13.1)
+       §03.3  stage          (canvas + hint + energy ledger + status)
+       §03.4  inspector      (empty; filled by §14.2)
+     ============================================================================ -->
+<div id="app">
+  <!-- §03.1 · top bar -->
+  <div id="top">
+    <div class="brand"><b>Mechanism</b> Bench</div>
+    <div class="sep"></div>
+    <div class="group">
+      <button class="tbtn wide" id="btnPlay">Play</button>
+      <button class="tbtn" id="btnStep">Step</button>
+      <button class="tbtn" id="btnReset">Reset</button>
+    </div>
+    <div class="sep"></div>
+    <label class="toggle"><input type="checkbox" id="tgForces" checked> forces</label>
+    <label class="toggle"><input type="checkbox" id="tgGrid" checked> grid</label>
+    <div id="gravWrap">
+      <label class="toggle"><input type="checkbox" id="tgGrav" checked> gravity</label>
+      <input type="range" id="gravVal" min="0" max="20" step="0.1" value="9.8">
+      <span id="gravRead">9.8</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="brand" id="modehint" style="color:var(--low)"></div>
+  </div>
+
+  <!-- §03.2 · tool rail (populated by §13.1) -->
+  <div id="rail"></div>
+
+  <!-- §03.3 · stage -->
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="hint">
+      <b>Drop a mass:</b> pick the Body tool (2), then click-drag on the field.<br>
+      <b>Make a hinge:</b> Pin tool (3), click one body then another.<br>
+      <b>Anchor it:</b> Ground tool (8), click a body to pin it to the world.<br>
+      Or load an example from the panel →
+    </div>
+    <div id="ledger">
+      <div id="ledgerHead"><span class="car">▾</span><span>Energy</span><span id="eTotHead">0.00</span></div>
+      <div id="ledgerBody">
+        <div class="row"><span class="k">kinetic</span><span class="v" id="eKE">0.00</span></div>
+        <div class="row"><span class="k">potential</span><span class="v" id="ePE">0.00</span></div>
+        <div class="row"><span class="k">internal</span><span class="v" id="eU">0.00</span></div>
+        <div class="row total"><span class="k">total</span><span class="v" id="eTot">0.00</span></div>
+        <canvas id="spark"></canvas>
+      </div>
+    </div>
+    <div id="status">paused · 0 bodies · 0 constraints</div>
+  </div>
+
+  <!-- §03.4 · inspector (populated by §14.2) -->
+  <div id="panel"><div id="panelBody"></div></div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================================
+   JAVASCRIPT — the whole simulator follows. Navigate by the §NN section
+   markers indexed in the SOURCE MAP at the very top of this file (§01..§16).
+
+   Model in one breath: a 2D maximal-coordinate constraint sandbox. Each body
+   carries (x, y, theta); each joint contributes velocity-level Jacobian rows;
+   a per-step solve produces the Lagrange multipliers that both enforce the
+   joints and read out as the reaction forces they carry.
+   ============================================================================ */
+
+// ============================================================================
+//  §04 · WORLD STATE & GLOBALS
+//  The single source of truth the rest of the file reads and mutates.
+//    §04.1  canvas / context handles
+//    §04.2  world arrays (bodies, constraints, gases, cables)
+//    §04.3  sim parameters & camera
+// ============================================================================
+
+// ---- §04.1 · canvas / context handles ----
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const spark = document.getElementById('spark');
+const sctx = spark.getContext('2d');
+
+// ---- §04.2 · world arrays ----
+let bodies = [];        // {x,y,th, vx,vy,w, mass, I, invM, invI, r, static, sel}
+let constraints = [];   // typed; see makers below
+let gases = [];         // gas-piston force elements (see gasFrame / substep step 5)
+let cables = [];        // radial-ratchet cable elements (unilateral)
+let uid = 1;
+
+// ---- §04.3 · sim parameters & camera ----
+// h: fixed step. maxSub: max substeps per frame. beta: Baumgarte gain (spec §3.4).
+// reg: Tikhonov term added to the Schur diagonal so redundant rows stay solvable.
+const sim = { running:false, gravity:true, g:9.8, showForces:true, showGrid:true,
+              h:1/120, maxSub:6, beta:0.15, reg:1e-8, forceRef:1 };
+
+// camera: world point at screen centre, px per world unit
+const cam = { x:0, y:2.2, scale:64 };
+let violCount=0;        // constraints exceeding drift tolerance this frame (HUD, §12)
+
+// ============================================================================
+//  §05 · GEOMETRY HELPERS
+//  Pure helpers with no side effects on the sim: rotation, the body factory,
+//  and the world<->screen coordinate maps used by every draw and pick routine.
+//    §05.1  rotation & rigid-body point math
+//    §05.2  body factory (mass/inertia from radius)
+//    §05.3  world<->screen transforms
+// ============================================================================
+
+// ---- §05.1 · rotation & rigid-body point math ----
+const R = (th,x,y)=>[x*Math.cos(th)-y*Math.sin(th), x*Math.sin(th)+y*Math.cos(th)];
+function worldPt(b,off){ const [rx,ry]=R(b.th,off[0],off[1]); return [b.x+rx, b.y+ry, rx, ry]; }
+function invMdiag(b){ return b.static?[0,0,0]:[b.invM,b.invM,b.invI]; }
+
+// ---- §05.2 · body factory (mass/inertia from radius) ----
+function makeBody(x,y,r,isStatic){
+  const mass = Math.PI*r*r;                 // density = 1
+  const I = 0.5*mass*r*r;
+  return { id:uid++, x, y, th:0, vx:0, vy:0, w:0,
+           mass, I, invM:isStatic?0:1/mass, invI:isStatic?0:1/I,
+           r, static:!!isStatic, sel:false, kind:'body' };
+}
+function refreshMass(b){
+  b.mass=Math.PI*b.r*b.r; b.I=0.5*b.mass*b.r*b.r;
+  b.invM=b.static?0:1/b.mass; b.invI=b.static?0:1/b.I;
+}
+
+// ---- §05.3 · world<->screen transforms ----
+function W(){ return cv.clientWidth; }
+function H(){ return cv.clientHeight; }
+function w2s(wx,wy){ return [ W()/2 + (wx-cam.x)*cam.scale, H()/2 - (wy-cam.y)*cam.scale ]; }
+function s2w(sx,sy){ return [ cam.x + (sx-W()/2)/cam.scale, cam.y - (sy-H()/2)/cam.scale ]; }
+
+// ============================================================================
+//  §06 · CONSTRAINT ROWS
+//  The heart of the engine. Each constraint is turned into one or more rows of
+//  the velocity-linear (Pfaffian) form  J·v = -bias  (spec §3.3). A row is
+//    { cols:[[bodyIdx, jx, jy, jw], ...], C, nh? }
+//  where C is the raw position error (the value to drive to zero) and nh flags
+//  a nonholonomic row (velocity-only, no position invariant — excluded from the
+//  §09 position projection). The §08 solver scales C by beta/h (Baumgarte);
+//  the §09 projection uses C directly. Same rows serve both.
+//    §06.1  bodyIndex (id -> array slot)
+//    §06.2  gasFrame   (cylinder geometry for the gas force element, §08.1/§08.5)
+//    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
+//    §06.4  slotFrame  (point-on-line rail geometry)
+//    §06.5  rowsFor    (the dispatch: one branch per constraint type)
+// ============================================================================
+
+// ---- §06.1 · bodyIndex ----
+function bodyIndex(id){ return bodies.findIndex(b=>b.id===id); }
+
+// ---- §06.2 · gasFrame ----
+// gas cylinder frame: piston point on A, closed-end (head) + axis fixed in B or world.
+// x is the signed gas-column length along the axis (clamped so V never goes ≤ 0).
+function gasFrame(g){
+  const A=bodies[bodyIndex(g.a.id)];
+  const [pax,pay,prx,pry]=worldPt(A,g.a.off);
+  let hx,hy,dW,B=null,ib=-1,hrx=0,hry=0;
+  if(g.head.id!=null){ ib=bodyIndex(g.head.id); B=bodies[ib];
+    const [x,y,rx,ry]=worldPt(B,g.head.off); hx=x;hy=y;hrx=rx;hry=ry;
+    dW=R(B.th,g.head.dir[0],g.head.dir[1]); }
+  else { hx=g.head.off[0]; hy=g.head.off[1]; dW=[g.head.dir[0],g.head.dir[1]]; }
+  const dl=Math.hypot(dW[0],dW[1])||1; dW=[dW[0]/dl,dW[1]/dl];
+  const x=(pax-hx)*dW[0]+(pay-hy)*dW[1];
+  return {A,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,0.03)};
+}
+
+// ---- §06.3 · cableFrame ----
+// cable geometry: straight tangent from tether T to the tangent point Q on the spool
+// (chosen winding side), free length √(d²−r_s²). Returns null when the tether sits
+// inside the spool. cols are the distance-constraint rows between T and Q — the source
+// of both the tension on the tether and the torque on the spool.
+function cableFrame(cb){
+  const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return null;
+  const rs=S.r;
+  let T, tb=null, trx=0, tryy=0, ti=-1;
+  if(cb.tether.id!=null){ ti=bodyIndex(cb.tether.id); tb=bodies[ti];
+    const [tx,ty,rx,ry]=worldPt(tb,cb.tether.off); T=[tx,ty]; trx=rx; tryy=ry; }
+  else { T=[cb.tether.off[0],cb.tether.off[1]]; }
+  const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy);
+  if(d<=rs*1.0001) return null;
+  const phi=Math.atan2(dvy,dvx); const beta=Math.acos(Math.max(-1,Math.min(1,rs/d)));
+  const qang=phi + cb.side*beta;                       // winding side selects the tangent
+  const Qx=S.x+rs*Math.cos(qang), Qy=S.y+rs*Math.sin(qang);
+  const Lfree=Math.sqrt(Math.max(0,d*d-rs*rs));
+  let ux=T[0]-Qx, uy=T[1]-Qy; const ul=Math.hypot(ux,uy)||1; ux/=ul; uy/=ul;
+  const cols=[]; const is=bodyIndex(cb.spool.id);
+  if(!S.static) cols.push([is, -ux, -uy, 0]);          // post: frictionless redirect, no torque
+  if(tb && !tb.static) cols.push([ti, ux, uy, -ux*tryy + uy*trx]);   // ball tether point
+  return { S, rs, T, Qx, Qy, Lfree, ux, uy, cols, qang };
+}
+
+// ---- §06.4 · slotFrame ----
+// resolve a slot's world line frame: slider point on A, plus a line (anchor + unit
+// direction) fixed in body B — or in the world when line.id is null
+function slotFrame(con){
+  const A=bodies[bodyIndex(con.a.id)];
+  const [wax,way,rax,ray]=worldPt(A,con.a.off);
+  let anchor,dW,B=null,ib=-1,rbx=0,rby=0;
+  if(con.line.id!=null){ ib=bodyIndex(con.line.id); B=bodies[ib];
+    const [ax,ay,rx,ry]=worldPt(B,con.line.off); anchor=[ax,ay]; rbx=rx; rby=ry;
+    dW=R(B.th, con.line.dir[0], con.line.dir[1]); }
+  else { anchor=[con.line.off[0],con.line.off[1]]; dW=[con.line.dir[0],con.line.dir[1]]; }
+  const dl=Math.hypot(dW[0],dW[1])||1; dW=[dW[0]/dl,dW[1]/dl];
+  const n=[-dW[1],dW[0]];                       // unit normal to the rail
+  return {A,wax,way,rax,ray,B,ib,rbx,rby,anchor,dW,n};
+}
+
+// ---- §06.5 · rowsFor (constraint -> rows dispatch) ----
+// One branch per con.type; to reach a specific joint's row math, search its tag,
+// e.g.  type==='rod'. Catalog (rows) — cross-references spec §4:
+//   pin / ground   2   shared point coincident (ground pins to a fixed world pt)
+//   rod            1   distance held along the connecting line
+//   weld           3   coincident point + relative angle locked
+//   slot           1   point-on-line (across-rail zero); +1 more if lockRot (prismatic)
+//   belt           1   fixed phase ratio of two rim angles (holonomic)
+//   knife          1   no-side-slip contact (NONHOLONOMIC, nh:true)
+//   cvt            1   tangential match at a variable-radius contact (NONHOLONOMIC)
+// (Cable rows are built inline in §08.2, not here, because they are unilateral.)
+function rowsFor(con){
+  // Each row carries the raw position error C (the value to drive to zero). The
+  // velocity solver scales it by beta/h (Baumgarte); the position projection uses
+  // C directly. Same Jacobian rows serve both.
+  if(con.type==='pin' || con.type==='ground'){
+    const A = bodies[bodyIndex(con.a.id)];
+    const [wax,way,rax,ray] = worldPt(A,con.a.off);
+    let wbx,wby, colsB=null;
+    if(con.type==='pin'){
+      const B = bodies[bodyIndex(con.b.id)];
+      const [x,y,rbx,rby] = worldPt(B,con.b.off); wbx=x; wby=y;
+      colsB = { ib:bodyIndex(con.b.id), rbx, rby };
+    } else { wbx=con.world[0]; wby=con.world[1]; }
+    const Cx = wax-wbx, Cy = way-wby;
+    const ia = bodyIndex(con.a.id);
+    const rowX = { cols:[[ia,1,0,-ray]], C:Cx };
+    const rowY = { cols:[[ia,0,1, rax]], C:Cy };
+    if(colsB){ rowX.cols.push([colsB.ib,-1,0, colsB.rby]); rowY.cols.push([colsB.ib,0,-1,-colsB.rbx]); }
+    return [rowX,rowY];
+  }
+  if(con.type==='rod'){
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const [wax,way,rax,ray]=worldPt(A,con.a.off);
+    const [wbx,wby,rbx,rby]=worldPt(B,con.b.off);
+    let dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
+    const ux=dx/L, uy=dy/L, C=L-con.len;
+    const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id);
+    return [{ cols:[ [ia, ux, uy, -ux*ray+uy*rax],
+                     [ib,-ux,-uy,  ux*rby-uy*rbx] ], C }];
+  }
+  if(con.type==='weld'){
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const [wax,way,rax,ray]=worldPt(A,con.a.off);
+    const [wbx,wby,rbx,rby]=worldPt(B,con.b.off);
+    const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id);
+    const Cx=wax-wbx, Cy=way-wby, Ca=(A.th-B.th)-con.restAng;
+    return [
+      { cols:[[ia,1,0,-ray],[ib,-1,0, rby]], C:Cx },
+      { cols:[[ia,0,1, rax],[ib,0,-1,-rbx]], C:Cy },
+      { cols:[[ia,0,0,1],[ib,0,0,-1]], C:Ca }
+    ];
+  }
+  if(con.type==='slot'){
+    // point-on-line: kill the slider point's velocity across the rail normal n.
+    // lockRot adds relative angular lock → prismatic.
+    const f=slotFrame(con);
+    const Dx=f.wax-f.anchor[0], Dy=f.way-f.anchor[1];
+    const C=f.n[0]*Dx+f.n[1]*Dy;
+    const ia=bodyIndex(con.a.id);
+    const row={ cols:[[ia, f.n[0], f.n[1], -f.n[0]*f.ray + f.n[1]*f.rax]], C };
+    if(f.B){ const dDot=f.dW[0]*Dx+f.dW[1]*Dy;
+      row.cols.push([f.ib, -f.n[0], -f.n[1], f.n[0]*f.rby - f.n[1]*f.rbx - dDot]); }
+    const rows=[row];
+    if(con.lockRot){
+      if(f.B) rows.push({cols:[[ia,0,0,1],[f.ib,0,0,-1]], C:((f.A.th-f.B.th)-con.restAng)});
+      else    rows.push({cols:[[ia,0,0,1]], C:(f.A.th-con.restAng)});
+    }
+    return rows;
+  }
+  if(con.type==='belt'){
+    // inextensible belt: rim tangential speeds equal → fixed phase ratio (holonomic).
+    // sense +1 open belt (same sense), −1 crossed.
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id), s=con.sense;
+    const C=(con.rA*A.th - s*con.rB*B.th) - con.restPhase;
+    return [{ cols:[[ia,0,0,con.rA],[ib,0,0,-s*con.rB]], C }];
+  }
+  if(con.type==='knife'){
+    // no-side-slip (Chaplygin knife edge): the contact point's velocity across the
+    // heading is zero. Velocity-only — no position invariant (nonholonomic).
+    const A=bodies[bodyIndex(con.a.id)];
+    const [px,py,rx,ry]=worldPt(A,con.a.off);
+    const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
+    const nx=-hh[1]/hl, ny=hh[0]/hl;                 // lateral normal to heading
+    const ia=bodyIndex(con.a.id);
+    return [{ cols:[[ia, nx, ny, -nx*ry + ny*rx]], C:0, nh:true }];
+  }
+  if(con.type==='cvt'){
+    // rolling contact at P = the point on A's rim nearest B. Match the two bodies'
+    // tangential material-point velocities there. r_A is A's radius; B's arm is the
+    // distance from B's centre to P, namely (d − r_A) — a coordinate → nonholonomic.
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id);
+    let rvx=B.x-A.x, rvy=B.y-A.y; const d=Math.hypot(rvx,rvy)||1e-6;
+    const ux=rvx/d, uy=rvy/d; const tx=-uy, ty=ux;   // tangent at contact
+    const rA=A.r, armB=d-rA;
+    return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true }];
+  }
+  return [];
+}
+
+// ============================================================================
+//  §07 · LINEAR SOLVE
+//  Dense Gauss-Jordan with partial pivoting, solving one symmetric system
+//  K·x = b in place. K here is the Schur complement J·M⁻¹·Jᵀ (assembled in
+//  §08.3 and §09), i.e. the reduced form of the KKT system in spec §3.2 — not
+//  the full saddle matrix, and not (yet) factored with Cholesky or split per
+//  island. See the design-drift notes in the spec for where this sits on the
+//  solver ladder (spec §3.5, §3.6).
+// ============================================================================
+// ---- §07.1 · solveLinear ----
+function solveLinear(Kt, b, n){
+  for(let i=0;i<n;i++){
+    let p=i, mx=Math.abs(Kt[i][i]);
+    for(let r=i+1;r<n;r++){ const v=Math.abs(Kt[r][i]); if(v>mx){mx=v;p=r;} }
+    if(mx<1e-12) continue;                 // regularization normally prevents this
+    if(p!==i){ const t=Kt[p];Kt[p]=Kt[i];Kt[i]=t; const tb=b[p];b[p]=b[i];b[i]=tb; }
+    const piv=Kt[i][i];
+    for(let r=0;r<n;r++){ if(r===i)continue; const f=Kt[r][i]/piv;
+      if(f){ for(let c=i;c<n;c++) Kt[r][c]-=f*Kt[i][c]; b[r]-=f*b[i]; } }
+  }
+  const x=new Array(n).fill(0);
+  for(let i=0;i<n;i++) x[i]=Math.abs(Kt[i][i])>1e-12 ? b[i]/Kt[i][i] : 0;
+  return x;
+}
+
+// ============================================================================
+//  §08 · PHYSICS SUBSTEP
+//  One fixed-step advance of the entire world, in five inline stages. This is a
+//  velocity-impulse form: forces integrate to candidate velocities, then a
+//  single constraint solve projects those velocities onto the manifold, then
+//  positions integrate, then the gas state advances by the first law.
+//    §08.1  applied forces -> candidate velocities (gravity, drag spring, gas)
+//    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
+//    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
+//    §08.4  position integration
+//    §08.5  gas thermodynamics (first law: dU = δQ − P dV)
+//  The stage numbers below (1..5) are the original inline markers; the §08.x
+//  tokens above are the greppable handles.
+// ============================================================================
+// ---- §08.1 · applied forces -> candidate velocities ----
+let grab=null; // {bi, off} while mouse-dragging a body during play
+function substep(h){
+  const N=bodies.length;
+  // 1) accumulate applied forces, then integrate into candidate velocities v*
+  const FX=new Array(N).fill(0), FY=new Array(N).fill(0), TAU=new Array(N).fill(0);
+  for(let i=0;i<N;i++){ const b=bodies[i]; if(b.static) continue;
+    if(sim.gravity) FY[i] += b.mass*(-sim.g);
+    if(grab && bodies[grab.bi]===b){
+      const [wx,wy,rx,ry]=worldPt(b,grab.off);
+      const vpx=b.vx - b.w*ry, vpy=b.vy + b.w*rx;
+      const K=40*b.mass, Cd=9*b.mass;
+      const Fx=K*(mouseWorld[0]-wx)-Cd*vpx, Fy=K*(mouseWorld[1]-wy)-Cd*vpy;
+      FX[i]+=Fx; FY[i]+=Fy; TAU[i]+=rx*Fy-ry*Fx;
+    }
+  }
+  // gas-piston force elements: F = P·bore along the axis, pushing piston off the head
+  for(const g of gases){
+    const f=gasFrame(g);
+    const P=g.n*g.T/(g.bore*f.xc); g._P=P; g._V=g.bore*f.xc; g._x=f.x; g._dW=f.dW;
+    const Fx=P*g.bore*f.dW[0], Fy=P*g.bore*f.dW[1];
+    const ia=bodyIndex(g.a.id), A=bodies[ia];
+    if(!A.static){ FX[ia]+=Fx; FY[ia]+=Fy; TAU[ia]+= f.prx*Fy - f.pry*Fx; }
+    if(f.B && !f.B.static){ FX[f.ib]-=Fx; FY[f.ib]-=Fy; TAU[f.ib]+= f.hrx*(-Fy) - f.hry*(-Fx); }
+  }
+  for(let i=0;i<N;i++){ const b=bodies[i]; if(b.static){ b.vx=0;b.vy=0;b.w=0; continue; }
+    b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i]; }
+
+  // ---- §08.2 · cable pre-pass ----
+  // 2) cables (tetherball): straight tangent + wound remainder of a fixed total
+  //    length. Winding is reversible (no ratchet). Unilateral: slack when the ball
+  //    is close, taut when it reaches the end of the currently-paid-out length.
+  for(const cb of cables){ cb._rows=[]; const f=cableFrame(cb);
+    if(!f){ cb._active=false; cb._C=0; cb._cols=null; continue; }
+    if(cb._psiRaw===undefined) cb._psiRaw=f.qang;
+    let dpsi=f.qang-cb._psiRaw; while(dpsi>Math.PI)dpsi-=2*Math.PI; while(dpsi<-Math.PI)dpsi+=2*Math.PI;
+    cb._psiRaw=f.qang;
+    let Lallow=cb.Ltot - f.rs*cb.wrap;
+    const taut = f.Lfree >= Lallow - 1e-4;
+    if(taut){ cb.wrap += cb.side*dpsi; if(cb.wrap<0)cb.wrap=0;
+      const wmax=cb.Ltot/f.rs; if(cb.wrap>wmax)cb.wrap=wmax;
+      Lallow=cb.Ltot - f.rs*cb.wrap; }
+    cb._Lallow=Lallow; cb._C=f.Lfree-Lallow; cb._cols=f.cols;
+    let Jv=0; for(const c of f.cols){ const b=bodies[c[0]]; Jv+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; }
+    cb._active = taut && (cb._C>1e-4 || Jv>0);
+  }
+
+  // ---- §08.3 · constraint assembly -> Schur solve -> impulse apply ----
+  // 3) assemble all constraint rows (+ active cable rows)
+  const rows=[];
+  for(let ci=0;ci<constraints.length;ci++){
+    const rs=rowsFor(constraints[ci]);
+    constraints[ci]._rows=[];
+    for(const r of rs){ constraints[ci]._rows.push(rows.length); rows.push(r); }
+  }
+  for(const cb of cables){ if(cb._active){ cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C}); } }
+  const m=rows.length;
+  if(m>0){
+    // per-row body->j map for K assembly
+    const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3]]); return mp; });
+    const Jv=new Array(m);
+    for(let i=0;i<m;i++){ let s=0; for(const c of rows[i].cols){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } Jv[i]=s; }
+    // K = J M^-1 J^T  (+ reg)
+    const Kt=[]; for(let i=0;i<m;i++) Kt.push(new Array(m).fill(0));
+    for(let i=0;i<m;i++){
+      for(let j=i;j<m;j++){
+        let s=0;
+        for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue;
+          const im=invMdiag(bodies[bi]); s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
+        Kt[i][j]=s; Kt[j][i]=s;
+      }
+      Kt[i][i]+=sim.reg;
+    }
+    const kb=sim.beta/sim.h;
+    const rhs=new Array(m); for(let i=0;i<m;i++) rhs[i]=-(Jv[i]+kb*rows[i].C);
+    const lam=solveLinear(Kt,rhs,m);
+    // 4) apply impulses  v += M^-1 J^T lambda
+    for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
+      for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
+        b.vx+=b.invM*c[1]*li; b.vy+=b.invM*c[2]*li; b.w+=b.invI*c[3]*li; } }
+    for(let ci=0;ci<constraints.length;ci++) constraints[ci]._lam=constraints[ci]._rows.map(ri=>lam[ri]);
+    for(const cb of cables) cb._lam=cb._rows.map(ri=>lam[ri]);
+  } else {
+    for(const c of constraints) c._lam=[]; for(const cb of cables) cb._lam=[];
+  }
+
+  // ---- §08.4 · position integration ----
+  // 4) integrate positions
+  for(const b of bodies){ if(b.static)continue; b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w; }
+
+  // ---- §08.5 · gas thermodynamics (first law) ----
+  // 5) thermodynamics: dU = δQ − P dV, with δQ = κ(T_res − T) dt when connected.
+  //    (R = 1 in abstract units; c_v = 1/(γ−1).) Work leaves the gas as the
+  //    same P·ΔV the piston force just did on the mechanism → energy is consistent.
+  for(const g of gases){
+    const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
+    const Q=(g.connected? g.kappa*(g.Tres-g.T):0)*h;
+    const dU=Q - g._P*dV;
+    g.T += dU/(g.n*(1/(g.gamma-1)));
+    if(g.T<1e-4) g.T=1e-4;
+    g._Q=Q/h;
+  }
+}
+
+// ============================================================================
+//  §09 · POSITION PROJECTION & REACTIONS
+//  Two post-solve services that read the same rows §06 produces.
+//    §09.1  projectPositions  (Gauss-Newton drift correction, holonomic rows only)
+//    §09.2  conMaxC           (worst position error on a constraint — HUD/violations)
+//    §09.3  reactionOf        (multiplier λ/h -> the reaction force/torque a joint carries)
+//  §09.3 is the instrumentation payoff (spec §7): the constraint that enforces a
+//  joint also hands back the force it carries, for free, from the same solve.
+// ============================================================================
+// ---- §09.1 · projectPositions ----
+// Snaps the assembly to the nearest consistent configuration, mass-weighted so
+// heavy/static bodies move least. `extra` holds transient constraints (e.g. a
+// drag goal). Used at Play and while articulating a dragged body. Nonholonomic
+// rows (nh:true) are skipped — they have no position invariant to project onto.
+function projectPositions(iters, extra){
+  const cons = (extra && extra.length) ? constraints.concat(extra) : constraints;
+  for(let it=0; it<iters; it++){
+    const rows=[]; for(const con of cons){ for(const r of rowsFor(con)) if(!r.nh) rows.push(r); }
+    const m=rows.length; if(!m) return;
+    let maxC=0; for(const r of rows){ const a=Math.abs(r.C); if(a>maxC)maxC=a; }
+    if(maxC<1e-7) return;
+    const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3]]); return mp; });
+    const Kt=[]; for(let i=0;i<m;i++) Kt.push(new Array(m).fill(0));
+    for(let i=0;i<m;i++){
+      for(let j=i;j<m;j++){ let s=0;
+        for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue; const im=invMdiag(bodies[bi]);
+          s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
+        Kt[i][j]=s; Kt[j][i]=s; }
+      Kt[i][i]+=sim.reg;
+    }
+    const rhs=rows.map(r=>-r.C);
+    const lam=solveLinear(Kt,rhs,m);
+    for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
+      for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
+        b.x+=b.invM*c[1]*li; b.y+=b.invM*c[2]*li; b.th+=b.invI*c[3]*li; } }
+  }
+}
+// ---- §09.2 · conMaxC ----
+function conMaxC(con){ let m=0; for(const r of rowsFor(con)){ if(r.nh) continue; const a=Math.abs(r.C); if(a>m)m=a; } return m; }
+// ---- §09.3 · reactionOf ----
+function reactionOf(con){
+  const l=con._lam; const h=sim.h; if(!l||!l.length) return null;
+  if(con.type==='belt'){ return {belt:true, val:l[0]/h}; }
+  if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
+    return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }
+  const A=bodies[bodyIndex(con.a.id)]; if(!A) return null;
+  const [wax,way]=worldPt(A,con.a.off);
+  if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
+    const nx=-hh[1]/hl, ny=hh[0]/hl; return {x:wax,y:way, fx:nx*(l[0]/h), fy:ny*(l[0]/h)}; }
+  if(con.type==='pin'||con.type==='ground'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }
+  if(con.type==='rod'){
+    const B=bodies[bodyIndex(con.b.id)]; const [wbx,wby]=worldPt(B,con.b.off);
+    let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;
+    return {x:wax,y:way, fx:(dx/L)*(l[0]/h), fy:(dy/L)*(l[0]/h)};
+  }
+  if(con.type==='weld'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h, tau:l[2]/h}; }
+  if(con.type==='slot'){ const f=slotFrame(con);
+    return {x:f.wax,y:f.way, fx:f.n[0]*(l[0]/h), fy:f.n[1]*(l[0]/h),
+            tau:(con.lockRot&&l[1]!==undefined)? l[1]/h : undefined}; }
+  return null;
+}
+
+// ============================================================================
+//  §10 · MAIN LOOP  (fixed-step accumulator)
+//  Drives real time into an integer number of fixed §08 substeps, then renders
+//  (§11) and refreshes the HUD (§12). Spiral-of-death guarded by maxSub.
+// ============================================================================
+let acc=0, last=performance.now();
+const eHist=[];
+function frame(now){
+  let dt=(now-last)/1000; last=now; if(dt>0.05) dt=0.05;
+  if(sim.running){
+    acc+=dt; let n=0;
+    while(acc>=sim.h && n<sim.maxSub){ substep(sim.h); acc-=sim.h; n++; }
+    if(n===sim.maxSub) acc=0;
+  }
+  render();
+  updateHUD();
+  requestAnimationFrame(frame);
+}
+
+// ============================================================================
+//  §11 · RENDER
+//  All canvas drawing. §11.1 is the orchestrator; the rest are element painters
+//  it calls in back-to-front order. None of these mutate sim state.
+//    §11.1  render            (per-frame scene orchestrator; sizing + draw order)
+//    §11.2  background        (drawGrid, drawAxes)
+//    §11.3  bodies            (drawBody, jointDot)
+//    §11.4  gas & cable       (drawCable, drawGas, drawGasForce)
+//    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
+//    §11.6  reaction vectors  (drawReaction — the λ arrows)
+//    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
+// ============================================================================
+// ---- §11.1 · render (scene orchestrator) ----
+function render(){
+  const dpr=window.devicePixelRatio||1;
+  if(cv.width!==Math.round(W()*dpr)||cv.height!==Math.round(H()*dpr)){
+    cv.width=Math.round(W()*dpr); cv.height=Math.round(H()*dpr);
+  }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W(),H());
+  if(sim.showGrid) drawGrid();
+  drawAxes();
+  violCount=0;
+  for(const g of gases) drawGas(g);
+  for(const cb of cables) drawCable(cb);
+  for(const con of constraints) drawConstraint(con);
+  for(const b of bodies) drawBody(b);
+  drawHandles();
+  if(sim.showForces && sim.running){ for(const con of constraints) drawReaction(con); for(const g of gases) drawGasForce(g); }
+  if(pending) drawPending();
+  if(bodyPreview) drawPreview();
+  drawSnap();
+  document.getElementById('hint').style.display = bodies.length? 'none':'block';
+}
+
+// ---- §11.2 · background (grid + axes) ----
+function drawGrid(){
+  const step=1; // world units
+  const [x0,y0]=s2w(0,H()), [x1,y1]=s2w(W(),0);
+  ctx.lineWidth=1;
+  for(let gx=Math.floor(x0);gx<=Math.ceil(x1);gx++){
+    const [sx]=w2s(gx,0);
+    ctx.strokeStyle = gx%5===0? 'rgba(255,255,255,.07)':'rgba(255,255,255,.032)';
+    ctx.beginPath();ctx.moveTo(sx,0);ctx.lineTo(sx,H());ctx.stroke();
+  }
+  for(let gy=Math.floor(y0);gy<=Math.ceil(y1);gy++){
+    const [,sy]=w2s(0,gy);
+    ctx.strokeStyle = gy%5===0? 'rgba(255,255,255,.07)':'rgba(255,255,255,.032)';
+    ctx.beginPath();ctx.moveTo(0,sy);ctx.lineTo(W(),sy);ctx.stroke();
+  }
+}
+function drawAxes(){
+  const [,sy0]=w2s(0,0);
+  ctx.strokeStyle='rgba(255,255,255,.14)';ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(0,sy0);ctx.lineTo(W(),sy0);ctx.stroke();
+}
+
+// ---- §11.3 · bodies (drawBody, jointDot) ----
+function drawBody(b){
+  const [sx,sy]=w2s(b.x,b.y); const rr=b.r*cam.scale;
+  ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);
+  if(b.static){
+    ctx.fillStyle='#2b323f'; ctx.fill();
+    ctx.save();ctx.clip();
+    ctx.strokeStyle='rgba(255,255,255,.10)';ctx.lineWidth=1;
+    for(let i=-rr*2;i<rr*2;i+=6){ctx.beginPath();ctx.moveTo(sx+i,sy-rr);ctx.lineTo(sx+i+rr*2,sy+rr);ctx.stroke();}
+    ctx.restore();
+  } else {
+    ctx.fillStyle='#cdd5e0'; ctx.fill();
+  }
+  ctx.lineWidth = b.sel?2.5:1.4;
+  ctx.strokeStyle = b.sel? 'var(--accent)':'#7c8798';
+  ctx.strokeStyle = b.sel? '#5aa9f0':'#7c8798';
+  ctx.stroke();
+  // orientation tick + centre dot (shows spin)
+  const [tx,ty]=w2s(b.x+Math.cos(b.th)*b.r, b.y+Math.sin(b.th)*b.r);
+  ctx.strokeStyle = b.static?'rgba(255,255,255,.25)':'#5d6878';
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tx,ty);ctx.stroke();
+  ctx.fillStyle=b.static?'rgba(255,255,255,.3)':'#5d6878';
+  ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill();
+}
+
+function jointDot(x,y,col){ const [sx,sy]=w2s(x,y);
+  ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.stroke(); }
+
+// ---- §11.4 · gas & cable (drawCable, drawGas, drawGasForce) ----
+function drawCable(cb){
+  const f=cableFrame(cb); if(!f)return;
+  const taut = cb._lam && cb._lam.length && Math.abs(cb._lam[0])>1e-5;
+  const col = cb.sel? '#5aa9f0' : (taut? '#e0c060' : '#8a94a6');
+  const [tx,ty]=w2s(f.T[0],f.T[1]), [qx,qy]=w2s(f.Qx,f.Qy);
+  ctx.strokeStyle=col; ctx.lineWidth= taut?2.5:1.8;
+  ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(qx,qy);ctx.stroke();
+  // wrap arc around the spool, proportional to the wound angle
+  const sweep=Math.min(cb._wrap||0, Math.PI*6);
+  ctx.lineWidth=1.8;ctx.beginPath();
+  for(let i=0;i<=24;i++){ const a=f.qang - cb.side*(sweep*i/24);
+    const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a)); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
+  ctx.stroke();
+  jointDot(f.T[0],f.T[1],col);
+}
+function drawGas(g){
+  const f=gasFrame(g); const sel=g.sel;
+  const nrm=[-f.dW[1],f.dW[0]]; const hw=g.bore*0.5;
+  const H1=[f.hx+nrm[0]*hw, f.hy+nrm[1]*hw], H2=[f.hx-nrm[0]*hw, f.hy-nrm[1]*hw];
+  const P1=[f.pax+nrm[0]*hw, f.pay+nrm[1]*hw], P2=[f.pax-nrm[0]*hw, f.pay-nrm[1]*hw];
+  const P=g._P || g.n*g.T/(g.bore*f.xc);
+  // fill tinted by pressure, hue warmed by temperature
+  const a=Math.max(0.05, Math.min(0.55, P*0.03));
+  const warm=Math.max(0, Math.min(1, (g.T-0.4)/2));
+  ctx.beginPath();
+  [H1,P1,P2,H2].forEach((p,i)=>{ const [X,Y]=w2s(p[0],p[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
+  ctx.closePath();
+  ctx.fillStyle=`rgba(${Math.round(210+warm*40)},${Math.round(150-warm*70)},${Math.round(90-warm*50)},${a})`;
+  ctx.fill();
+  // cylinder walls + closed end
+  const col=sel?'#5aa9f0':'#8a94a6'; ctx.strokeStyle=col; ctx.lineWidth=2;
+  const ext=[f.dW[0]*0.25, f.dW[1]*0.25];
+  const walls=[[H1,[P1[0]+ext[0],P1[1]+ext[1]]],[H2,[P2[0]+ext[0],P2[1]+ext[1]]]];
+  for(const [q1,q2] of walls){ const [a1,a2]=w2s(q1[0],q1[1]), [b1,b2]=w2s(q2[0],q2[1]);
+    ctx.beginPath();ctx.moveTo(a1,a2);ctx.lineTo(b1,b2);ctx.stroke(); }
+  const [hc1,hc2]=w2s(H1[0],H1[1]), [hd1,hd2]=w2s(H2[0],H2[1]);
+  ctx.beginPath();ctx.moveTo(hc1,hc2);ctx.lineTo(hd1,hd2);ctx.stroke();
+  // piston face
+  const [pc1,pc2]=w2s(P1[0],P1[1]), [pd1,pd2]=w2s(P2[0],P2[1]);
+  ctx.lineWidth=3.5;ctx.beginPath();ctx.moveTo(pc1,pc2);ctx.lineTo(pd1,pd2);ctx.stroke();
+}
+function drawGasForce(g){
+  const f=gasFrame(g); const P=g._P||g.n*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
+  sim.forceRef=Math.max(sim.forceRef*0.985, mag);
+  const px=58*mag/sim.forceRef; const [sx,sy]=w2s(f.pax,f.pay);
+  const ex=sx+f.dW[0]*px, ey=sy-f.dW[1]*px;
+  ctx.strokeStyle='#f0a24c';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(ex,ey);ctx.stroke();
+  const ang=Math.atan2(-f.dW[1],f.dW[0]);
+  ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(ang-0.4),ey-8*Math.sin(ang-0.4));
+  ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(ang+0.4),ey-8*Math.sin(ang+0.4));ctx.stroke();
+}
+// ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
+// Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
+function drawConstraint(con){
+  const viol = !sim.running && conMaxC(con) > 2e-3;
+  if(viol) violCount++;
+  const sel = con.sel; const col = viol ? '#ec5b52' : (sel? '#5aa9f0':'#8a94a6');
+  const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
+  const [wax,way]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
+  if(con.type==='pin'){ jointDot(wax,way,col); }
+  else if(con.type==='ground'){
+    const [sx,sy]=w2s(con.world[0],con.world[1]);
+    jointDot(con.world[0],con.world[1],col);
+    ctx.strokeStyle=col;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(sx,sy+4);ctx.lineTo(sx-7,sy+14);ctx.lineTo(sx+7,sy+14);ctx.closePath();ctx.stroke();
+    for(let i=-7;i<=7;i+=4){ctx.beginPath();ctx.moveTo(sx+i,sy+14);ctx.lineTo(sx+i-4,sy+19);ctx.stroke();}
+  }
+  else if(con.type==='rod'){
+    const B=bodies[bodyIndex(con.b.id)]; if(!B)return; const [wbx,wby]=worldPt(B,con.b.off);
+    const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
+    ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
+    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+    jointDot(wax,way,col); jointDot(wbx,wby,col);
+  }
+  else if(con.type==='weld'){
+    const B=bodies[bodyIndex(con.b.id)]; if(!B)return; const [wbx,wby]=worldPt(B,con.b.off);
+    const [ax,ay]=w2s(wax,way);
+    ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
+    ctx.beginPath();ctx.rect(ax-5,ay-5,10,10);ctx.fill();ctx.stroke();
+  }
+  else if(con.type==='slot'){
+    const f=slotFrame(con);
+    const s=(f.wax-f.anchor[0])*f.dW[0]+(f.way-f.anchor[1])*f.dW[1];
+    const half=Math.max(1.0, Math.abs(s)+0.5);
+    const p1=[f.anchor[0]-f.dW[0]*half, f.anchor[1]-f.dW[1]*half];
+    const p2=[f.anchor[0]+f.dW[0]*half, f.anchor[1]+f.dW[1]*half];
+    const [x1,y1]=w2s(p1[0],p1[1]), [x2,y2]=w2s(p2[0],p2[1]);
+    ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:2;
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    for(const p of [p1,p2]){ const q1=[p[0]-f.n[0]*0.14,p[1]-f.n[1]*0.14], q2=[p[0]+f.n[0]*0.14,p[1]+f.n[1]*0.14];
+      const [c1x,c1y]=w2s(q1[0],q1[1]), [c2x,c2y]=w2s(q2[0],q2[1]);
+      ctx.beginPath();ctx.moveTo(c1x,c1y);ctx.lineTo(c2x,c2y);ctx.stroke(); }
+    ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
+    if(con.lockRot){ const hd=0.17,hn=0.11; const cs=[[hd,hn],[hd,-hn],[-hd,-hn],[-hd,hn]];
+      ctx.beginPath(); cs.forEach((c,i)=>{ const X=f.wax+f.dW[0]*c[0]+f.n[0]*c[1], Y=f.way+f.dW[1]*c[0]+f.n[1]*c[1];
+        const [sx,sy]=w2s(X,Y); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }); ctx.closePath();ctx.fill();ctx.stroke(); }
+    else { const [bx,by]=w2s(f.wax,f.way); ctx.beginPath();ctx.arc(bx,by,5,0,Math.PI*2);ctx.fill();ctx.stroke(); }
+  }
+  else if(con.type==='belt'){
+    const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
+    drawRim(A.x,A.y,con.rA,col); drawRim(B.x,B.y,con.rB,col);
+    ctx.strokeStyle=col; ctx.lineWidth=2.5;
+    for(const [p,q] of beltTangents(A.x,A.y,con.rA, B.x,B.y,con.rB, con.sense)){
+      const [x1,y1]=w2s(p[0],p[1]), [x2,y2]=w2s(q[0],q[1]);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke(); }
+  }
+  else if(con.type==='knife'){
+    const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1; const hx=hh[0]/hl,hy=hh[1]/hl;
+    const p1=[wax-hx*0.5,way-hy*0.5], p2=[wax+hx*0.5,way+hy*0.5];
+    const [x1,y1]=w2s(p1[0],p1[1]), [x2,y2]=w2s(p2[0],p2[1]);
+    ctx.strokeStyle=col;ctx.lineWidth=3.5;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    // small lateral tick marking the blocked direction
+    const [cx,cy]=w2s(wax,way);
+    ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(cx+hy*7,cy+hx*7);ctx.lineTo(cx-hy*7,cy-hx*7);ctx.stroke();
+    jointDot(wax,way,col);
+  }
+  else if(con.type==='cvt'){
+    const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
+    let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d, uy=rvy/d;
+    const px=A.x+ux*A.r, py=A.y+uy*A.r;              // contact on A's rim toward B
+    drawRim(A.x,A.y,A.r,col);
+    const [ax,ay]=w2s(A.x,A.y), [bx,by]=w2s(B.x,B.y);
+    ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([2,3]);
+    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();ctx.setLineDash([]);
+    jointDot(px,py,col);
+  }
+}
+function drawRim(x,y,r,col){ const [sx,sy]=w2s(x,y);
+  ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
+  ctx.beginPath();ctx.arc(sx,sy,r*cam.scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]); }
+function beltTangents(ax,ay,ra, bx,by,rb, sense){
+  const dx=bx-ax, dy=by-ay, d=Math.hypot(dx,dy)||1e-6; const base=Math.atan2(dy,dx); const segs=[];
+  if(sense>0){ let c=(ra-rb)/d; c=Math.max(-1,Math.min(1,c)); const g=Math.acos(c);
+    for(const s of [1,-1]){ const a=base+s*g;
+      segs.push([[ax+ra*Math.cos(a),ay+ra*Math.sin(a)],[bx+rb*Math.cos(a),by+rb*Math.sin(a)]]); } }
+  else { let c=(ra+rb)/d; c=Math.max(-1,Math.min(1,c)); const g=Math.acos(c);
+    for(const s of [1,-1]){ const a=base+s*g;
+      segs.push([[ax+ra*Math.cos(a),ay+ra*Math.sin(a)],[bx-rb*Math.cos(a),by-rb*Math.sin(a)]]); } }
+  return segs;
+}
+
+// ---- §11.6 · reaction vectors (the λ arrows) ----
+function drawReaction(con){
+  const r=reactionOf(con); if(!r || r.fx===undefined)return;
+  const mag=Math.hypot(r.fx,r.fy); if(mag<1e-6)return;
+  sim.forceRef=Math.max(sim.forceRef*0.985, mag);
+  const px=58*mag/sim.forceRef;
+  const [sx,sy]=w2s(r.x,r.y);
+  const ux=r.fx/mag, uy=r.fy/mag;              // world dir; screen y flips
+  const ex=sx+ux*px, ey=sy-uy*px;
+  ctx.strokeStyle='#ec5b52';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(ex,ey);ctx.stroke();
+  const ang=Math.atan2(-(uy),ux);
+  ctx.beginPath();ctx.moveTo(ex,ey);
+  ctx.lineTo(ex-8*Math.cos(ang-0.4), ey-8*Math.sin(ang-0.4));
+  ctx.moveTo(ex,ey);
+  ctx.lineTo(ex-8*Math.cos(ang+0.4), ey-8*Math.sin(ang+0.4));
+  ctx.stroke();
+}
+
+// ---- §11.7 · interaction overlays (pending, preview, handles, snap) ----
+// `pending` also holds the first pick of a two-step tool (§13.5); it lives here
+// because drawPending visualises it, but §13 is what writes and consumes it.
+let pending=null;      // first pick of a two-step constraint tool
+function drawPending(){
+  const [sx,sy]=w2s(pending.wp[0],pending.wp[1]);
+  ctx.strokeStyle='#5aa9f0';ctx.lineWidth=2;ctx.setLineDash([4,4]);
+  ctx.beginPath();ctx.arc(sx,sy,7,0,Math.PI*2);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(mouseScreen[0],mouseScreen[1]);ctx.stroke();
+}
+let bodyPreview=null;  // {cx,cy,r} while dragging out a new body
+function drawPreview(){
+  const [sx,sy]=w2s(bodyPreview.cx,bodyPreview.cy);
+  ctx.strokeStyle='#5aa9f0';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);
+  ctx.beginPath();ctx.arc(sx,sy,Math.max(bodyPreview.r*cam.scale,3),0,Math.PI*2);ctx.stroke();
+  ctx.setLineDash([]);
+}
+function drawHandles(){
+  if(sim.running) return;
+  for(const con of constraints){ if(!con.sel) continue;
+    for(const h of conHandles(con)){ const [sx,sy]=w2s(h.x,h.y);
+      ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,6,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle='#5aa9f0';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,6,0,Math.PI*2);ctx.stroke();
+      ctx.fillStyle='#5aa9f0';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill(); } }
+}
+function drawSnap(){
+  if(!anchorDrag || !lastSnap) return;
+  const [sx,sy]=w2s(lastSnap.wp[0],lastSnap.wp[1]);
+  ctx.strokeStyle='#57c78a';ctx.lineWidth=2;ctx.setLineDash([3,3]);
+  ctx.beginPath();ctx.arc(sx,sy,9,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='#57c78a';ctx.font='10px ui-monospace, monospace';ctx.fillText(lastSnap.kind, sx+12, sy-9);
+}
+
+// ============================================================================
+//  §12 · HUD  (energy ledger + status + spark)
+//  Reads world state and paints the DOM ledger, the status line, and the energy
+//  sparkline. The running energy total is the honesty check: with no dissipation
+//  it should hold flat (spec §7, system-level accounting).
+//    §12.1  energy     (KE + PE + gas internal U -> totals)
+//    §12.2  updateHUD  (write ledger/status DOM, push spark history)
+//    §12.3  drawSpark  (total-energy trace)
+// ============================================================================
+// ---- §12.1 · energy ----
+function energy(){
+  let ke=0, pe=0;
+  for(const b of bodies){ if(b.static)continue;
+    ke+=0.5*b.mass*(b.vx*b.vx+b.vy*b.vy)+0.5*b.I*b.w*b.w;
+    if(sim.gravity) pe+=b.mass*sim.g*b.y;
+  }
+  let U=0; for(const g of gases) U += g.n*(1/(g.gamma-1))*g.T;   // internal energy of the gas
+  return {ke,pe,U,tot:ke+pe+U};
+}
+// ---- §12.2 · updateHUD ----
+function updateHUD(){
+  const e=energy();
+  document.getElementById('eKE').textContent=e.ke.toFixed(2);
+  document.getElementById('ePE').textContent=e.pe.toFixed(2);
+  const eu=document.getElementById('eU'); if(eu) eu.textContent=e.U.toFixed(2);
+  document.getElementById('eTot').textContent=e.tot.toFixed(2);
+  document.getElementById('eTotHead').textContent=e.tot.toFixed(2);
+  document.getElementById('status').textContent=
+    `${sim.running?'running':'paused'} · ${bodies.length} bodies · ${constraints.length} constraints`
+    + (!sim.running && violCount ? ` · ⚠ ${violCount} unsatisfied` : '');
+  if(sim.running){ eHist.push(e.tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
+  if(selBody||selConstraint||selGas||selCable) updateInspectorLive();
+}
+// ---- §12.3 · drawSpark ----
+function drawSpark(){
+  const dpr=window.devicePixelRatio||1;
+  const w=spark.clientWidth,h=spark.clientHeight;
+  if(spark.width!==w*dpr){spark.width=w*dpr;spark.height=h*dpr;}
+  sctx.setTransform(dpr,0,0,dpr,0,0);sctx.clearRect(0,0,w,h);
+  if(eHist.length<2)return;
+  let lo=Math.min(...eHist),hi=Math.max(...eHist); const pad=(hi-lo)*0.15||1; lo-=pad;hi+=pad;
+  sctx.strokeStyle='#57c78a';sctx.lineWidth=1.5;sctx.beginPath();
+  eHist.forEach((v,i)=>{ const x=i/(eHist.length-1)*w; const y=h-(v-lo)/(hi-lo)*h;
+    i?sctx.lineTo(x,y):sctx.moveTo(x,y); }); sctx.stroke();
+}
+
+// ============================================================================
+//  §13 · TOOLS & INPUT
+//  The tool palette and all pointer handling: hit-testing, snapping, constraint
+//  handle editing, and the big pointer-down dispatch that builds constraints.
+//    §13.1  tool table + rail build + setTool
+//    §13.2  picking & snapping (pickBody/Constraint, distSeg, snapAnchor, ...)
+//    §13.3  constraint handles (conHandles, pickHandle, applyHandle)
+//    §13.4  pointer state (multi-touch map, pinch, cancelSingle)
+//    §13.5  pointerdown  (per-tool dispatch — where constraints are created)
+//    §13.6  pointermove  (drag/pan/pinch/handle articulation)
+//    §13.7  pointerup / cancel / wheel
+// ============================================================================
+// ---- §13.1 · tool table + rail build + setTool ----
+const TOOLS=[
+  {id:'select',key:'1',tip:'Select / move (1)',svg:'<path d="M5 3l7 16 2-6 6-2z"/>'},
+  {id:'body',key:'2',tip:'Add body (2)',svg:'<circle cx="12" cy="12" r="7"/><path d="M12 8v8M8 12h8"/>'},
+  {id:'pin',key:'3',tip:'Pin / hinge (3)',svg:'<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/>'},
+  {id:'rod',key:'4',tip:'Rigid rod (4)',svg:'<circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M7.5 16.5l9-9"/>'},
+  {id:'weld',key:'5',tip:'Weld (5)',svg:'<rect x="8" y="8" width="8" height="8" rx="1"/><path d="M4 12h4M16 12h4M12 4v4M12 16v4"/>'},
+  {id:'slot',key:'6',tip:'Slot / prismatic (6)',svg:'<path d="M3 9h18M3 15h18"/><rect x="9" y="9" width="6" height="6" rx="1"/>'},
+  {id:'belt',key:'b',tip:'Belt (b)',svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
+  {id:'knife',key:'k',tip:'Knife-edge wheel (k)',svg:'<path d="M4 16h16"/><path d="M12 16l3-9 3 9"/><circle cx="8" cy="16" r="1.5"/>'},
+  {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
+  {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
+  {id:'gas',key:'7',tip:'Gas piston (7)',svg:'<rect x="3" y="8" width="11" height="8" rx="1"/><path d="M14 10.5v3M14 12h7M18 9.5v5"/>'},
+  {id:'ground',key:'8',tip:'Ground pin (8)',svg:'<circle cx="12" cy="8" r="3"/><path d="M12 11v3M6 17h12M8 17l-2 3M12 17l-2 3M16 17l-2 3"/>'},
+  {id:'delete',key:'9',tip:'Delete (9)',svg:'<path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/>'},
+];
+let tool='select';
+const rail=document.getElementById('rail');
+TOOLS.forEach((t,i)=>{
+  if(i===1||i===2||i===10){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
+  const el=document.createElement('button');el.className='tool';el.dataset.id=t.id;
+  el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
+  el.onclick=()=>setTool(t.id); rail.appendChild(el);
+});
+function setTool(id){ tool=id; pending=null;
+  document.querySelectorAll('.tool').forEach(e=>e.classList.toggle('on',e.dataset.id===id));
+  cv.style.cursor = id==='select'?'default': id==='delete'?'not-allowed':'crosshair';
+  document.getElementById('modehint').textContent = TOOLS.find(t=>t.id===id).tip;
+}
+
+// ---- §13.2 · picking & snapping ----
+let mouseScreen=[0,0], mouseWorld=[0,0], drag=null, panning=null;
+
+function pickBody(wx,wy){
+  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i];
+    if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
+  return -1;
+}
+// topmost body under the cursor that isn't `exceptId` — lets the 2nd pin/weld
+// pick reach a body occluded by the one already selected
+function pickBodyExcept(wx,wy,exceptId){
+  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i]; if(b.id===exceptId) continue;
+    if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
+  return -1;
+}
+function pickConstraint(wx,wy){
+  const tol=10/cam.scale;
+  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i];
+    const A=bodies[bodyIndex(con.a.id)]; if(!A)continue; const [ax,ay]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
+    if(con.type==='pin'||con.type==='weld'){ if((wx-ax)**2+(wy-ay)**2<=tol*tol) return i; }
+    else if(con.type==='ground'){ if((wx-con.world[0])**2+(wy-con.world[1])**2<=tol*tol) return i; }
+    else if(con.type==='rod'){ const B=bodies[bodyIndex(con.b.id)]; if(!B)continue;
+      const [bx,by]=worldPt(B,con.b.off);
+      if(distSeg(wx,wy,ax,ay,bx,by)<=tol) return i; }
+    else if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B)continue;
+      if(distSeg(wx,wy,A.x,A.y,B.x,B.y)<=tol) return i; }
+    else if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
+      const p1=[ax-hh[0]/hl*0.5,ay-hh[1]/hl*0.5], p2=[ax+hh[0]/hl*0.5,ay+hh[1]/hl*0.5];
+      if(distSeg(wx,wy,p1[0],p1[1],p2[0],p2[1])<=tol) return i; }
+    else if(con.type==='slot'){ const f=slotFrame(con);
+      const s=(f.wax-f.anchor[0])*f.dW[0]+(f.way-f.anchor[1])*f.dW[1];
+      const half=Math.max(1.0,Math.abs(s)+0.5);
+      const q1=[f.anchor[0]-f.dW[0]*half,f.anchor[1]-f.dW[1]*half], q2=[f.anchor[0]+f.dW[0]*half,f.anchor[1]+f.dW[1]*half];
+      if(distSeg(wx,wy,q1[0],q1[1],q2[0],q2[1])<=tol || (wx-f.wax)**2+(wy-f.way)**2<=tol*tol) return i; }
+  }
+  return -1;
+}
+function distSeg(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay; const L2=dx*dx+dy*dy||1e-9;
+  let t=((px-ax)*dx+(py-ay)*dy)/L2; t=Math.max(0,Math.min(1,t));
+  return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
+
+function localOff(bi,wx,wy){ const b=bodies[bi]; const dx=wx-b.x,dy=wy-b.y;
+  return R(-b.th,dx,dy); }
+function offOf(b,P){ return R(-b.th, P[0]-b.x, P[1]-b.y); }
+
+// snap a world point to the nearest body centre or edge (optionally limited to some bodies)
+function snapAnchor(wx,wy,allow){
+  const Rr=12/cam.scale; let best=null, bestD=Rr;
+  for(const b of bodies){ if(allow && !allow.includes(b.id)) continue;
+    const d=Math.hypot(wx-b.x,wy-b.y);
+    if(d<bestD){ best={body:b,wp:[b.x,b.y],kind:'centre'}; bestD=d; }
+    if(d>1e-6){ const de=Math.abs(d-b.r);
+      if(de<bestD){ const ux=(wx-b.x)/d, uy=(wy-b.y)/d; best={body:b,wp:[b.x+ux*b.r,b.y+uy*b.r],kind:'edge'}; bestD=de; } }
+  }
+  return best;
+}
+// resolve a click to {body, wp} — snap first, else any body under the cursor
+function anchorTarget(wx,wy){
+  const s=snapAnchor(wx,wy); if(s) return {body:s.body, wp:s.wp, snap:s};
+  const bi=pickBody(wx,wy); if(bi>=0) return {body:bodies[bi], wp:[wx,wy], snap:null};
+  return null;
+}
+// ---- §13.3 · constraint handles (edit anchors/directions in place) ----
+// draggable handles carried by each constraint
+function conHandles(con){
+  const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
+  if(con.type==='pin'||con.type==='weld'){ const [x,y]=worldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
+  if(con.type==='ground'){ return [{which:'pivot',x:con.world[0],y:con.world[1]}]; }
+  if(con.type==='rod'){ const B=bodies[bodyIndex(con.b.id)]; if(!B) return [];
+    const [ax,ay]=worldPt(A,con.a.off); const [bx,by]=worldPt(B,con.b.off);
+    return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}]; }
+  if(con.type==='slot'){ const f=slotFrame(con);
+    return [ {which:'anchor',x:f.wax,y:f.way},
+             {which:'dir',x:f.anchor[0]+f.dW[0]*0.8, y:f.anchor[1]+f.dW[1]*0.8} ]; }
+  if(con.type==='knife'){ const [px,py]=worldPt(A,con.a.off);
+    const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
+    return [ {which:'anchor',x:px,y:py}, {which:'dir',x:px+hh[0]/hl*0.7, y:py+hh[1]/hl*0.7} ]; }
+  return [];
+}
+function pickHandle(wx,wy){
+  const tol=11/cam.scale;
+  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i];
+    for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,ci:i}; } }
+  return null;
+}
+// move an anchor while editing; snaps and (for rods) can re-bind to another body
+function applyHandle(ad, wx, wy){
+  const con=ad.con;
+  if(con.type==='pin'||con.type==='weld'){
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const s=snapAnchor(wx,wy,[A.id,B.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
+    con.a.off=offOf(A,P); con.b.off=offOf(B,P);
+    if(con.type==='weld') con.restAng=A.th-B.th;
+  } else if(con.type==='ground'){
+    const A=bodies[bodyIndex(con.a.id)];
+    const s=snapAnchor(wx,wy,[A.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
+    con.world=[P[0],P[1]]; con.a.off=offOf(A,P);
+  } else if(con.type==='rod'){
+    const s=snapAnchor(wx,wy); lastSnap=s; let body,P;
+    if(s){ body=s.body; P=s.wp; }
+    else { const bi=pickBody(wx,wy); if(bi>=0){ body=bodies[bi]; P=[wx,wy]; }
+           else { body=bodies[bodyIndex(ad.which==='A'?con.a.id:con.b.id)]; P=[wx,wy]; } }
+    const ep = ad.which==='A'? con.a : con.b; ep.id=body.id; ep.off=offOf(body,P);
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const [ax,ay]=worldPt(A,con.a.off), [bx,by]=worldPt(B,con.b.off); con.len=Math.hypot(ax-bx,ay-by);
+  }
+  else if(con.type==='slot'){
+    if(ad.which==='anchor'){
+      // one anchor: the pin. the rail's reference point on B is kept coincident with it.
+      const A=bodies[bodyIndex(con.a.id)];
+      const allow = con.line.id!=null ? [A.id, con.line.id] : [A.id];
+      const s=snapAnchor(wx,wy,allow); lastSnap=s; const P=s?s.wp:[wx,wy];
+      con.a.off=offOf(A,P);
+      if(con.line.id!=null){ const B=bodies[bodyIndex(con.line.id)]; con.line.off=offOf(B,P); }
+      else con.line.off=[P[0],P[1]];
+    }
+    else if(ad.which==='dir'){ const f=slotFrame(con); const dx=wx-f.anchor[0], dy=wy-f.anchor[1]; const L=Math.hypot(dx,dy)||1;
+      const axis=[dx/L,dy/L]; lastSnap=null;
+      if(con.line.id!=null){ const B=bodies[bodyIndex(con.line.id)]; con.line.dir=R(-B.th,axis[0],axis[1]); }
+      else con.line.dir=axis; }
+  }
+  else if(con.type==='knife'){
+    const A=bodies[bodyIndex(con.a.id)];
+    if(ad.which==='anchor'){ const s=snapAnchor(wx,wy,[A.id]); lastSnap=s; const P=s?s.wp:[wx,wy]; con.a.off=offOf(A,P); }
+    else if(ad.which==='dir'){ const [px,py]=worldPt(A,con.a.off); const dx=wx-px,dy=wy-py; const L=Math.hypot(dx,dy)||1;
+      lastSnap=null; con.dir=R(-A.th, dx/L, dy/L); }
+  }
+}
+
+// ---- §13.4 · pointer state (multi-touch, pinch) ----
+// active pointers keyed by id, for one-finger pan and two-finger pinch-zoom
+const pointers=new Map();
+let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
+let anchorDrag=null, lastSnap=null;
+function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; }
+function startPinch(){
+  const pts=[...pointers.values()];
+  const mx=(pts[0].x+pts[1].x)/2, my=(pts[0].y+pts[1].y)/2;
+  pinch={ dist:Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y)||1, midWorld:s2w(mx,my), scale:cam.scale };
+}
+
+// ---- §13.5 · pointerdown (per-tool dispatch) ----
+// This is where each tool builds its constraint. The branches, in order, handle:
+// pinch guard, pan, body, select (+handles/grab), delete, ground, gas, belt/cvt,
+// knife, cable, pin/rod/weld, slot. Search  tool==='<name>'  to reach one.
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId);
+  const rect=cv.getBoundingClientRect();
+  const px=e.clientX-rect.left, py=e.clientY-rect.top;
+  pointers.set(e.pointerId,{x:px,y:py});
+  mouseScreen=[px,py]; mouseWorld=s2w(px,py);
+
+  if(pointers.size===2){ cancelSingle(); startPinch(); return; }   // second finger → pinch, never a tool action
+  if(pointers.size>2) return;
+
+  const [wx,wy]=mouseWorld;
+  downScreen=[px,py]; movedFar=false;
+
+  if(e.button===1 || (e.button===0 && e.altKey)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+
+  if(tool==='body'){ bodyPreview={cx:wx,cy:wy,r:0}; return; }
+
+  if(tool==='select'){
+    if(!sim.running){ const h=pickHandle(wx,wy); if(h){ selectConstraint(h.ci); anchorDrag=h; applyHandle(h,wx,wy); return; } }
+    const bi=pickBody(wx,wy);
+    if(bi>=0){ selectBody(bi);
+      if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
+      else { drag={bi, off:localOff(bi,wx,wy)}; }
+      return; }
+    const cci=pickConstraint(wx,wy); if(cci>=0){ selectConstraint(cci); return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0){ selectGas(gsi); return; }
+    const cbi=pickCable(wx,wy); if(cbi>=0){ selectCable(cbi); return; }
+    panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y,candidate:true};   // one-finger background pan; a tap deselects
+    return;
+  }
+  if(tool==='delete'){
+    const bi=pickBody(wx,wy);
+    if(bi>=0){ const id=bodies[bi].id;
+      constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      bodies.splice(bi,1); clearSelection(); saveState(); return; }
+    const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0){ gases.splice(gsi,1); clearSelection(); saveState(); return; }
+    const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); }
+    return;
+  }
+  if(tool==='ground'){
+    const t=anchorTarget(wx,wy);
+    if(t){ constraints.push({type:'ground', a:{id:t.body.id, off:offOf(t.body,t.wp)}, world:[t.wp[0],t.wp[1]], sel:false}); saveState(); }
+    return;
+  }
+  if(tool==='gas'){
+    // FIRST click = closed end (head): on a cylinder body, or empty for a world-fixed head
+    if(!pending){ const t=anchorTarget(wx,wy);
+      pending = t ? {gas:true, headId:t.body.id, headWp:t.wp, wp:t.wp}
+                  : {gas:true, headId:null, headWp:[wx,wy], wp:[wx,wy]};
+      return; }
+    // SECOND click = piston face on a body; axis runs head → piston (expansion +)
+    const t=anchorTarget(wx,wy); if(!t) return;
+    const dx=t.wp[0]-pending.headWp[0], dy=t.wp[1]-pending.headWp[1]; const L=Math.hypot(dx,dy);
+    if(L<0.2) return;
+    const axis=[dx/L,dy/L]; const A=t.body;
+    const head = pending.headId!=null
+      ? (()=>{ const B=bodies[bodyIndex(pending.headId)]; return {id:B.id, off:offOf(B,pending.headWp), dir:R(-B.th,axis[0],axis[1])}; })()
+      : {id:null, off:[pending.headWp[0],pending.headWp[1]], dir:axis};
+    pending=null; saveState();
+    return;
+  }
+  if(tool==='belt' || tool==='cvt'){
+    // two bodies: A first, then B (occluded B reachable via except-pick)
+    if(!pending){ const bi=pickBody(wx,wy); if(bi<0)return; pending={id:bodies[bi].id, wp:[wx,wy]}; return; }
+    const bi2=pickBodyExcept(wx,wy,pending.id); if(bi2<0)return;
+    const A=bodies[bodyIndex(pending.id)], B=bodies[bi2];
+    if(tool==='belt'){
+      constraints.push({type:'belt', a:{id:A.id}, b:{id:B.id}, rA:A.r, rB:B.r, sense:1,
+                        restPhase:(A.r*A.th - B.r*B.th), sel:false});
+    } else {
+      constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false});
+    }
+    pending=null; saveState();
+    return;
+  }
+  if(tool==='knife'){
+    // contact point on a body, then a heading direction
+    if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
+      pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
+    const dx=wx-pending.wp[0], dy=wy-pending.wp[1]; const L=Math.hypot(dx,dy); if(L<0.15) return;
+    const A=bodies[bodyIndex(pending.id)];
+    constraints.push({type:'knife', a:{id:pending.id, off:pending.off}, dir:R(-A.th, dx/L, dy/L), sel:false});
+    pending=null; saveState();
+    return;
+  }
+  if(tool==='cable'){
+    // FIRST click = tether point (on a body, or empty for a world anchor)
+    if(!pending){ const t=anchorTarget(wx,wy);
+      pending = t ? {cable:true, tid:t.body.id, toff:offOf(t.body,t.wp), wp:t.wp}
+                  : {cable:true, tid:null, toff:[wx,wy], wp:[wx,wy]};
+      return; }
+    // SECOND click = spool body; the click side sets the winding direction
+    const bi=pickBody(wx,wy); if(bi<0) return;
+    const S=bodies[bi]; if(pending.tid!=null && S.id===pending.tid) return;
+    const T = pending.tid!=null ? (()=>{ const tb=bodies[bodyIndex(pending.tid)]; const [x,y]=worldPt(tb,pending.toff); return [x,y]; })()
+                                : [pending.toff[0],pending.toff[1]];
+    const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy); if(d<=S.r) return;
+    const side = (dvx*(wy-S.y) - dvy*(wx-S.x)) >= 0 ? 1 : -1;   // click side of the T–centre line
+    const Lfree=Math.sqrt(d*d-S.r*S.r);
+    cables.push({type:'cable', tether:{id:pending.tid, off:pending.toff}, spool:{id:S.id}, side, Ltot:Lfree, wrap:0, sel:false});
+    pending=null; saveState();
+    return;
+  }
+  if(tool==='pin'||tool==='rod'||tool==='weld'){
+    // FIRST pick — snapped anchor on body A; pending.wp is the pivot world point
+    if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
+      pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
+    const Aid=pending.id, Aoff=pending.off, Abody=bodies[bodyIndex(Aid)];
+    let Bbody, Boff;
+    if(tool==='rod'){
+      // a rod spans a distance: the second click is its own (snapped) endpoint
+      const t=anchorTarget(wx,wy); if(!t) return;
+      Bbody=t.body; Boff=offOf(Bbody,t.wp);
+    } else {
+      // pin / weld share one pivot: the second click only *names* body B — click
+      // any part of it, including where A covers it — and B is anchored at the pivot
+      const bi=pickBodyExcept(wx,wy,Aid);
+      Bbody = bi>=0 ? bodies[bi] : (()=>{ const s=snapAnchor(wx,wy); return (s&&s.body.id!==Aid)?s.body:null; })();
+      if(!Bbody) return;                     // nothing indicated — keep the pivot and wait
+      Boff = offOf(Bbody, pending.wp);        // place B's anchor at the first pivot
+    }
+    if(Bbody.id===Aid){ return; }
+    if(tool==='pin'){
+      constraints.push({type:'pin', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff}, sel:false});
+    } else if(tool==='weld'){
+      constraints.push({type:'weld', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff},
+                        restAng: Abody.th-Bbody.th, sel:false});
+    } else if(tool==='rod'){
+      const [wax,way]=worldPt(Abody,Aoff); const [wbx,wby]=worldPt(Bbody,Boff);
+      constraints.push({type:'rod', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff},
+                        len:Math.hypot(wax-wbx,way-wby), sel:false});
+    }
+    pending=null; saveState();
+    return;
+  }
+  if(tool==='slot'){
+    // FIRST click = slider point on A (the pin that rides the rail)
+    if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
+      pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
+    // SECOND click = rail direction (from slider toward the click) + host body/world
+    const dx=wx-pending.wp[0], dy=wy-pending.wp[1]; const L=Math.hypot(dx,dy);
+    if(L<0.15) return;                                  // need a clear direction
+    const axis=[dx/L,dy/L];
+    const bi=pickBodyExcept(wx,wy,pending.id);
+    const Bbody = bi>=0 ? bodies[bi] : null;             // null → rail fixed in the world
+    const Abody=bodies[bodyIndex(pending.id)];
+    const line = Bbody
+      ? { id:Bbody.id, off:offOf(Bbody,pending.wp), dir:R(-Bbody.th,axis[0],axis[1]) }
+      : { id:null, off:[pending.wp[0],pending.wp[1]], dir:axis };
+    constraints.push({type:'slot', a:{id:pending.id,off:pending.off}, line, lockRot:false,
+                      restAng: Bbody? Abody.th-Bbody.th : Abody.th, sel:false});
+    pending=null; saveState();
+    return;
+  }
+});
+
+// ---- §13.6 · pointermove (drag / pan / pinch / handle articulation) ----
+cv.addEventListener('pointermove',e=>{
+  const rect=cv.getBoundingClientRect();
+  const px=e.clientX-rect.left, py=e.clientY-rect.top;
+  if(pointers.has(e.pointerId)) pointers.set(e.pointerId,{x:px,y:py});
+  mouseScreen=[px,py]; mouseWorld=s2w(px,py);
+
+  if(pinch && pointers.size>=2){                          // two-finger pan + zoom, anchored at the pinch midpoint
+    const pts=[...pointers.values()];
+    const mx=(pts[0].x+pts[1].x)/2, my=(pts[0].y+pts[1].y)/2;
+    const dist=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y)||1;
+    cam.scale=Math.max(12,Math.min(300, pinch.scale*(dist/pinch.dist)));
+    cam.x=pinch.midWorld[0]-(mx-W()/2)/cam.scale;
+    cam.y=pinch.midWorld[1]+(my-H()/2)/cam.scale;
+    return;
+  }
+  if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
+  if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
+
+  if(anchorDrag){ applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
+  if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
+  if(bodyPreview){ bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); return; }
+  if(drag && !sim.running){
+    const G=bodies[drag.bi];
+    if(G.static){
+      // move the root kinematically; the island follows it
+      const [gx,gy]=worldPt(G,drag.off); G.x+=mouseWorld[0]-gx; G.y+=mouseWorld[1]-gy;
+      projectPositions(8);
+    } else {
+      // pull the grabbed point toward the cursor; the island articulates to comply
+      const temp={type:'ground', a:{id:G.id, off:drag.off}, world:[mouseWorld[0],mouseWorld[1]]};
+      projectPositions(8,[temp]);
+    }
+    saveState();
+  }
+});
+
+// ---- §13.7 · pointerup / cancel / wheel ----
+function endPointer(e){
+  pointers.delete(e.pointerId);
+  if(pinch && pointers.size<2){ pinch=null; pinchCooldown = pointers.size>0; }
+  if(pointers.size===0) pinchCooldown=false;
+  if(pinchCooldown){ cancelSingle(); return; }
+
+  if(anchorDrag){ anchorDrag=null; lastSnap=null; downScreen=null; return; }
+  if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
+  else if(bodyPreview){ const r=bodyPreview.r<0.12?0.4:bodyPreview.r;
+    const b=makeBody(bodyPreview.cx,bodyPreview.cy,r,false); bodies.push(b); bodyPreview=null;
+    selectBody(bodies.length-1); saveState(); }
+  drag=null; grab=null; downScreen=null;
+}
+cv.addEventListener('pointerup',endPointer);
+cv.addEventListener('pointercancel',endPointer);
+cv.addEventListener('wheel',e=>{ e.preventDefault();
+  const rect=cv.getBoundingClientRect(); const mx=e.clientX-rect.left,my=e.clientY-rect.top;
+  const before=s2w(mx,my); cam.scale*=Math.exp(-e.deltaY*0.0012);
+  cam.scale=Math.max(12,Math.min(300,cam.scale)); const after=s2w(mx,my);
+  cam.x+=before[0]-after[0]; cam.y+=before[1]-after[1];
+},{passive:false});
+
+// ============================================================================
+//  §14 · SELECTION & INSPECTOR
+//  What is selected, and the right-hand panel that reflects and edits it.
+//    §14.1  selection state (clearSelection, select*, pickGas, pickCable)
+//    §14.2  renderInspector    (build the panel DOM per selection type)
+//    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
+// ============================================================================
+// ---- §14.1 · selection state ----
+let selBody=null, selConstraint=null, selGas=null, selCable=null;
+function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); gases.forEach(g=>g.sel=false); cables.forEach(c=>c.sel=false);
+  selBody=null; selConstraint=null; selGas=null; selCable=null; renderInspector(); }
+function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
+function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
+function selectGas(i){ clearSelection(); gases[i].sel=true; selGas=gases[i]; renderInspector(); }
+function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
+function pickGas(wx,wy){ const tol=12/cam.scale;
+  for(let i=gases.length-1;i>=0;i--){ const f=gasFrame(gases[i]);
+    if(distSeg(wx,wy,f.hx,f.hy,f.pax,f.pay)<=tol) return i; }
+  return -1; }
+function pickCable(wx,wy){ const tol=10/cam.scale;
+  for(let i=cables.length-1;i>=0;i--){ const f=cableFrame(cables[i]); if(!f)continue;
+    if(distSeg(wx,wy,f.T[0],f.T[1],f.Qx,f.Qy)<=tol) return i; }
+  return -1; }
+
+// ---- §14.2 · renderInspector (panel DOM per selection type) ----
+// One branch per selection: body, constraint, gas, cable, or the empty bench.
+function renderInspector(){
+  const p=document.getElementById('panelBody');
+  if(selBody){
+    const b=selBody;
+    p.innerHTML=`
+      <h3>Body ${b.id}</h3><p class="sub">rigid disk</p>
+      <div class="card"><div class="cardhead">properties</div>
+        <div class="field"><span class="lab">mass</span><span class="val" id="f_mass">${b.mass.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">radius</span><span class="val">${b.r.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">inertia</span><span class="val">${b.I.toFixed(3)}</span></div>
+        <label class="chk"><input type="checkbox" id="f_static" ${b.static?'checked':''}> anchored (static)</label>
+      </div>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field"><span class="lab">x , y</span><span class="val" id="f_pos"></span></div>
+        <div class="field"><span class="lab">θ</span><span class="val" id="f_th"></span></div>
+        <div class="field"><span class="lab">speed</span><span class="val" id="f_spd"></span></div>
+      </div>
+      <button class="del" id="f_del">Delete body</button>`;
+    document.getElementById('f_static').onchange=ev=>{ b.static=ev.target.checked; if(b.static){b.vx=b.vy=b.w=0;} refreshMass(b); renderInspector(); saveState(); };
+    document.getElementById('f_del').onclick=()=>{ const id=b.id;
+      constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
+  } else if(selConstraint){
+    const c=selConstraint;
+    const title = c.type==='slot' ? (c.lockRot?'Prismatic slider':'Slot · rail')
+                : ({pin:'Pin · hinge',rod:'Rigid rod',weld:'Weld',ground:'Ground pin',
+                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
+    const showTorque = c.type==='weld' || (c.type==='slot'&&c.lockRot);
+    const isBelt=c.type==='belt', isCvt=c.type==='cvt';
+    const forceLabel = isBelt?'tension':'|force|';
+    let extra='';
+    if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
+        <div class="field"><span class="lab">ratio</span><span class="val">${(c.rB/c.rA).toFixed(2)}</span></div>`;
+    if(isCvt) extra=`<div class="field"><span class="lab">ratio (d−rA) ⁄ rA</span><span class="val" id="f_ratio">—</span></div>`;
+    const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
+               : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
+               : 'Reaction is the Lagrange multiplier λ ⁄ h — the force this joint carries. Run the sim to read it.';
+    p.innerHTML=`
+      <h3>${title}</h3><p class="sub">${c.type} constraint</p>
+      <div class="card"><div class="cardhead">reaction</div>
+        <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">—</span></div>
+        ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">—</span></div>':''}
+        ${c.type==='rod'?`<div class="field"><span class="lab">length</span><span class="val">${c.len.toFixed(3)}</span></div>`:''}
+        ${c.type==='slot'?`<label class="chk"><input type="checkbox" id="f_lock" ${c.lockRot?'checked':''}> lock rotation (prismatic)</label>`:''}
+        ${extra}
+        <p class="muted" style="margin:8px 0 0">${note}</p>
+      </div>
+      <button class="del" id="f_del">Delete constraint</button>`;
+    if(c.type==='slot'){ document.getElementById('f_lock').onchange=ev=>{ c.lockRot=ev.target.checked;
+      if(c.lockRot){ const A=bodies[bodyIndex(c.a.id)], B=c.line.id!=null?bodies[bodyIndex(c.line.id)]:null;
+        c.restAng = B? A.th-B.th : A.th; } renderInspector(); saveState(); }; }
+    if(isBelt){ document.getElementById('f_cross').onchange=ev=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
+      c.sense=ev.target.checked?-1:1; c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; renderInspector(); saveState(); }; }
+    document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
+  } else if(selGas){
+    const g=selGas;
+    p.innerHTML=`
+      <h3>Gas piston</h3><p class="sub">force element · P = nRT ⁄ V</p>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field"><span class="lab">pressure P</span><span class="val" id="g_P">—</span></div>
+        <div class="field"><span class="lab">volume V</span><span class="val" id="g_V">—</span></div>
+        <div class="field"><span class="lab">temp T</span><span class="val" id="g_T">—</span></div>
+        <div class="field"><span class="lab">heat Q̇</span><span class="val" id="g_Q">—</span></div>
+      </div>
+      <div class="card"><div class="cardhead">gas</div>
+        <div class="field"><span class="lab">amount n</span><span class="val" id="g_nL">${g.n.toFixed(1)}</span></div>
+        <input type="range" id="g_n" min="0.5" max="10" step="0.1" value="${g.n}" style="width:100%">
+        <div class="field"><span class="lab">γ (index)</span><span class="val" id="g_gL">${g.gamma.toFixed(2)}</span></div>
+        <input type="range" id="g_g" min="1.05" max="1.7" step="0.01" value="${g.gamma}" style="width:100%">
+        <div class="field"><span class="lab">bore A</span><span class="val" id="g_bL">${g.bore.toFixed(2)}</span></div>
+        <input type="range" id="g_b" min="0.3" max="3" step="0.05" value="${g.bore}" style="width:100%">
+      </div>
+      <div class="card"><div class="cardhead">reservoir</div>
+        <label class="chk"><input type="checkbox" id="g_conn" ${g.connected?'checked':''}> connected</label>
+        <div class="field"><span class="lab">T_res</span><span class="val" id="g_TrL">${g.Tres.toFixed(2)}</span></div>
+        <input type="range" id="g_Tr" min="0.2" max="3" step="0.05" value="${g.Tres}" style="width:100%">
+        <div class="field"><span class="lab">conductance κ</span><span class="val" id="g_kL">${g.kappa.toFixed(1)}</span></div>
+        <input type="range" id="g_k" min="0" max="30" step="0.5" value="${g.kappa}" style="width:100%">
+        <p class="muted" style="margin:8px 0 0">κ = 0 is adiabatic (a gas spring). Connect a warm/cold reservoir to move heat across the boundary at finite rate.</p>
+      </div>
+      <button class="del" id="g_del">Delete gas</button>`;
+    const bind=(id,lab,key,fix)=>{ const el=document.getElementById(id);
+      el.oninput=ev=>{ g[key]=parseFloat(ev.target.value); document.getElementById(lab).textContent=g[key].toFixed(fix); saveState(); }; };
+    bind('g_n','g_nL','n',1); bind('g_g','g_gL','gamma',2); bind('g_b','g_bL','bore',2);
+    bind('g_Tr','g_TrL','Tres',2); bind('g_k','g_kL','kappa',1);
+    document.getElementById('g_conn').onchange=ev=>{ g.connected=ev.target.checked; saveState(); };
+    document.getElementById('g_del').onclick=()=>{ gases=gases.filter(x=>x!==g); clearSelection(); saveState(); };
+  } else if(selCable){
+    const cb=selCable;
+    p.innerHTML=`
+      <h3>Cable</h3><p class="sub">tetherball · tension only</p>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field force"><span class="lab">tension</span><span class="val" id="cb_T">—</span></div>
+        <div class="field"><span class="lab">total length</span><span class="val">${cb.Ltot.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">—</span></div>
+        <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">—</span></div>
+        <p class="muted" style="margin:8px 0 0">Fixed total length wraps the post. Orbiting in the winding direction spools it in; the ball is free (slack) until it reaches the paid-out length.</p>
+      </div>
+      <button class="tbtn" id="cb_flip" style="width:100%;margin-bottom:8px">Flip winding side</button>
+      <button class="del" id="cb_del">Delete cable</button>`;
+    document.getElementById('cb_flip').onclick=()=>{ cb.side*=-1; const f=cableFrame(cb); if(f){ cb.Ltot=f.Lfree; cb.wrap=0; cb._psiRaw=undefined; } renderInspector(); saveState(); };
+    document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
+  } else {
+    p.innerHTML=`
+      <h3>Bench</h3><p class="sub">nothing selected</p>
+      <p class="muted">Select a body or constraint to inspect it. Every joint reports the reaction force it carries once the sim is running.</p>
+      <div class="card"><div class="cardhead">examples</div>
+        <div class="examples">
+          <button data-ex="pendulum">Rigid pendulum</button>
+          <button data-ex="double">Double pendulum</button>
+          <button data-ex="fourbar">Four-bar linkage</button>
+          <button data-ex="crank">Slider-crank + piston</button>
+          <button data-ex="gasspring">Gas spring</button>
+          <button data-ex="skate">Skate (knife-edge)</button>
+          <button data-ex="integrator">Wheel integrator (CVT)</button>
+          <button data-ex="cable">Cable ratchet</button>
+          <button data-ex="clear">Clear bench</button>
+        </div>
+      </div>
+      <div class="card"><div class="cardhead">controls</div>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1–9, b/k/v/c tools</p>
+      </div>`;
+    p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
+  }
+}
+// ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----
+function updateInspectorLive(){
+  if(selBody){ const b=selBody;
+    const pos=document.getElementById('f_pos'); if(pos){ pos.textContent=`${b.x.toFixed(2)}, ${b.y.toFixed(2)}`;
+      document.getElementById('f_th').textContent=b.th.toFixed(2);
+      document.getElementById('f_spd').textContent=Math.hypot(b.vx,b.vy).toFixed(2); } }
+  if(selConstraint){ const c=selConstraint; const r=reactionOf(c); const el=document.getElementById('f_rf');
+    if(el){ if(c.type==='belt') el.textContent=(r?Math.abs(r.val):0).toFixed(2);
+      else if(r&&r.fx!==undefined){ el.textContent=Math.hypot(r.fx,r.fy).toFixed(2);
+        const t=document.getElementById('f_rt'); if(t&&r.tau!==undefined) t.textContent=r.tau.toFixed(2); } }
+    if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
+      const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
+      if(er) er.textContent=((d-A.r)/A.r).toFixed(2); } }
+  if(selGas){ const g=selGas; const f=gasFrame(g); const P=g._P||g.n*g.T/(g.bore*f.xc);
+    const eP=document.getElementById('g_P'); if(eP){ eP.textContent=P.toFixed(3);
+      document.getElementById('g_V').textContent=(g.bore*f.xc).toFixed(3);
+      document.getElementById('g_T').textContent=g.T.toFixed(3);
+      document.getElementById('g_Q').textContent=(g._Q||0).toFixed(3); } }
+  if(selCable){ const cb=selCable; const f=cableFrame(cb);
+    const eT=document.getElementById('cb_T');
+    if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.abs(cb._lam[0])/sim.h:0).toFixed(2);
+      document.getElementById('cb_L').textContent=(cb._Lallow!=null?cb._Lallow:(f?f.Lfree:0)).toFixed(3);
+      document.getElementById('cb_W').textContent=((cb.wrap||0)/(2*Math.PI)).toFixed(2); } }
+}
+
+// ============================================================================
+//  §15 · EXAMPLES
+//  Prebuilt machines wired from the panel buttons (§03.4 / §14.2). Each clears
+//  the bench and assembles bodies + constraints from library primitives only.
+//  loadExample(kind) dispatches on the data-ex key; search e.g.  kind==='crank'.
+// ============================================================================
+function loadExample(kind){
+  bodies=[];constraints=[];gases=[];cables=[];uid=1;clearSelection();eHist.length=0;
+  sim.gravity=true; const gc=document.getElementById('tgGrav'); if(gc) gc.checked=true;
+  const st=(x,y,r=0.16)=>{ const b=makeBody(x,y,r,true); bodies.push(b); return b; };
+  const dy=(x,y,r=0.38)=>{ const b=makeBody(x,y,r,false); bodies.push(b); return b; };
+  const rod=(A,B)=>{ const [ax,ay]=[A.x,A.y],[bx,by]=[B.x,B.y];
+    constraints.push({type:'rod',a:{id:A.id,off:[0,0]},b:{id:B.id,off:[0,0]},len:Math.hypot(ax-bx,ay-by),sel:false}); };
+  if(kind==='pendulum'){ const s=st(0,4.4); const b=dy(2.6,4.4); rod(s,b); }
+  else if(kind==='double'){ const s=st(0,4.6); const b1=dy(1.8,4.6,0.32); const b2=dy(3.6,4.6,0.32); rod(s,b1); rod(b1,b2); }
+  else if(kind==='fourbar'){ const pL=st(-1.6,1.2), pR=st(1.6,1.2);
+    const a=dy(-1.2,2.8,0.3), b=dy(1.3,2.9,0.3); rod(pL,a); rod(a,b); rod(pR,b); }
+  else if(kind==='crank'){ const S=st(-1.6,2.4); const pin=dy(-1.0,2.4,0.24); const P=dy(1.7,2.4,0.34);
+    rod(S,pin); rod(pin,P);
+    constraints.push({type:'slot', a:{id:P.id,off:[0,0]}, line:{id:null, off:[P.x,P.y], dir:[1,0]},
+                      lockRot:false, restAng:P.th, sel:false}); }
+  else if(kind==='gasspring'){ const P=dy(0,2.8,0.4);
+    constraints.push({type:'slot', a:{id:P.id,off:[0,0]}, line:{id:null, off:[P.x,P.y], dir:[0,1]},
+                      lockRot:true, restAng:P.th, sel:false});
+    gases.push({kind:'gas', a:{id:P.id,off:[0,0]}, head:{id:null, off:[0,0.5], dir:[0,1]},
+                bore:1.0, n:5, gamma:1.4, T:1.0, Tinit:1.0, kappa:0, Tres:1.0, connected:false, sel:false}); }
+  else if(kind==='skate'){ sim.gravity=false; if(gc) gc.checked=false;
+    const b=dy(0,2.6,0.45);
+    constraints.push({type:'knife', a:{id:b.id, off:[0.42,0]}, dir:[1,0], sel:false}); }
+  else if(kind==='integrator'){ sim.gravity=false; if(gc) gc.checked=false;
+    const A=dy(0,2.6,0.95);
+    constraints.push({type:'ground', a:{id:A.id, off:[0,0]}, world:[A.x,A.y], sel:false});
+    const B=dy(1.17,2.6,0.22);
+    constraints.push({type:'slot', a:{id:B.id,off:[0,0]}, line:{id:null, off:[A.x,A.y], dir:[1,0]}, lockRot:false, restAng:0, sel:false});
+    constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }
+  else if(kind==='cable'){ const S=st(0,4.6,0.4); const m=dy(0.9,4.4,0.32);
+    cables.push({type:'cable', tether:{id:m.id, off:[0,0]}, spool:{id:S.id}, side:1, Ltot:2.6, wrap:0, sel:false}); }
+  saveState();
+  cam.x=0;cam.y=2.6;cam.scale=64;
+}
+
+// ============================================================================
+//  §16 · TRANSPORT & BOOT
+//  Run control, the reset snapshot, DOM control wiring, keyboard shortcuts, and
+//  the startup sequence that kicks off the §10 loop.
+//    §16.1  snapshots        (saveState / restoreState — the reset baseline)
+//    §16.2  transport        (play / step / reset + setRunning)
+//    §16.3  toggles          (forces / grid / gravity / gravity value)
+//    §16.4  keyboard shortcuts
+//    §16.5  boot             (initial tool, ledger wiring, first frame)
+// ============================================================================
+// ---- §16.1 · snapshots (reset baseline) ----
+let saved=null;
+function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})), gT:gases.map(g=>g.T), cW:cables.map(c=>c.wrap) }; }
+function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
+  if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=0;b.vy=0;b.w=0; } }
+  gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i]; });
+  cables.forEach((c,i)=>{ if(saved.cW[i]!=null) c.wrap=saved.cW[i]; c._psiRaw=undefined; }); }
+
+// ---- §16.2 · transport (play / step / reset) ----
+const btnPlay=document.getElementById('btnPlay');
+function setRunning(r){ sim.running=r; btnPlay.textContent=r?'Pause':'Play'; btnPlay.classList.toggle('on',r);
+  if(r){ saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; } }
+btnPlay.onclick=()=>setRunning(!sim.running);
+document.getElementById('btnStep').onclick=()=>{ if(sim.running)return; if(!saved)saveState(); projectPositions(20); substep(sim.h); };
+document.getElementById('btnReset').onclick=()=>{ setRunning(false); restoreState(); eHist.length=0; };
+
+// ---- §16.3 · toggles (forces / grid / gravity) ----
+document.getElementById('tgForces').onchange=e=>sim.showForces=e.target.checked;
+document.getElementById('tgGrid').onchange=e=>sim.showGrid=e.target.checked;
+document.getElementById('tgGrav').onchange=e=>sim.gravity=e.target.checked;
+const gv=document.getElementById('gravVal');
+gv.oninput=e=>{ sim.g=parseFloat(e.target.value); document.getElementById('gravRead').textContent=sim.g.toFixed(1); };
+
+// ---- §16.4 · keyboard shortcuts ----
+window.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
+  if(e.code==='Space'){ e.preventDefault(); setRunning(!sim.running); }
+  else if(e.key==='r'||e.key==='R'){ setRunning(false); restoreState(); eHist.length=0; }
+  else if(e.key==='s'||e.key==='S'){ if(!sim.running){ if(!saved)saveState(); substep(sim.h);} }
+  else if(e.key==='Escape'){ pending=null; setTool('select'); }
+  else if(e.key==='Delete'||e.key==='Backspace'){ if(selBody){const id=selBody.id;
+      constraints=constraints.filter(c=>c.a.id!==id&&!(c.b&&c.b.id===id)); bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}
+      else if(selConstraint){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); } }
+  else { const t=TOOLS.find(t=>t.key===e.key); if(t) setTool(t.id); }
+});
+
+// ---- §16.5 · boot (initial tool, ledger wiring, first frame) ----
+setTool('select'); renderInspector();
+const ledgerEl=document.getElementById('ledger');
+document.getElementById('ledgerHead').addEventListener('click',()=>ledgerEl.classList.toggle('collapsed'));
+if(window.innerWidth<=820) ledgerEl.classList.add('collapsed');
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
