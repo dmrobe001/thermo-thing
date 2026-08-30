@@ -44,7 +44,7 @@ function gasFrame(g){
 // Returns null when the tether sits inside the spool.
 // The Jacobian correctly couples spool rotation to cable length (torque term
 // −rs·side on the spool ω column, derived from d(Lfree+rs·wb)/dt).
-function cableFrame(cb){
+function cableFrame(cb,qangRef){
   const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return null;
   const rs=S.r;
   let T, tb=null, trx=0, tryy=0, ti=-1;
@@ -54,7 +54,14 @@ function cableFrame(cb){
   const Dx=T[0]-S.x, Dy=T[1]-S.y; const d=Math.hypot(Dx,Dy);
   if(d<=rs*1.0001) return null;
   const phi=Math.atan2(Dy,Dx); const beta=Math.acos(Math.max(-1,Math.min(1,rs/d)));
-  const qang=phi + cb.side*beta;
+  const qangRaw=phi + cb.side*beta;
+  let qang=qangRaw;
+  if(qangRef!=null){
+    let dAngle=qangRaw-qangRef;
+    while(dAngle>Math.PI) dAngle-=Math.PI*2;
+    while(dAngle<-Math.PI) dAngle+=Math.PI*2;
+    qang=qangRef+dAngle;
+  }
   const Lfree=Math.sqrt(Math.max(0,d*d-rs*rs));
   const d2=d*d;
   // Control point: localAngle is the angle in the spool's own frame; it stays
