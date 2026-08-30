@@ -1,24 +1,6 @@
-# 2D Mechanical Sandbox — Design Specification
+# Development Reference
 
-## 1. Purpose
-
-The sandbox is a 2D, top-down environment in which a player builds arbitrary machinery by placing rigid bodies and coupling them with constraints drawn from a fixed library. Its distinguishing goal is **legible energy flow**: the system exists to make the honest dynamics of mechanisms — and especially of thermodynamic machines — visible and instrumentable, rather than to render impressive-looking motion. The motivating target is a physically accurate finite-time heat engine that draws from reservoirs with real heat capacity and conductance, does work against a real load, and can be tuned toward its maximum-power operating point. Everything in this specification is chosen so that a machine of that kind can be assembled from primitives and simulated with complete physical honesty, subject to a small, clearly stated set of idealizing assumptions.
-
-The central architectural commitment is that a constraint is a first-class, composable object the player manipulates directly, and that the simulator solves the resulting system *exactly* (to linear-solve and integration tolerance) rather than approximating constraints with stiff penalty forces. A second commitment follows from the first: because the same solver that enforces constraints also produces the reaction forces carried by them, the constraint library doubles as an instrumentation layer.
-
-## 2. World model and assumptions
-
-The world is planar. Every rigid body carries three configuration coordinates `(x, y, θ)` and their time derivatives `(ẋ, ẏ, θ̇)`. There is no third spatial dimension and no out-of-plane motion.
-
-The following idealizations are load-bearing and should be treated as invariants of the design, not defaults to be relaxed later:
-
-**Nothing interacts unless the player says it does.** Bodies do not collide, overlap-resolve, or exert forces on one another except through constraints and force elements the player explicitly creates. This removes the broad-phase/narrow-phase collision burden from the common case and makes the default world sparse and cheap.
-
-**Friction is either absent or perfectly static.** There is no kinetic friction model. Where "friction" is wanted, it appears as a *constraint* (a static no-slip condition) rather than as a dissipative force law. This keeps the engine's force vocabulary small and keeps energy accounting clean.
-
-**Gases are in instantaneous internal equilibrium.** A gas element always satisfies its equation of state for its current volume; it has no internal transient, no spatial structure, and no messiness when its container moves or rotates. Only the boundary heat exchange is finite-rate.
-
-These assumptions are what make the project tractable at full honesty. The remainder of the specification assumes them throughout.
+Technical design of the physics engine, constraint library, thermodynamic elements, instrumentation, and editing model. For implementation status and pending work see `ROADMAP.md`; for codebase navigation see `AGENT.md`.
 
 ## 3. Physics engine
 
@@ -39,7 +21,7 @@ Here `a` is the vector of body accelerations, `λ` is the vector of Lagrange mul
 
 Because constraints are enforced through multipliers, they are satisfied at the acceleration level to the precision of the linear solve — this is the *exact* enforcement the design requires, not a penalty approximation.
 
-> **Status (as built):** Implemented in equivalent velocity-impulse form. Code §08.1 integrates the applied forces to candidate velocities; code §08.3 then solves the Schur complement (code §07) for the multipliers `λ` and applies `M⁻¹Jᵀλ` as a single velocity projection. This is the discrete counterpart of the acceleration-level system above: the explicit `J̇·v` term is absorbed into that projection rather than assembled, and `βφ` is the Baumgarte term `sim.beta/h · C`. (Code sections are the `§NN` markers in `sandbox.html`; see this document's §11.)
+> **Status (as built):** Implemented in equivalent velocity-impulse form. Code §08.1 integrates the applied forces to candidate velocities; code §08.3 then solves the Schur complement (code §07) for the multipliers `λ` and applies `M⁻¹Jᵀλ` as a single velocity projection. This is the discrete counterpart of the acceleration-level system above: the explicit `J̇·v` term is absorbed into that projection rather than assembled, and `βφ` is the Baumgarte term `sim.beta/h · C`.
 
 ### 3.3 The constraint class boundary
 
@@ -112,7 +94,7 @@ These three are the same primitive — "tangential velocities match at a paramet
 
 Contacts, ratchets/clutches (one-way angular coupling), slack-capable cables (tension only), and hard stops (end-of-travel on slots and rotations). Each is a one-sided version of a bilateral row, active only while its complementarity condition holds.
 
-> **Status (as built):** Only the slack-capable cable exists, and as a specific *tetherball* element (a straight tangent to a spool plus a wound remainder of fixed total length, with reversible winding). It is handled by an active-set toggle — code §08.2 decides each step whether the cable is taut, and only then adds its row to the bilateral equality solve — rather than by a general LCP step. Contacts between bodies, ratchets/clutches, and hard end-stops are not implemented. This matches the spec's staging: the reference machine (§9) needs unilateral support only for end-stops and can be built without it initially, and the separate LCP path remains future work.
+> **Status (as built):** Only the slack-capable cable exists, and as a specific *tetherball* element (a straight tangent to a spool plus a wound remainder of fixed total length, with reversible winding). It is handled by an active-set toggle — code §08.2 decides each step whether the cable is taut, and only then adds its row to the bilateral equality solve — rather than by a general LCP step. Contacts between bodies, ratchets/clutches, and hard end-stops are not implemented. This matches the spec's staging: the reference machine needs unilateral support only for end-stops and can be built without it initially, and the separate LCP path remains future work.
 
 ### 4.4 Driven and modulated relations
 
@@ -124,13 +106,13 @@ Any bilateral row may carry a nonzero right-hand side `b`. If `b` is a constant 
 
 The one genuinely new first-class object beyond physical constraints is the **signal wire**: it reads a scalar measurement off the mechanism (a flyball radius, a gas pressure, a shaft angle, a body speed) and feeds it into a constraint's parameter (a CVT ratio, a motor setpoint, an actuator target). Signal wires are first-class but must be presented as *visibly distinct* from physical constraints — a wire, not a joint — because they carry information, not force, and because conflating the two would obscure the energy accounting the sandbox exists to expose. The flyball governor, for instance, requires no new constraint type: it is pins, rods, and springs, with its centrifugal behavior emerging from ordinary rigid-body dynamics. Only its *coupling* to the load — the measurement it drives — is a signal wire.
 
-> **Status (as built):** Not yet implemented. There is no signal-wire object and no modulated parameter anywhere in the code; this layer depends on the driven/modulated RHS path (§4.4), which is also pending. The flyball governor's *mechanism* can be built today from pins, rods, and springs, but the wire that couples its measurement to a load cannot, so the load-controlled cycle of §9.2 is currently unreachable.
+> **Status (as built):** Not yet implemented. There is no signal-wire object and no modulated parameter anywhere in the code; this layer depends on the driven/modulated RHS path (§4.4), which is also pending. The flyball governor's *mechanism* can be built today from pins, rods, and springs, but the wire that couples its measurement to a load cannot, so the load-controlled cycle is currently unreachable.
 
 ## 6. Thermodynamic and force elements
 
 ### 6.1 Gas piston
 
-A gas element maintains its equation of state `P = nRT/V` at all times (instantaneous equilibrium, §2). Its volume `V` is a geometric function of the mechanism's state (piston displacement × area). Each step it computes its pressure from current volume and temperature and applies the resulting force `P·A` to the piston follower, contributing to `f` before the constraint solve. It is otherwise an ordinary force element.
+A gas element maintains its equation of state `P = nRT/V` at all times (instantaneous equilibrium). Its volume `V` is a geometric function of the mechanism's state (piston displacement × area). Each step it computes its pressure from current volume and temperature and applies the resulting force `P·A` to the piston follower, contributing to `f` before the constraint solve. It is otherwise an ordinary force element.
 
 ### 6.2 Reservoir and heat exchange
 
@@ -148,7 +130,7 @@ n c_v Ṫ = κ (T_res − T_gas) − P·V̇
 
 Reservoir connection is switchable (which reservoir, if any, the gas is currently coupled to). When no reservoir is connected the gas is isolated and traverses an adiabat automatically by energy conservation — **adiabatic branches are not built, they emerge.**
 
-> **Status (as built):** Simplified. In code §08.5, `T_res` is a fixed setpoint (a slider) with conductance `κ` — i.e. an *infinite*-capacity reservoir that neither drifts nor depletes — and a single reservoir attaches per gas via a `connected` toggle rather than being switchable among several. The finite-capacity, depleting reservoir and multi-reservoir switching described above are pending (and note that §9.2's "optimal setpoint drifts as reservoirs deplete" depends on them). The `κ = 0` adiabatic limit, by contrast, *is* implemented and emerges correctly — that is exactly the gas-spring example.
+> **Status (as built):** Simplified. In code §08.5, `T_res` is a fixed setpoint (a slider) with conductance `κ` — i.e. an *infinite*-capacity reservoir that neither drifts nor depletes — and a single reservoir attaches per gas via a `connected` toggle rather than being switchable among several. The finite-capacity, depleting reservoir and multi-reservoir switching described above are pending. The `κ = 0` adiabatic limit *is* implemented and emerges correctly — that is exactly the gas-spring example.
 
 ### 6.3 Emergent process branches
 
@@ -181,48 +163,3 @@ This turns the constraint library into a measurement layer and is most of what m
 **Signal wires are drawn as wires**, visibly separate from physical constraints, connecting a measurement source to a modulated parameter.
 
 > **Status (as built):** The current editor is tool-first rather than feature-first. You select a tool from the rail (code §13.1) and click bodies; anchors snap to body centres and edges (code §13.2). There is no persistent, named-feature object dropped onto bodies, and no relation-filter menu — the tool palette stands in for "select two features, pick a relation," and each tool constructs one constraint type directly (code §13.5). The three-way hard/driven/modulated visual distinction is moot until driven and modulated constraints exist (§4.4, §5); today every constraint is "hard." Signal wires, likewise, are not drawn because they do not yet exist.
-
-## 9. Reference machine and build order
-
-The validation target is a finite-time heat engine tunable toward its maximum-power (Curzon–Ahlborn) operating point: a gas piston exchanging heat with hot and cold reservoirs of finite capacity and conductance, doing work against a flywheel load, with a rate governor selecting the operating point. Build it in an order that is itself the pedagogical arc:
-
-1. **Constant-ω circular-crank engine.** Kinematically drive the piston through a fixed volume waveform; switch reservoir exposure by crank angle. This machine has a real maximum-power point but *cannot* reach the CA bound — a fixed sinusoidal `V(t)` cannot take the isothermal (hyperbolic) shape the optimum requires, so its efficiency at max power sits below `η_CA`. Displaying that shortfall next to the `η_CA` line is the lesson.
-2. **Load-controlled engine with governed isotherm.** Replace the rigid crank with a compliant, variable-ratio coupling (the CVT primitive) so the piston is force-balanced rather than position-driven, and regulate `V̇/V` with a governor acting through the CVT — realized cleanly by placing the governor on a shaft whose angle is `ln V`, generated by the wheel-on-disk integrator. The isotherm then appears as the stable attractor of the rate-regulated dynamics rather than as an imposed shape, and the operating point climbs toward the CA bound. With finite reservoirs, the optimal setpoint drifts as they deplete — a feature to watch, not a bug.
-
-Both machines are assembled entirely from library primitives: gas piston, slot/rack, CVT (variable-ratio nonholonomic contact), wheel-on-disk integrator (the same primitive wired for `ln V`), flyball governor (pins/rods/springs), flywheel, and a single signal wire carrying the governor's measurement to the CVT ratio.
-
-> **Status (as built):** Neither reference machine is assembled yet. Machine 1 is close in principle — its parts (crank, slot/rack, gas piston, reservoirs by `connected` toggle) all exist — but a kinematic constant-`ω` crank drive and reservoir switching by crank angle are not wired. Machine 2 is blocked on the signal layer (§5), the driven/modulated RHS (§4.4), and finite reservoirs (§6.2). What the example bench (code §15) does ship is the set of building blocks and validators: rigid and double pendulum, four-bar linkage, slider-crank + piston, gas spring, knife-edge skate, wheel-on-disk integrator (CVT), and a cable ratchet. Together these exercise every implemented primitive, but stop short of the full finite-time heat engine.
-
-## 10. Scope boundaries
-
-**In scope:** planar rigid bodies in maximal coordinates; exact bilateral constraints (holonomic and nonholonomic) in the velocity-linear class; a unilateral/LCP path for contacts, ratchets, slack cables, and stops; spring, gravity, and gas-pressure force elements; finite-capacity, finite-conductance reservoirs with switchable coupling; signal wires modulating constraint parameters; per-object force, energy, and power instrumentation; runtime composition and editing of all of the above.
-
-**Out of scope by design:** out-of-plane motion; default collision between unrelated bodies; kinetic friction and dissipative contact models; spatially resolved or non-equilibrium gas behavior; constraints nonlinear in velocity; player-authored coordinate expressions. Each exclusion is what keeps a corresponding part of the engine simple, and none of them blocks the reference machine.
-
-## 11. Navigating the implementation
-
-The implementation is a single self-contained file, `sandbox.html`: the document head, then all the CSS, then the entire simulator as one script. **Do not read it top to bottom.** It is organized for search, not for linear reading, and a linear pass will bury the structure that the section map surfaces in seconds.
-
-**Read the SOURCE MAP first.** The very top of `sandbox.html` is a comment block titled `MECHANISM BENCH — SOURCE MAP`. It states the marker convention and indexes all sixteen top-level sections. Every section header in the file carries a token — `§NN` for a top-level section, `§NN.M` for a sub-section — and every parent header repeats the local sub-index for its own children. To reach any part of the code:
-
-1. Open the SOURCE MAP and find the top-level section you need (for example, `§08 PHYSICS SUBSTEP`).
-2. Search the file for that token (`§08`). You land on the section header, which lists its sub-sections.
-3. Search the narrower token (`§08.5`) to jump straight to that one sub-section.
-
-You should almost never scan code you did not search your way to. Two properties make this reliable. Top-level numbers are **zero-padded** (`§04`, never `§4`), so a search for `§04` never also stops on `§14`. And because the code markers are padded, any *unpadded* section reference in the code — a comment reading `(see §3.4)` — points back into *this specification*, not into the file. The markers also cross-link: a routine's comment will name `§07` or `§09` to point at a related routine, so the map doubles as a lightweight citation graph.
-
-When you add or move code, give it a home in an existing section (and register it in that section's sub-index) or open a new section and add it to the SOURCE MAP. A stale map is worse than none; keeping it truthful is the price of working in this file.
-
-### 11.1 Implementation status at a glance
-
-The core is live and honest: maximal-coordinate rigid bodies; the velocity-linear bilateral constraints (pin, ground, rod, weld, slot/prismatic, belt, and the nonholonomic knife-edge and CVT); the Baumgarte-stabilized Schur-complement solve; position projection; the reaction-force readout that turns each multiplier into the force its joint carries; the gas piston with finite-rate boundary heat exchange; and a unilateral tetherball cable.
-
-The gaps are catalogued in **Status (as built)** notes throughout this document, and none is blocked by the architecture — each is additive:
-
-- **Islanding and the higher solver rungs** — one global solve today, no partition, no sparse/iterative path (§3.5, §3.6).
-- **Driven and modulated constraints** — every row currently drives its residual to zero; no motors, actuators, or driven ratios (§4.4).
-- **The signal-wire layer** — absent entirely, which also blocks the flyball-governed cycle (§5).
-- **Finite, switchable reservoirs** — the reservoir is an infinite-capacity fixed setpoint; it neither depletes nor switches among several (§6.2).
-- **Power/heat/work instrumentation** — forces are exposed; power crossing joints, gas work rate, and cumulative heat/work are not yet surfaced (§7).
-- **The feature-first editing model** — the editor is tool-first, with no persistent named features or relation menu (§8).
-- **The two reference machines** — neither is assembled; machine 2 waits on the signal layer and finite reservoirs (§9).
