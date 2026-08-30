@@ -57,14 +57,17 @@ function substep(h){
       cb._wbRef=cb.wrap||0;
     }
     let f=cableFrame(cb,cb._psiRaw,cb._wbRef); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
-    if(f.wb<-1e-4){
+    const phiRaw=Math.atan2(f.T[1]-f.S.y, f.T[0]-f.S.x);
+    let dPhi=phiRaw-f.qctrl;
+    while(dPhi>Math.PI) dPhi-=Math.PI*2;
+    while(dPhi<-Math.PI) dPhi+=Math.PI*2;
+    const phi=f.qctrl+dPhi;
+    if(cb.side*(f.qctrl-phi)<-1e-4){
       cb.side*=-1;
-      const fFlip=cableFrame(cb);
-      if(!fFlip){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
-      cb.localAngle=fFlip.qang-fFlip.S.th;
-      cb.wrap=0;
       cb._psiRaw=undefined;
       cb._wbRef=undefined;
+      const fFlip=cableFrame(cb);
+      if(!fFlip){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
       f=fFlip;
     }
     cb._psiRaw=f.qang;

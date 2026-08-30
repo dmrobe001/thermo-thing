@@ -125,7 +125,7 @@ function renderInspector(){
       </div>
       <button class="tbtn" id="cb_flip" style="width:100%;margin-bottom:8px">Flip winding side</button>
       <button class="del" id="cb_del">Delete cable</button>`;
-    document.getElementById('cb_flip').onclick=()=>{ cb.side*=-1; const S=bodies[bodyIndex(cb.spool.id)]; const f=cableFrame(cb); if(f&&S){ cb.Ltot=f.Lfree; cb.localAngle=f.qang-S.th; cb.wrap=0; } renderInspector(); saveState(); };
+    document.getElementById('cb_flip').onclick=()=>{ cb.side*=-1; const f=cableFrame(cb); if(f){ cb.Ltot=cableCurrentLength(cb,f); cb.wrap=Math.max(0,f.wb); } renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
   } else {
     p.innerHTML=`
