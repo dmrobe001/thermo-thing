@@ -34,10 +34,16 @@ function gasFrame(g){
 }
 
 // ---- §06.3 · cableFrame ----
-// cable geometry: straight tangent from tether T to the tangent point Q on the spool
-// (chosen winding side), free length √(d²−r_s²). Returns null when the tether sits
-// inside the spool. cols are the distance-constraint rows between T and Q — the source
-// of both the tension on the tether and the torque on the spool.
+// cable geometry: the spool stores a control-point angle in its local frame
+// (cb.localAngle).  The natural tangent from tether T to the spool gives angle
+// qang; the wound amount wb = (qang − qctrl)·side.
+//   wb ≥ 0  →  "tangent mode": cable runs T→Q (natural tangent point); the
+//              wound arc Q→Q_ctrl holds the rest of the total length.
+//   wb < 0  →  "direct mode": control point has swung past the tangent toward
+//              the tether; cable runs straight T→Q_ctrl.
+// Returns null when the tether sits inside the spool.
+// The Jacobian correctly couples spool rotation to cable length (torque term
+// −rs·side on the spool ω column, derived from d(Lfree+rs·wb)/dt).
 function cableFrame(cb){
   const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return null;
   const rs=S.r;
@@ -45,17 +51,45 @@ function cableFrame(cb){
   if(cb.tether.id!=null){ ti=bodyIndex(cb.tether.id); tb=bodies[ti];
     const [tx,ty,rx,ry]=worldPt(tb,cb.tether.off); T=[tx,ty]; trx=rx; tryy=ry; }
   else { T=[cb.tether.off[0],cb.tether.off[1]]; }
-  const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy);
+  const Dx=T[0]-S.x, Dy=T[1]-S.y; const d=Math.hypot(Dx,Dy);
   if(d<=rs*1.0001) return null;
-  const phi=Math.atan2(dvy,dvx); const beta=Math.acos(Math.max(-1,Math.min(1,rs/d)));
-  const qang=phi + cb.side*beta;                       // winding side selects the tangent
-  const Qx=S.x+rs*Math.cos(qang), Qy=S.y+rs*Math.sin(qang);
+  const phi=Math.atan2(Dy,Dx); const beta=Math.acos(Math.max(-1,Math.min(1,rs/d)));
+  const qang=phi + cb.side*beta;
   const Lfree=Math.sqrt(Math.max(0,d*d-rs*rs));
-  let ux=T[0]-Qx, uy=T[1]-Qy; const ul=Math.hypot(ux,uy)||1; ux/=ul; uy/=ul;
-  const cols=[]; const is=bodyIndex(cb.spool.id);
-  if(!S.static) cols.push([is, -ux, -uy, 0]);          // post: frictionless redirect, no torque
-  if(tb && !tb.static) cols.push([ti, ux, uy, -ux*tryy + uy*trx]);   // ball tether point
-  return { S, rs, T, Qx, Qy, Lfree, ux, uy, cols, qang };
+  const d2=d*d;
+  // Control point: localAngle is the angle in the spool's own frame; it stays
+  // fixed relative to the spool material and rotates with it.  When undefined
+  // (old saves), default to the current natural tangent position (wb = 0).
+  const localAngle=cb.localAngle!==undefined ? cb.localAngle : qang-S.th;
+  const qctrl=S.th+localAngle;
+  const rx_ctrl=rs*Math.cos(qctrl), ry_ctrl=rs*Math.sin(qctrl);
+  const Qctrl_x=S.x+rx_ctrl, Qctrl_y=S.y+ry_ctrl;
+  const wb=(qang-qctrl)*cb.side;          // signed wound angle (radians)
+  const is=bodyIndex(cb.spool.id);
+  let cols, Qx, Qy, ux, uy, mode;
+  if(wb>=0){
+    // Tangent mode — correct Jacobian for d(Lfree + rs·wb)/dt:
+    //   ∂/∂vS = −(Dx·Lfree − rs·side·Dy)/d², −(Dy·Lfree + rs·side·Dx)/d², −rs·side
+    //   ∂/∂vT =  (Dx·Lfree − rs·side·Dy)/d²,  (Dy·Lfree + rs·side·Dx)/d², moment arm
+    mode='tangent';
+    Qx=S.x+rs*Math.cos(qang); Qy=S.y+rs*Math.sin(qang);
+    ux=(T[0]-Qx)/(Lfree||1); uy=(T[1]-Qy)/(Lfree||1);
+    const Jx=(Dx*Lfree - rs*cb.side*Dy)/d2;
+    const Jy=(Dy*Lfree + rs*cb.side*Dx)/d2;
+    cols=[];
+    if(!S.static) cols.push([is, -Jx, -Jy, -rs*cb.side]);
+    if(tb&&!tb.static) cols.push([ti, Jx, Jy, Jx*(-tryy)+Jy*trx]);
+  } else {
+    // Direct mode — cable goes T→Q_ctrl (a material point on the spool rim)
+    mode='direct';
+    Qx=Qctrl_x; Qy=Qctrl_y;
+    const dcx=T[0]-Qctrl_x, dcy=T[1]-Qctrl_y; const dc=Math.hypot(dcx,dcy)||1e-9;
+    ux=dcx/dc; uy=dcy/dc;
+    cols=[];
+    if(!S.static) cols.push([is, -ux, -uy, ux*ry_ctrl-uy*rx_ctrl]);
+    if(tb&&!tb.static) cols.push([ti, ux, uy, -ux*tryy+uy*trx]);
+  }
+  return {S,rs,T,Qx,Qy,Lfree,ux,uy,cols,qang,qctrl,wb,Qctrl_x,Qctrl_y,rx_ctrl,ry_ctrl,mode,localAngle};
 }
 
 // ---- §06.4 · slotFrame ----

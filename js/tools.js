@@ -119,6 +119,22 @@ function conHandles(con){
     return [ {which:'anchor',x:px,y:py}, {which:'dir',x:px+hh[0]/hl*0.7, y:py+hh[1]/hl*0.7} ]; }
   return [];
 }
+// cable handle: the control point on the spool rim (draggable to wind/unwind)
+function cableHandlePos(cb){
+  const f=cableFrame(cb); if(!f) return null;
+  return {x:f.Qctrl_x, y:f.Qctrl_y};
+}
+function pickCableHandle(wx,wy){
+  const tol=11/cam.scale;
+  for(let i=cables.length-1;i>=0;i--){
+    const h=cableHandlePos(cables[i]); if(!h) continue;
+    if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {cb:cables[i],cbi:i,which:'ctrl'}; }
+  return null;
+}
+function applyCableHandle(ad,wx,wy){
+  const cb=ad.cb; const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return;
+  cb.localAngle=Math.atan2(wy-S.y, wx-S.x)-S.th;
+}
 function pickHandle(wx,wy){
   const tol=11/cam.scale;
   for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i];
@@ -203,7 +219,10 @@ cv.addEventListener('pointerdown',e=>{
   if(tool==='body'){ bodyPreview={cx:wx,cy:wy,r:0}; return; }
 
   if(tool==='select'){
-    if(!sim.running){ const h=pickHandle(wx,wy); if(h){ selectConstraint(h.ci); anchorDrag=h; applyHandle(h,wx,wy); return; } }
+    if(!sim.running){
+      // cable handle check first: allows winding control in edit mode
+      const ch=pickCableHandle(wx,wy); if(ch){ selectCable(ch.cbi); anchorDrag=ch; applyCableHandle(ch,wx,wy); return; }
+      const h=pickHandle(wx,wy); if(h){ selectConstraint(h.ci); anchorDrag=h; applyHandle(h,wx,wy); return; } }
     const bi=pickBody(wx,wy);
     if(bi>=0){ selectBody(bi);
       if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
@@ -285,7 +304,9 @@ cv.addEventListener('pointerdown',e=>{
     const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy); if(d<=S.r) return;
     const side = (dvx*(wy-S.y) - dvy*(wx-S.x)) >= 0 ? 1 : -1;   // click side of the T–centre line
     const Lfree=Math.sqrt(d*d-S.r*S.r);
-    cables.push({type:'cable', tether:{id:pending.tid, off:pending.toff}, spool:{id:S.id}, side, Ltot:Lfree, wrap:0, sel:false});
+    const cb0={type:'cable', tether:{id:pending.tid, off:pending.toff}, spool:{id:S.id}, side, Ltot:Lfree, wrap:0, sel:false};
+    const cf=cableFrame(cb0); cb0.localAngle = cf ? cf.qang-S.th : 0;
+    cables.push(cb0);
     pending=null; saveState();
     return;
   }
@@ -361,7 +382,7 @@ cv.addEventListener('pointermove',e=>{
   if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
   if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
 
-  if(anchorDrag){ applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
+  if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
   if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
   if(bodyPreview){ bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); return; }
   if(drag && !sim.running){

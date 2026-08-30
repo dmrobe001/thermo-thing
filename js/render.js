@@ -89,16 +89,31 @@ function drawCable(cb){
   const f=cableFrame(cb); if(!f)return;
   const taut = cb._lam && cb._lam.length && Math.abs(cb._lam[0])>1e-5;
   const col = cb.sel? '#5aa9f0' : (taut? '#e0c060' : '#8a94a6');
-  const [tx,ty]=w2s(f.T[0],f.T[1]), [qx,qy]=w2s(f.Qx,f.Qy);
+  const [tx,ty]=w2s(f.T[0],f.T[1]);
   ctx.strokeStyle=col; ctx.lineWidth= taut?2.5:1.8;
-  ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(qx,qy);ctx.stroke();
-  // wrap arc around the spool, proportional to the wound angle
-  const sweep=Math.min(cb._wrap||0, Math.PI*6);
-  ctx.lineWidth=1.8;ctx.beginPath();
-  for(let i=0;i<=24;i++){ const a=f.qang - cb.side*(sweep*i/24);
-    const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a)); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
-  ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tx,ty);
+  if(f.mode==='tangent'){
+    // cable line T → natural tangent point Q
+    const [qx,qy]=w2s(f.Qx,f.Qy); ctx.lineTo(qx,qy); ctx.stroke();
+    // wound arc from tangent point toward control point
+    const sweep=Math.min(Math.max(0,f.wb), Math.PI*6);
+    if(sweep>0){
+      ctx.lineWidth=1.8; ctx.beginPath();
+      for(let i=0;i<=24;i++){ const a=f.qang - cb.side*(sweep*i/24);
+        const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a)); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
+      ctx.stroke();
+    }
+  } else {
+    // direct mode: cable goes straight T → control point
+    const [cx,cy]=w2s(f.Qctrl_x,f.Qctrl_y); ctx.lineTo(cx,cy); ctx.stroke();
+  }
   jointDot(f.T[0],f.T[1],col);
+  // control-point handle — always visible when selected
+  if(cb.sel){
+    const [cx2,cy2]=w2s(f.Qctrl_x,f.Qctrl_y);
+    ctx.fillStyle='#13161c'; ctx.beginPath(); ctx.arc(cx2,cy2,5,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx2,cy2,5,0,Math.PI*2); ctx.stroke();
+  }
 }
 function drawGas(g){
   const f=gasFrame(g); const sel=g.sel;

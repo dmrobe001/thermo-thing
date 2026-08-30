@@ -124,7 +124,7 @@ function renderInspector(){
       </div>
       <button class="tbtn" id="cb_flip" style="width:100%;margin-bottom:8px">Flip winding side</button>
       <button class="del" id="cb_del">Delete cable</button>`;
-    document.getElementById('cb_flip').onclick=()=>{ cb.side*=-1; const f=cableFrame(cb); if(f){ cb.Ltot=f.Lfree; cb.wrap=0; cb._psiRaw=undefined; } renderInspector(); saveState(); };
+    document.getElementById('cb_flip').onclick=()=>{ cb.side*=-1; const S=bodies[bodyIndex(cb.spool.id)]; const f=cableFrame(cb); if(f&&S){ cb.Ltot=f.Lfree; cb.localAngle=f.qang-S.th; cb.wrap=0; } renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
   } else {
     p.innerHTML=`
@@ -171,5 +171,5 @@ function updateInspectorLive(){
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.abs(cb._lam[0])/sim.h:0).toFixed(2);
       document.getElementById('cb_L').textContent=(cb._Lallow!=null?cb._Lallow:(f?f.Lfree:0)).toFixed(3);
-      document.getElementById('cb_W').textContent=((cb.wrap||0)/(2*Math.PI)).toFixed(2); } }
+      document.getElementById('cb_W').textContent=(f?f.wb/(2*Math.PI):0).toFixed(2); } }
 }

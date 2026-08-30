@@ -41,22 +41,35 @@ function substep(h){
     b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i]; }
 
   // ---- §08.2 · cable pre-pass ----
-  // 2) cables (tetherball): straight tangent + wound remainder of a fixed total
-  //    length. Winding is reversible (no ratchet). Unilateral: slack when the ball
-  //    is close, taut when it reaches the end of the currently-paid-out length.
-  for(const cb of cables){ cb._rows=[]; const f=cableFrame(cb);
-    if(!f){ cb._active=false; cb._C=0; cb._cols=null; continue; }
-    if(cb._psiRaw===undefined) cb._psiRaw=f.qang;
-    let dpsi=f.qang-cb._psiRaw; while(dpsi>Math.PI)dpsi-=2*Math.PI; while(dpsi<-Math.PI)dpsi+=2*Math.PI;
-    cb._psiRaw=f.qang;
-    let Lallow=cb.Ltot - f.rs*cb.wrap;
-    const taut = f.Lfree >= Lallow - 1e-4;
-    if(taut){ cb.wrap += cb.side*dpsi; if(cb.wrap<0)cb.wrap=0;
-      const wmax=cb.Ltot/f.rs; if(cb.wrap>wmax)cb.wrap=wmax;
-      Lallow=cb.Ltot - f.rs*cb.wrap; }
-    cb._Lallow=Lallow; cb._C=f.Lfree-Lallow; cb._cols=f.cols;
+  // 2) cables: straight tangent + wound remainder.  The spool stores the control
+  //    point in its local frame (cb.localAngle); the wound amount wb is derived
+  //    from the current tangent angle and cb.localAngle each step — no explicit
+  //    wrap accumulation needed.  Unilateral: active only when taut and pulling.
+  for(const cb of cables){ cb._rows=[];
+    // Migrate old saves that stored wrap but not localAngle: derive localAngle
+    // from the then-current tangent angle and the saved wrap.
+    if(cb.localAngle===undefined){
+      const f0=cableFrame(cb);   // called with localAngle undefined → wb=0 fallback
+      if(!f0){ cb._active=false; cb._C=0; cb._cols=null; continue; }
+      cb.localAngle=f0.qang-f0.S.th-(cb.wrap||0)*cb.side;
+    }
+    const f=cableFrame(cb); if(!f){ cb._active=false; cb._C=0; cb._cols=null; continue; }
+    const wb=f.wb;
+    cb._wrap=wb;                             // signed wound angle for rendering
+    cb.wrap=Math.max(0,wb);                  // non-negative display field (inspector)
+    let C;
+    if(f.mode==='tangent'){
+      const Lused=f.Lfree+f.rs*wb;
+      C=Lused-cb.Ltot;
+      cb._Lallow=cb.Ltot-f.rs*wb;
+    } else {
+      const dc=Math.hypot(f.T[0]-f.Qctrl_x, f.T[1]-f.Qctrl_y);
+      C=dc-cb.Ltot;
+      cb._Lallow=cb.Ltot;
+    }
+    cb._C=C; cb._cols=f.cols;
     let Jv=0; for(const c of f.cols){ const b=bodies[c[0]]; Jv+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; }
-    cb._active = taut && (cb._C>1e-4 || Jv>0);
+    cb._active = C>-1e-4 && (C>1e-4 || Jv>0);
   }
 
   // ---- §08.3 · constraint assembly -> Schur solve -> impulse apply ----
