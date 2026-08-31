@@ -121,11 +121,9 @@ function renderInspector(){
         <div class="field"><span class="lab">current length</span><span class="val" id="cb_Lcur">—</span></div>
         <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">—</span></div>
         <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">—</span></div>
-        <p class="muted" style="margin:8px 0 0">Fixed total length wraps the post. Orbiting in the winding direction spools it in; the ball is free (slack) until it reaches the paid-out length.</p>
+        <p class="muted" style="margin:8px 0 0">Fixed total length. Drag the anchor handle to wind/unwind. The spool angle encodes which side the cable winds around and accumulates without bound.</p>
       </div>
-      <button class="tbtn" id="cb_flip" style="width:100%;margin-bottom:8px">Flip winding side</button>
       <button class="del" id="cb_del">Delete cable</button>`;
-    document.getElementById('cb_flip').onclick=()=>{ cb.side*=-1; const f=cableFrame(cb); if(f){ cb.Ltot=cableCurrentLength(cb,f); cb.wrap=Math.max(0,f.wb); } renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
   } else {
     p.innerHTML=`
@@ -173,6 +171,6 @@ function updateInspectorLive(){
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);
       document.getElementById('cb_Ltot').textContent=cb.Ltot.toFixed(3);
       document.getElementById('cb_Lcur').textContent=cableCurrentLength(cb,f).toFixed(3);
-      document.getElementById('cb_L').textContent=(cb._Lallow!=null?cb._Lallow:(f?f.Lfree:0)).toFixed(3);
-      document.getElementById('cb_W').textContent=(f&&f.mode==='tangent'?f.wb/(2*Math.PI):0).toFixed(2); } }
+      document.getElementById('cb_L').textContent=(f?f.paidLength:(cb._Lallow!=null?cb._Lallow:0)).toFixed(3);
+      document.getElementById('cb_W').textContent=(f?f.windAngle/(2*Math.PI):0).toFixed(2); } }
 }

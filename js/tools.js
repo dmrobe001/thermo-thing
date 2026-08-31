@@ -122,7 +122,7 @@ function conHandles(con){
 // cable handle: the control point on the spool rim (draggable to wind/unwind)
 function cableHandlePos(cb){
   const f=cableFrame(cb); if(!f) return null;
-  return {x:f.Qctrl_x, y:f.Qctrl_y};
+  return {x:f.Ax, y:f.Ay};
 }
 function pickCableHandle(wx,wy){
   const tol=11/cam.scale;
@@ -133,13 +133,18 @@ function pickCableHandle(wx,wy){
 }
 function applyCableHandle(ad,wx,wy){
   const cb=ad.cb; const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return;
-  const raw=Math.atan2(wy-S.y, wx-S.x)-S.th;
-  if(cb.localAngle===undefined) cb.localAngle=raw;
-  let d=raw-cb.localAngle;
+  // Raw local angle of the dragged point on the spool rim.
+  const rawLocal=Math.atan2(wy-S.y, wx-S.x)-S.th;
+  if(cb.localAngle===undefined) cb.localAngle=rawLocal;
+  let d=rawLocal-cb.localAngle;
   while(d>Math.PI) d-=Math.PI*2;
   while(d<-Math.PI) d+=Math.PI*2;
   cb.localAngle+=d;
-  const f=cableFrame(cb); if(f) cb.Ltot=cableCurrentLength(cb,f);
+  // Recompute spoolAngle and Ltot from new geometry.
+  const f=cableFrame(cb); if(!f) return;
+  cb._spoolAngle=f.spoolAngle;
+  cb.spoolAngle =f.spoolAngle;
+  cb.Ltot=cableCurrentLength(cb,f);
 }
 function pickHandle(wx,wy){
   const tol=11/cam.scale;
@@ -302,16 +307,17 @@ cv.addEventListener('pointerdown',e=>{
       pending = t ? {cable:true, tid:t.body.id, toff:offOf(t.body,t.wp), wp:t.wp}
                   : {cable:true, tid:null, toff:[wx,wy], wp:[wx,wy]};
       return; }
-    // SECOND click = spool body; the click side sets the winding direction
+    // SECOND click = spool body
     const bi=pickBody(wx,wy); if(bi<0) return;
     const S=bodies[bi]; if(pending.tid!=null && S.id===pending.tid) return;
     const T = pending.tid!=null ? (()=>{ const tb=bodies[bodyIndex(pending.tid)]; const [x,y]=worldPt(tb,pending.toff); return [x,y]; })()
                                 : [pending.toff[0],pending.toff[1]];
-    const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy); if(d<=S.r) return;
-    const side = (dvx*(wy-S.y) - dvy*(wx-S.x)) >= 0 ? 1 : -1;   // click side of the T–centre line
-    const Lfree=Math.sqrt(d*d-S.r*S.r);
-    const cb0={type:'cable', tether:{id:pending.tid, off:pending.toff}, spool:{id:S.id}, side, Ltot:Lfree, wrap:0, sel:false};
-    const cf=cableFrame(cb0); cb0.localAngle = cf ? cf.qang-S.th : 0;
+    const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy); if(d<1e-6) return;
+    const Lfree = d > S.r ? Math.sqrt(d*d-S.r*S.r) : 0;
+    // Initialise anchor at the rim point closest to the tether (spoolAngle = 0).
+    const localAngle=Math.atan2(dvy,dvx)-S.th;
+    const cb0={type:'cable', tether:{id:pending.tid, off:pending.toff}, spool:{id:S.id},
+               localAngle, spoolAngle:0, Ltot:Lfree, sel:false};
     cables.push(cb0);
     pending=null; saveState();
     return;

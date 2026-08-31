@@ -34,8 +34,10 @@ function loadExample(kind){
     constraints.push({type:'slot', a:{id:B.id,off:[0,0]}, line:{id:null, off:[A.x,A.y], dir:[1,0]}, lockRot:false, restAng:0, sel:false});
     constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }
   else if(kind==='cable'){ const S=st(0,4.6,0.4); const m=dy(0.9,4.4,0.32);
-    const cb0={type:'cable', tether:{id:m.id, off:[0,0]}, spool:{id:S.id}, side:1, Ltot:2.6, wrap:0, sel:false};
-    const cf0=cableFrame(cb0); cb0.localAngle=cf0?cf0.qang-S.th:0;
+    const dvx=m.x-S.x, dvy=m.y-S.y; const d=Math.hypot(dvx,dvy);
+    const Lfree=d>S.r?Math.sqrt(d*d-S.r*S.r):0;
+    const cb0={type:'cable', tether:{id:m.id, off:[0,0]}, spool:{id:S.id},
+               localAngle:Math.atan2(dvy,dvx)-S.th, spoolAngle:0, Ltot:Lfree, sel:false};
     cables.push(cb0); }
   saveState();
   cam.x=0;cam.y=2.6;cam.scale=64;

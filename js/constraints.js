@@ -34,86 +34,141 @@ function gasFrame(g){
 }
 
 // ---- §06.3 · cableFrame ----
-// cable geometry: the spool stores a control-point angle in its local frame
-// (cb.localAngle).  The natural tangent from tether T to the spool gives angle
-// qang; the wound amount wb = (qctrl − qang)·side.
-//   wb ≥ 0  →  "tangent mode": cable runs T→Q (natural tangent point); the
-//              wound arc Q→Q_ctrl holds the rest of the total length.
-//   wb < 0  →  "direct mode": control point has swung past the tangent toward
-//              the tether; cable runs straight T→Q_ctrl.
-// Returns null when the tether sits inside the spool.
-// The Jacobian correctly couples spool rotation to cable length (torque term
-// −rs·side on the spool ω column, derived from d(Lfree+rs·wb)/dt).
-function cableFrame(cb,qangRef,wbRef){
+// Cable geometry based on a consistently-defined spool angle.
+//
+// Key points (A, B, C, D per the spec):
+//   A = spool anchor — material point on spool rim, stored as cb.localAngle in
+//       the spool body frame.  Initialised so spoolAngle = 0 (anchor at closest
+//       rim point to tether).
+//   B = spool centre (S.x, S.y)
+//   C = tether point T
+//   D = tangent point — rim point where tangent from T touches the spool on the
+//       winding side determined by sign(spoolAngle).
+//
+//   spoolAngle = ABC angle at B (from ray BA to ray BC, CCW positive, unbounded):
+//     = tetherAngle − anchorAngle.
+//     Positive → anchor is CW of tether direction → cable winds CW.
+//     Negative → anchor is CCW of tether direction → cable winds CCW.
+//
+//   Tangent point D (world angle from B):
+//     d > rs: tangentAngle = tetherAngle − sign(spoolAngle) · arccos(rs/d)
+//     d ≤ rs: tangentAngle = tetherAngle (rim point closest to T; or anchorAngle if d≈0)
+//
+//   |DBC| = arccos(rs/d) for d>rs; 0 for d≤rs.
+//   Q = D (tangent wins) if |DBC| < |spoolAngle|;  else Q = A.
+//
+//   windAngle (same sign as spoolAngle):
+//     tangent wins: windAngle = spoolAngle − sign·arccos(rs/d)   [= 0 at transition]
+//     anchor wins:  windAngle = 0
+//   woundLength = |windAngle| · rs
+//   paidLength  = |T − Q|  (= sqrt(d²−rs²) when tangent wins and d > rs)
+//   totalUsed   = woundLength + paidLength
+//
+//   Jacobian constrains d/dt(totalUsed) = 0.
+//   Tangent mode (d>rs): Jx=(Dx·Lfree − rs·sign·Dy)/d², Jy=(Dy·Lfree + rs·sign·Dx)/d²;
+//     spool [−Jx, −Jy, −rs·sign]; tether [Jx, Jy, moment arm].
+//   Direct mode (Q=A or d≤rs): spool [−ux,−uy, ux·ry_Q−uy·rx_Q]; tether [ux,uy,arm].
+//   Returns null only when the spool body is missing.
+function cableFrame(cb, spoolAngleRef){
   const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return null;
   const rs=S.r;
+  const is=bodyIndex(cb.spool.id);
   let T, tb=null, trx=0, tryy=0, ti=-1;
   if(cb.tether.id!=null){ ti=bodyIndex(cb.tether.id); tb=bodies[ti];
     const [tx,ty,rx,ry]=worldPt(tb,cb.tether.off); T=[tx,ty]; trx=rx; tryy=ry; }
   else { T=[cb.tether.off[0],cb.tether.off[1]]; }
-  const Dx=T[0]-S.x, Dy=T[1]-S.y; const d=Math.hypot(Dx,Dy);
-  if(d<=rs*1.0001) return null;
-  const phi=Math.atan2(Dy,Dx); const beta=Math.acos(Math.max(-1,Math.min(1,rs/d)));
-  const qangRaw=phi + cb.side*beta;
-  let qang=qangRaw;
-  if(qangRef!=null){
-    let dAngle=qangRaw-qangRef;
-    while(dAngle>Math.PI) dAngle-=Math.PI*2;
-    while(dAngle<-Math.PI) dAngle+=Math.PI*2;
-    qang=qangRef+dAngle;
+
+  // Spool anchor A: material point on rim.
+  const localAngle   = cb.localAngle !== undefined ? cb.localAngle : 0;
+  const anchorAngle  = S.th + localAngle;
+  const rx_anchor    = rs*Math.cos(anchorAngle), ry_anchor = rs*Math.sin(anchorAngle);
+  const Ax = S.x + rx_anchor, Ay = S.y + ry_anchor;
+
+  // B→C vector and tether world angle.
+  const Dx = T[0]-S.x, Dy = T[1]-S.y;
+  const d  = Math.hypot(Dx, Dy);
+  const tetherAngle = Math.atan2(Dy, Dx);
+
+  // spoolAngle: ABC, unwrapped around previous reference for continuity.
+  const spoolAngleRaw = tetherAngle - anchorAngle;
+  let spoolAngle;
+  if(spoolAngleRef != null){
+    let da = spoolAngleRaw - spoolAngleRef;
+    while(da >  Math.PI) da -= Math.PI*2;
+    while(da < -Math.PI) da += Math.PI*2;
+    spoolAngle = spoolAngleRef + da;
+  } else {
+    const seed = cb.spoolAngle !== undefined ? cb.spoolAngle : 0;
+    let da = spoolAngleRaw - seed;
+    while(da >  Math.PI) da -= Math.PI*2;
+    while(da < -Math.PI) da += Math.PI*2;
+    spoolAngle = seed + da;
   }
-  const Lfree=Math.sqrt(Math.max(0,d*d-rs*rs));
-  const d2=d*d;
-  // Control point: localAngle is the angle in the spool's own frame; it stays
-  // fixed relative to the spool material and rotates with it.  When undefined
-  // (old saves), default to the current natural tangent position (wb = 0).
-  const localAngle=cb.localAngle!==undefined ? cb.localAngle : qang-S.th;
-  const qctrl=S.th+localAngle;
-  const rx_ctrl=rs*Math.cos(qctrl), ry_ctrl=rs*Math.sin(qctrl);
-  const Qctrl_x=S.x+rx_ctrl, Qctrl_y=S.y+ry_ctrl;
-  const wbRaw=(qctrl-qang)*cb.side;       // signed wound angle (radians)
-  let wb=wbRaw;
-  if(wbRef!=null){
-    const twopi=Math.PI*2;
-    wb += Math.round((wbRef-wb)/twopi)*twopi;
+  const sign = spoolAngle >= 0 ? 1 : -1;
+
+  // Tangent point D and DBC angle.
+  const tetherInside = d <= rs;
+  let tangentAngle, dbc, beta=0, Lfree=0;
+  if(!tetherInside){
+    beta         = Math.acos(Math.max(-1, Math.min(1, rs/d)));
+    tangentAngle = tetherAngle - sign*beta;    // D on winding side of T→B line
+    dbc          = beta;                        // |DBC| = arccos(rs/d)
+    Lfree        = Math.sqrt(Math.max(0, d*d - rs*rs));
+  } else {
+    tangentAngle = d > 1e-9 ? tetherAngle : anchorAngle;
+    dbc          = 0;
   }
-  const Lallow=cb.Ltot-rs*wb;
-  const fullyWound=Lallow<=1e-6;
-  const is=bodyIndex(cb.spool.id);
-  let cols, Qx, Qy, ux, uy, mode;
-  if(wb>=0){
-    // Tangent mode — correct Jacobian for d(Lfree + rs·wb)/dt:
-    //   ∂/∂vS = −(Dx·Lfree + rs·side·Dy)/d², −(Dy·Lfree − rs·side·Dx)/d², +rs·side
-    //   ∂/∂vT =  (Dx·Lfree + rs·side·Dy)/d²,  (Dy·Lfree − rs·side·Dx)/d², moment arm
-    mode='tangent';
-    Qx=S.x+rs*Math.cos(qang); Qy=S.y+rs*Math.sin(qang);
-    ux=(T[0]-Qx)/(Lfree||1); uy=(T[1]-Qy)/(Lfree||1);
-    const Jx=(Dx*Lfree + rs*cb.side*Dy)/d2;
-    const Jy=(Dy*Lfree - rs*cb.side*Dx)/d2;
+  const rx_tan = rs*Math.cos(tangentAngle), ry_tan = rs*Math.sin(tangentAngle);
+  const Qtan_x = S.x + rx_tan, Qtan_y = S.y + ry_tan;
+
+  // Separation point Q.
+  const tangentWins = dbc < Math.abs(spoolAngle) - 1e-10;
+  let Qx, Qy, rx_Q, ry_Q, windAngle, paidLength;
+  if(tangentWins){
+    Qx = Qtan_x; Qy = Qtan_y; rx_Q = rx_tan; ry_Q = ry_tan;
+    windAngle  = !tetherInside ? spoolAngle - sign*beta : spoolAngle;
+    paidLength = !tetherInside ? Lfree : Math.hypot(T[0]-Qx, T[1]-Qy);
+  } else {
+    Qx = Ax; Qy = Ay; rx_Q = rx_anchor; ry_Q = ry_anchor;
+    windAngle  = 0;
+    paidLength = Math.hypot(T[0]-Qx, T[1]-Qy);
+  }
+  const woundLength = Math.abs(windAngle) * rs;
+  const totalUsed   = woundLength + paidLength;
+  const Lallow      = cb.Ltot - woundLength;
+  const fullyWound  = Lallow <= 1e-6;
+
+  const ux = paidLength > 1e-9 ? (T[0]-Qx)/paidLength : 0;
+  const uy = paidLength > 1e-9 ? (T[1]-Qy)/paidLength : 1;
+
+  // Jacobian for d/dt(totalUsed) = 0.
+  let cols;
+  if(tangentWins && !tetherInside){
+    const d2 = d*d;
+    const Jx = (Dx*Lfree - rs*sign*Dy) / d2;
+    const Jy = (Dy*Lfree + rs*sign*Dx) / d2;
     cols=[];
-    if(!S.static) cols.push([is, -Jx, -Jy, rs*cb.side]);
+    if(!S.static) cols.push([is, -Jx, -Jy, -rs*sign]);
     if(tb&&!tb.static) cols.push([ti, Jx, Jy, Jx*(-tryy)+Jy*trx]);
   } else {
-    // Direct mode — cable goes T→Q_ctrl (a material point on the spool rim)
-    mode='direct';
-    Qx=Qctrl_x; Qy=Qctrl_y;
-    const dcx=T[0]-Qctrl_x, dcy=T[1]-Qctrl_y; const dc=Math.hypot(dcx,dcy)||1e-9;
-    ux=dcx/dc; uy=dcy/dc;
     cols=[];
-    if(!S.static) cols.push([is, -ux, -uy, ux*ry_ctrl-uy*rx_ctrl]);
-    if(tb&&!tb.static) cols.push([ti, ux, uy, -ux*tryy+uy*trx]);
+    if(!S.static) cols.push([is, -ux, -uy, ux*ry_Q - uy*rx_Q]);
+    if(tb&&!tb.static) cols.push([ti, ux, uy, -ux*tryy + uy*trx]);
   }
+
   return {
-    S,rs,T,Qx,Qy,Lfree,ux,uy,cols,qang,qctrl,wb,wbRaw,Lallow,fullyWound,
-    Qctrl_x,Qctrl_y,rx_ctrl,ry_ctrl,mode,localAngle,tb,ti,trx,tryy,is
+    S, rs, T, Qx, Qy, ux, uy, cols,
+    spoolAngle, windAngle, woundLength, paidLength, totalUsed, Lallow, fullyWound,
+    Lfree, Ax, Ay, rx_anchor, ry_anchor, anchorAngle,
+    tangentAngle, rx_tan, ry_tan, Qtan_x, Qtan_y, tangentWins,
+    rx_Q, ry_Q, localAngle, tb, ti, trx, tryy, is, tetherInside
   };
 }
 
 // Current geometric cable path length for this configuration.
-function cableCurrentLength(cb,f){
-  const cf=f||cableFrame(cb); if(!cf) return 0;
-  if(cf.mode==='tangent') return cf.Lfree + cf.rs*Math.max(0,cf.wb);
-  return Math.hypot(cf.T[0]-cf.Qctrl_x, cf.T[1]-cf.Qctrl_y);
+function cableCurrentLength(cb, f){
+  const cf = f || cableFrame(cb); if(!cf) return 0;
+  return cf.totalUsed;
 }
 
 // ---- §06.4 · slotFrame ----
