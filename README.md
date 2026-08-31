@@ -26,7 +26,7 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
-**Key controls:** Space — play/pause · R — reset · wheel — zoom · middle-drag or Alt-drag — pan · keys 1–9, b/k/v/c — select tools.
+**Key controls:** Space — play/pause · R — reset · wheel — zoom · middle-drag or Alt-drag — pan · keys 1–7, b/k/v/c — select tools.
 
 ## Project layout
 

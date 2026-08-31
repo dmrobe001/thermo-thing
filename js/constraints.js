@@ -17,6 +17,41 @@
 // ---- §06.1 · bodyIndex ----
 function bodyIndex(id){ return bodies.findIndex(b=>b.id===id); }
 
+// Resolve a rod endpoint {id, off} to its world point. id===null means the
+// endpoint is fixed to the background (world-anchored) rather than riding a
+// body — off then holds the world coordinate directly, mirroring the
+// null-id convention already used by gas heads, cable tethers and slot lines.
+function epWorld(ep){
+  if(ep.id==null) return [ep.off[0], ep.off[1], 0, 0];
+  return worldPt(bodies[bodyIndex(ep.id)], ep.off);
+}
+
+// Build a rod constraint between two endpoints, deriving its rest length and
+// (for any welded end) the rest angle between that end's body — or the fixed
+// world frame, for a background end — and the rod's own direction.
+function makeRodCon(a,b,weldA,weldB){
+  const [wax,way]=epWorld(a), [wbx,wby]=epWorld(b);
+  const len=Math.hypot(wax-wbx,way-wby);
+  const con={type:'rod', a, b, len, weldA:!!weldA, weldB:!!weldB, sel:false};
+  const phi=Math.atan2(way-wby,wax-wbx);
+  if(con.weldA) con.restAngA=(a.id!=null?bodies[bodyIndex(a.id)].th:0)-phi;
+  if(con.weldB) con.restAngB=(b.id!=null?bodies[bodyIndex(b.id)].th:0)-phi;
+  return con;
+}
+// Set (or clear) one end's weld flag, recapturing that end's rest angle
+// against the rod's *current* direction so toggling never snaps geometry.
+function setRodWeld(con,which,val){
+  const key = which==='A'?'weldA':'weldB'; con[key]=!!val;
+  if(con[key]){
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+    const phi=Math.atan2(way-wby,wax-wbx);
+    const ep = which==='A'?con.a:con.b;
+    const th = ep.id!=null ? bodies[bodyIndex(ep.id)].th : 0;
+    if(which==='A') con.restAngA=th-phi; else con.restAngB=th-phi;
+  }
+}
+function toggleRodWeld(con,which){ setRodWeld(con,which, !con[which==='A'?'weldA':'weldB']); }
+
 // ---- §06.2 · gasFrame ----
 // gas cylinder frame: piston point on A, closed-end (head) + axis fixed in B or world.
 // x is the signed gas-column length along the axis (clamped so V never goes ≤ 0).
@@ -208,9 +243,10 @@ function slotFrame(con){
 // ---- §06.5 · rowsFor (constraint -> rows dispatch) ----
 // One branch per con.type; to reach a specific joint's row math, search its tag,
 // e.g.  type==='rod'. Catalog (rows) — cross-references spec §4:
-//   pin / ground   2   shared point coincident (ground pins to a fixed world pt)
-//   rod            1   distance held along the connecting line
-//   weld           3   coincident point + relative angle locked
+//   pin            2   shared point coincident
+//   rod            1   distance held along the connecting line; +1 per welded
+//                      end (locks that end's body — or the fixed world frame,
+//                      for a background end — to the rod's own direction)
 //   slot           1   point-on-line (across-rail zero); +1 more if lockRot (prismatic)
 //   belt           1   fixed phase ratio of two rim angles (holonomic)
 //   knife          1   no-side-slip contact (NONHOLONOMIC, nh:true)
@@ -220,43 +256,69 @@ function rowsFor(con){
   // Each row carries the raw position error C (the value to drive to zero). The
   // velocity solver scales it by beta/h (Baumgarte); the position projection uses
   // C directly. Same Jacobian rows serve both.
-  if(con.type==='pin' || con.type==='ground'){
+  if(con.type==='dragpin'){
+    // Internal-only: pins a point on A to a fixed world point. Never a user
+    // constraint — §13.6 feeds one through projectPositions as a transient
+    // goal while the player drags a body around in edit mode.
     const A = bodies[bodyIndex(con.a.id)];
     const [wax,way,rax,ray] = worldPt(A,con.a.off);
-    let wbx,wby, colsB=null;
-    if(con.type==='pin'){
-      const B = bodies[bodyIndex(con.b.id)];
-      const [x,y,rbx,rby] = worldPt(B,con.b.off); wbx=x; wby=y;
-      colsB = { ib:bodyIndex(con.b.id), rbx, rby };
-    } else { wbx=con.world[0]; wby=con.world[1]; }
-    const Cx = wax-wbx, Cy = way-wby;
     const ia = bodyIndex(con.a.id);
-    const rowX = { cols:[[ia,1,0,-ray]], C:Cx };
-    const rowY = { cols:[[ia,0,1, rax]], C:Cy };
-    if(colsB){ rowX.cols.push([colsB.ib,-1,0, colsB.rby]); rowY.cols.push([colsB.ib,0,-1,-colsB.rbx]); }
-    return [rowX,rowY];
+    return [
+      { cols:[[ia,1,0,-ray]], C: wax-con.world[0] },
+      { cols:[[ia,0,1, rax]], C: way-con.world[1] }
+    ];
   }
-  if(con.type==='rod'){
-    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-    const [wax,way,rax,ray]=worldPt(A,con.a.off);
-    const [wbx,wby,rbx,rby]=worldPt(B,con.b.off);
-    let dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
-    const ux=dx/L, uy=dy/L, C=L-con.len;
-    const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id);
-    return [{ cols:[ [ia, ux, uy, -ux*ray+uy*rax],
-                     [ib,-ux,-uy,  ux*rby-uy*rbx] ], C }];
-  }
-  if(con.type==='weld'){
-    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-    const [wax,way,rax,ray]=worldPt(A,con.a.off);
-    const [wbx,wby,rbx,rby]=worldPt(B,con.b.off);
-    const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id);
-    const Cx=wax-wbx, Cy=way-wby, Ca=(A.th-B.th)-con.restAng;
+  if(con.type==='pin'){
+    const A = bodies[bodyIndex(con.a.id)], B = bodies[bodyIndex(con.b.id)];
+    const [wax,way,rax,ray] = worldPt(A,con.a.off);
+    const [wbx,wby,rbx,rby] = worldPt(B,con.b.off);
+    const Cx = wax-wbx, Cy = way-wby;
+    const ia = bodyIndex(con.a.id), ib = bodyIndex(con.b.id);
     return [
       { cols:[[ia,1,0,-ray],[ib,-1,0, rby]], C:Cx },
-      { cols:[[ia,0,1, rax],[ib,0,-1,-rbx]], C:Cy },
-      { cols:[[ia,0,0,1],[ib,0,0,-1]], C:Ca }
+      { cols:[[ia,0,1, rax],[ib,0,-1,-rbx]], C:Cy }
     ];
+  }
+  if(con.type==='rod'){
+    // Either end may be background-anchored (id===null, off holds the world
+    // point directly — §06.1 epWorld) instead of riding a body.
+    const hasA=con.a.id!=null, hasB=con.b.id!=null;
+    const A = hasA ? bodies[bodyIndex(con.a.id)] : null;
+    const B = hasB ? bodies[bodyIndex(con.b.id)] : null;
+    const [wax,way,rax,ray] = hasA ? worldPt(A,con.a.off) : [con.a.off[0],con.a.off[1],0,0];
+    const [wbx,wby,rbx,rby] = hasB ? worldPt(B,con.b.off) : [con.b.off[0],con.b.off[1],0,0];
+    const ia = hasA?bodyIndex(con.a.id):-1, ib = hasB?bodyIndex(con.b.id):-1;
+    let dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
+    const ux=dx/L, uy=dy/L, C=L-con.len;
+    const distCols=[];
+    if(hasA) distCols.push([ia, ux, uy, -ux*ray+uy*rax]);
+    if(hasB) distCols.push([ib,-ux,-uy,  ux*rby-uy*rbx]);
+    const rows=[{ cols:distCols, C }];
+    // A welded end locks its body's angle (or, for a background end, the fixed
+    // world frame — a zero contribution) to the rod's own direction φ. The
+    // Jacobian is the rod's angular rate ω = n·(vA−vB)/L (n = perp to the rod),
+    // so a weld-A row reads (θȦ − ω) and a weld-B row (θḂ − ω); both share the
+    // same ω terms and differ only in which side's θ̇ is added.
+    // φ = atan2(dy,dx) is recomputed fresh each step (not unwrap-tracked like
+    // the cable's spoolAngle), so a welded end that spins through more than
+    // ~half a turn between steps can see its Baumgarte bias jump — fine for
+    // the intended use (fixed/rigid attachments), not for a fast-spinning weld.
+    if(con.weldA || con.weldB){
+      const nx=-uy, ny=ux, phi=Math.atan2(dy,dx);
+      if(con.weldA){
+        const cols=[];
+        if(hasA) cols.push([ia, -nx/L, -ny/L, 1+(nx*ray-ny*rax)/L]);
+        if(hasB) cols.push([ib,  nx/L,  ny/L, -(nx*rby-ny*rbx)/L]);
+        rows.push({ cols, C: (hasA?A.th:0)-phi-con.restAngA });
+      }
+      if(con.weldB){
+        const cols=[];
+        if(hasA) cols.push([ia, -nx/L, -ny/L, -(ny*rax-nx*ray)/L]);
+        if(hasB) cols.push([ib,  nx/L,  ny/L, 1+(ny*rbx-nx*rby)/L]);
+        rows.push({ cols, C: (hasB?B.th:0)-phi-con.restAngB });
+      }
+    }
+    return rows;
   }
   if(con.type==='slot'){
     // point-on-line: kill the slider point's velocity across the rail normal n.

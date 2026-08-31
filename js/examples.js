@@ -7,16 +7,18 @@
 function loadExample(kind){
   bodies=[];constraints=[];gases=[];cables=[];uid=1;clearSelection();eHist.length=0;
   sim.gravity=true; const gc=document.getElementById('tgGrav'); if(gc) gc.checked=true;
-  const st=(x,y,r=0.16)=>{ const b=makeBody(x,y,r,true); bodies.push(b); return b; };
   const dy=(x,y,r=0.38)=>{ const b=makeBody(x,y,r,false); bodies.push(b); return b; };
-  const rod=(A,B)=>{ const [ax,ay]=[A.x,A.y],[bx,by]=[B.x,B.y];
-    constraints.push({type:'rod',a:{id:A.id,off:[0,0]},b:{id:B.id,off:[0,0]},len:Math.hypot(ax-bx,ay-by),sel:false}); };
-  if(kind==='pendulum'){ const s=st(0,4.4); const b=dy(2.6,4.4); rod(s,b); }
-  else if(kind==='double'){ const s=st(0,4.6); const b1=dy(1.8,4.6,0.32); const b2=dy(3.6,4.6,0.32); rod(s,b1); rod(b1,b2); }
-  else if(kind==='fourbar'){ const pL=st(-1.6,1.2), pR=st(1.6,1.2);
-    const a=dy(-1.2,2.8,0.3), b=dy(1.3,2.9,0.3); rod(pL,a); rod(a,b); rod(pR,b); }
-  else if(kind==='crank'){ const S=st(-1.6,2.4); const pin=dy(-1.0,2.4,0.24); const P=dy(1.7,2.4,0.34);
-    rod(S,pin); rod(pin,P);
+  // A plain (unwelded) rod between two bodies — free to rotate at both ends.
+  const rod=(A,B)=>constraints.push(makeRodCon({id:A.id,off:[0,0]},{id:B.id,off:[0,0]},false,false));
+  // A rod pinned to a fixed background point — the free-swinging pivot a
+  // pendulum needs (both ends unwelded, unlike the tool's rigid-strut default).
+  const rodBG=(wx,wy,B)=>constraints.push(makeRodCon({id:null,off:[wx,wy]},{id:B.id,off:[0,0]},false,false));
+  if(kind==='pendulum'){ const b=dy(2.6,4.4); rodBG(0,4.4,b); }
+  else if(kind==='double'){ const b1=dy(1.8,4.6,0.32); const b2=dy(3.6,4.6,0.32); rodBG(0,4.6,b1); rod(b1,b2); }
+  else if(kind==='fourbar'){
+    const a=dy(-1.2,2.8,0.3), b=dy(1.3,2.9,0.3); rodBG(-1.6,1.2,a); rod(a,b); rodBG(1.6,1.2,b); }
+  else if(kind==='crank'){ const pin=dy(-1.0,2.4,0.24); const P=dy(1.7,2.4,0.34);
+    rodBG(-1.6,2.4,pin); rod(pin,P);
     constraints.push({type:'slot', a:{id:P.id,off:[0,0]}, line:{id:null, off:[P.x,P.y], dir:[1,0]},
                       lockRot:false, restAng:P.th, sel:false}); }
   else if(kind==='gasspring'){ const P=dy(0,2.8,0.4);
@@ -29,11 +31,15 @@ function loadExample(kind){
     constraints.push({type:'knife', a:{id:b.id, off:[0.42,0]}, dir:[1,0], sel:false}); }
   else if(kind==='integrator'){ sim.gravity=false; if(gc) gc.checked=false;
     const A=dy(0,2.6,0.95);
-    constraints.push({type:'ground', a:{id:A.id, off:[0,0]}, world:[A.x,A.y], sel:false});
+    // A short background-welded rod into A's own centre: the weld on the
+    // background end locks the rod's direction, so its free (pinned) far end
+    // — which sits exactly at A's centre — is itself fixed in space, letting
+    // A spin freely about that fixed axis. Replaces the old ground-pin tool.
+    constraints.push(makeRodCon({id:null,off:[A.x-0.5,A.y]},{id:A.id,off:[0,0]},true,false));
     const B=dy(1.17,2.6,0.22);
     constraints.push({type:'slot', a:{id:B.id,off:[0,0]}, line:{id:null, off:[A.x,A.y], dir:[1,0]}, lockRot:false, restAng:0, sel:false});
     constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }
-  else if(kind==='cable'){ const S=st(0,4.6,0.4); const m=dy(0.9,4.4,0.32);
+  else if(kind==='cable'){ const S=makeBody(0,4.6,0.4,true); bodies.push(S); const m=dy(0.9,4.4,0.32);
     const dvx=m.x-S.x, dvy=m.y-S.y; const d=Math.hypot(dvx,dvy);
     const Lfree=d>S.r?Math.sqrt(d*d-S.r*S.r):0;
     const cb0={type:'cable', tether:{id:m.id, off:[0,0]}, spool:{id:S.id},

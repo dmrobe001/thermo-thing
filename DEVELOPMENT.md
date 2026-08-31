@@ -31,7 +31,7 @@ The library is restricted to constraints that are **linear in the velocities** �
 A(q) · v = b(q, t)
 ```
 
-where `A` depends only on the current configuration, `v` stacks the involved bodies' velocities, and `b` is zero, a constant, or a driven signal. Every mechanical joint of interest — pin, weld, rod, slot, prismatic, gear, belt, rolling wheel, variable-ratio transmission — is a small number of rows of this shape. The coefficients of `A` are trigonometric/geometric terms the engine computes from the parts' current poses; **the player never writes an expression in `x`, `y`, or `θ`.** This is the line to draw: players compose geometric features and select relations among them, and the velocity-linear class is exactly what the KKT solver consumes as rows of `J`. Constraints outside this class (nonlinear in velocity) are neither common in real machines nor cheap to solve, and are out of scope.
+where `A` depends only on the current configuration, `v` stacks the involved bodies' velocities, and `b` is zero, a constant, or a driven signal. Every mechanical joint of interest — pin, rod (with its optional per-end weld), slot, prismatic, gear, belt, rolling wheel, variable-ratio transmission — is a small number of rows of this shape. The coefficients of `A` are trigonometric/geometric terms the engine computes from the parts' current poses; **the player never writes an expression in `x`, `y`, or `θ`.** This is the line to draw: players compose geometric features and select relations among them, and the velocity-linear class is exactly what the KKT solver consumes as rows of `J`. Constraints outside this class (nonlinear in velocity) are neither common in real machines nor cheap to solve, and are out of scope.
 
 ### 3.4 Holonomic vs. nonholonomic handling
 
@@ -71,14 +71,15 @@ Every bilateral constraint in the library is one instance of a single atomic ope
 | Constraint | Condition (velocity form) | Rows |
 |---|---|---|
 | Pin / revolute | relative velocity of a shared point is zero | 2 |
-| Weld | shared-point relative velocity zero **and** relative ω zero | 3 |
-| Rod / distance | relative velocity *along* the connecting line is zero | 1 |
+| Rod / distance | relative velocity *along* the connecting line is zero | 1 (+1 per welded end) |
 | Slot / rail (point-on-line) | relative velocity *across* the line is zero | 1 |
 | Prismatic slider | across-line relative velocity zero **and** relative ω zero | 2 |
 | Gear (fixed ratio) | weighted sum of angular rates is zero | 1 |
 | Belt / cable (inextensible) | rim tangential speeds equal | 1 |
 
 The rod and the slot are exact complements: one kills the along-line component, the other the across-line component.
+
+**Weld is a per-endpoint state of a rod, not a separate primitive.** Either end of a rod can independently be a freely-rotating *pin* (the plain 1-row distance constraint) or a rotation-locked *weld*, which adds one row pinning that end's body angle — or, for an end anchored directly to the background rather than to a body, the fixed world frame — to the rod's own direction. A rod with both ends welded to the background is rigid in both position and orientation, which is how a body is now anchored to the world (there is no standalone "static" toggle in the editor); a rod with only its background end welded reproduces the old ground-pin (a fixed pivot the far body spins freely about); a rod with no welds at either end is the original free-swinging distance joint. Either end can be attached to a body or directly to a fixed background point (`id === null`, mirroring the convention already used by gas heads, cable tethers, and world-fixed slot lines) — this is how rods anchor to the background instead of needing an invisible static pivot body.
 
 ### 4.2 Nonholonomic bilateral (velocity-only; no stabilization)
 

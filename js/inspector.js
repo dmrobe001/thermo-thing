@@ -34,7 +34,6 @@ function renderInspector(){
         <div class="field"><span class="lab">mass</span><span class="val" id="f_mass">${b.mass.toFixed(3)}</span></div>
         <div class="field"><span class="lab">radius</span><span class="val">${b.r.toFixed(3)}</span></div>
         <div class="field"><span class="lab">inertia</span><span class="val">${b.I.toFixed(3)}</span></div>
-        <label class="chk"><input type="checkbox" id="f_static" ${b.static?'checked':''}> anchored (static)</label>
       </div>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">x , y</span><span class="val" id="f_pos"></span></div>
@@ -42,24 +41,27 @@ function renderInspector(){
         <div class="field"><span class="lab">speed</span><span class="val" id="f_spd"></span></div>
       </div>
       <button class="del" id="f_del">Delete body</button>`;
-    document.getElementById('f_static').onchange=ev=>{ b.static=ev.target.checked; if(b.static){b.vx=b.vy=b.w=0;} refreshMass(b); renderInspector(); saveState(); };
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
+    const isRod=c.type==='rod';
     const title = c.type==='slot' ? (c.lockRot?'Prismatic slider':'Slot · rail')
-                : ({pin:'Pin · hinge',rod:'Rigid rod',weld:'Weld',ground:'Ground pin',
+                : ({pin:'Pin · hinge',rod:'Rigid rod',
                     belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
-    const showTorque = c.type==='weld' || (c.type==='slot'&&c.lockRot);
+    const showTorque = (isRod && (c.weldA||c.weldB)) || (c.type==='slot'&&c.lockRot);
     const isBelt=c.type==='belt', isCvt=c.type==='cvt';
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
         <div class="field"><span class="lab">ratio</span><span class="val">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d−rA) ⁄ rA</span><span class="val" id="f_ratio">—</span></div>`;
+    if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
+        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
+               : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier λ ⁄ h — run the sim to read it.'
                : 'Reaction is the Lagrange multiplier λ ⁄ h — the force this joint carries. Run the sim to read it.';
     p.innerHTML=`
       <h3>${title}</h3><p class="sub">${c.type} constraint</p>
@@ -77,6 +79,10 @@ function renderInspector(){
         c.restAng = B? A.th-B.th : A.th; } renderInspector(); saveState(); }; }
     if(isBelt){ document.getElementById('f_cross').onchange=ev=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       c.sense=ev.target.checked?-1:1; c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; renderInspector(); saveState(); }; }
+    if(isRod){
+      document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
+      document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
+    }
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
   } else if(selGas){
     const g=selGas;
@@ -143,7 +149,7 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1–9, b/k/v/c tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1–7, b/k/v/c tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
   }

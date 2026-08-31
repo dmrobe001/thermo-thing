@@ -87,6 +87,23 @@ function jointDot(x,y,col){ const [sx,sy]=w2s(x,y);
   ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.fill();
   ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.stroke(); }
 
+// One end of a rod: a ground hatch if it's background-anchored, plus a square
+// (welded — rotation-locked) or a round joint dot (pinned — free to rotate).
+function drawRodEnd(x,y,welded,isBackground,col){
+  const [sx,sy]=w2s(x,y);
+  if(isBackground){
+    ctx.strokeStyle=col;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(sx,sy+4);ctx.lineTo(sx-7,sy+14);ctx.lineTo(sx+7,sy+14);ctx.closePath();ctx.stroke();
+    for(let i=-7;i<=7;i+=4){ctx.beginPath();ctx.moveTo(sx+i,sy+14);ctx.lineTo(sx+i-4,sy+19);ctx.stroke();}
+  }
+  if(welded){
+    ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
+    ctx.beginPath();ctx.rect(sx-5,sy-5,10,10);ctx.fill();ctx.stroke();
+  } else {
+    jointDot(x,y,col);
+  }
+}
+
 // ---- §11.4 · gas & cable (drawCable, drawGas, drawGasForce) ----
 function drawCable(cb){
   const f=cableFrame(cb); if(!f)return;
@@ -161,29 +178,18 @@ function drawConstraint(con){
   const viol = !sim.running && conMaxC(con) > 2e-3;
   if(viol) violCount++;
   const sel = con.sel; const col = viol ? '#ec5b52' : (sel? '#5aa9f0':'#8a94a6');
-  const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
-  const [wax,way]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
-  if(con.type==='pin'){ jointDot(wax,way,col); }
-  else if(con.type==='ground'){
-    const [sx,sy]=w2s(con.world[0],con.world[1]);
-    jointDot(con.world[0],con.world[1],col);
-    ctx.strokeStyle=col;ctx.lineWidth=1.5;
-    ctx.beginPath();ctx.moveTo(sx,sy+4);ctx.lineTo(sx-7,sy+14);ctx.lineTo(sx+7,sy+14);ctx.closePath();ctx.stroke();
-    for(let i=-7;i<=7;i+=4){ctx.beginPath();ctx.moveTo(sx+i,sy+14);ctx.lineTo(sx+i-4,sy+19);ctx.stroke();}
-  }
-  else if(con.type==='rod'){
-    const B=bodies[bodyIndex(con.b.id)]; if(!B)return; const [wbx,wby]=worldPt(B,con.b.off);
+  if(con.type==='rod'){
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
     ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-    jointDot(wax,way,col); jointDot(wbx,wby,col);
+    drawRodEnd(wax,way,con.weldA,con.a.id==null,col);
+    drawRodEnd(wbx,wby,con.weldB,con.b.id==null,col);
+    return;
   }
-  else if(con.type==='weld'){
-    const B=bodies[bodyIndex(con.b.id)]; if(!B)return; const [wbx,wby]=worldPt(B,con.b.off);
-    const [ax,ay]=w2s(wax,way);
-    ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
-    ctx.beginPath();ctx.rect(ax-5,ay-5,10,10);ctx.fill();ctx.stroke();
-  }
+  const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
+  const [wax,way]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
+  if(con.type==='pin'){ jointDot(wax,way,col); }
   else if(con.type==='slot'){
     const f=slotFrame(con);
     const s=(f.wax-f.anchor[0])*f.dW[0]+(f.way-f.anchor[1])*f.dW[1];
