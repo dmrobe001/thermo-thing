@@ -49,8 +49,17 @@ function substep(h){
   //    Unilateral: active only when taut and pulling.
   const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
   for(const cb of cables){ cb._rows=[];
-    // Migrate old saves: if no localAngle, derive it so the anchor sits at the
-    // closest-to-tether rim point and reconstruct spoolAngle from old wrap/side.
+    // Migrate old saves: if no localAngle, reconstruct spoolAngle from old wrap/side
+    // FIRST, then place the anchor (localAngle) consistent with that spoolAngle —
+    // anchorAngle = tetherAngle - spoolAngle. Deriving localAngle independently as
+    // "closest point to tether" (spoolAngle≈0) while separately keeping a nonzero
+    // reconstructed spoolAngle would put the anchor and the wound-arc bookkeeping
+    // at odds: cableFrame recomputes spoolAngle from the actual anchor position, so
+    // an anchor placed at the closest point would immediately re-derive spoolAngle
+    // as (near) a multiple of a full turn away from that reconstruction rather than
+    // matching it, corrupting Lallow/woundLength. Matches the pre-spoolAngle
+    // migration precedent (physics.js, commit 64ab23b): localAngle = tangentAngle -
+    // S.th + wrap·side.
     if(cb.localAngle===undefined){
       const S0=bodies[bodyIndex(cb.spool.id)];
       if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
@@ -58,8 +67,7 @@ function substep(h){
       if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
         const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; }
       else T0=[cb.tether.off[0],cb.tether.off[1]];
-      // localAngle = world angle toward tether minus body angle → anchor closest to tether
-      cb.localAngle=Math.atan2(T0[1]-S0.y, T0[0]-S0.x) - S0.th;
+      const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
       // Reconstruct spoolAngle from old wrap/side (old side=+1 means CCW → new spoolAngle < 0).
       if(cb.side !== undefined){
         const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
@@ -68,23 +76,38 @@ function substep(h){
       } else {
         cb.spoolAngle = 0;
       }
+      cb.localAngle = tetherAngle0 - cb.spoolAngle - S0.th;
       cb._spoolAngle = cb.spoolAngle;
     }
-    // Migrate saves that have localAngle but predate spoolAngle tracking.
-    // Old code: side=+1 CCW → new spoolAngle<0; side=-1 CW → new spoolAngle>0.
+    // Migrate saves that have localAngle but predate spoolAngle tracking. The
+    // anchor (localAngle) here is already authoritative, so derive spoolAngle from
+    // it directly (spoolAngle = tetherAngle - anchorAngle) rather than trusting the
+    // old wrap/side estimate outright — that estimate only recovers which multiple
+    // of a full turn the true value sits at (via unwrap), it doesn't override the
+    // stored anchor's principal angle.
     if(cb._spoolAngle === undefined){
       if(cb.spoolAngle !== undefined){
         cb._spoolAngle = cb.spoolAngle;
-      } else if(cb.side !== undefined){
+      } else {
         const S0=bodies[bodyIndex(cb.spool.id)]; if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
         let T0; if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
           const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; } else T0=[cb.tether.off[0],cb.tether.off[1]];
-        const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
-        const beta0 = d0 > S0.r ? Math.acos(Math.max(-1,Math.min(1,S0.r/d0))) : 0;
-        cb.spoolAngle = -cb.side * ((cb.wrap || 0) + beta0);
-        cb._spoolAngle = cb.spoolAngle;
-      } else {
-        cb._spoolAngle = 0;
+        const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
+        const anchorAngle0=S0.th+cb.localAngle;
+        let raw=tetherAngle0-anchorAngle0;                 // principal value from the actual stored anchor
+        if(cb.side !== undefined){
+          // Old side=+1 CCW → new spoolAngle < 0; use the old wrap/side estimate only
+          // to pick which full-turn multiple of `raw` is the true continuous value.
+          const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
+          const beta0 = d0 > S0.r ? Math.acos(Math.max(-1,Math.min(1,S0.r/d0))) : 0;
+          const est = -cb.side * ((cb.wrap || 0) + beta0);
+          let da=raw-est;
+          while(da >  Math.PI) da -= Math.PI*2;
+          while(da < -Math.PI) da += Math.PI*2;
+          raw = est + da;
+        }
+        cb.spoolAngle = raw;
+        cb._spoolAngle = raw;
       }
     }
 

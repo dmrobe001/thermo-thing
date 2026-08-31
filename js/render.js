@@ -103,7 +103,7 @@ function drawCable(cb){
     const nSeg = Math.max(24, Math.round(sweepDraw/Math.PI*12));
     ctx.lineWidth=1.8; ctx.beginPath();
     for(let i=0;i<=nSeg;i++){
-      const a = f.anchorAngle + sign*(sweep*(1 - i/nSeg));   // A→Q direction
+      const a = f.anchorAngle + sign*(sweep - sweepDraw*i/nSeg);   // Q→(capped toward A)
       const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a));
       i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
     ctx.stroke();
