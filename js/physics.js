@@ -65,9 +65,9 @@ function substep(h){
     // S.th + wrap·side.
     if(cb.localAngle===undefined){
       const S0=bodies[bodyIndex(cb.spool.id)];
-      if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
+      if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
       let T0;
-      if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
+      if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
         const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; }
       else T0=[cb.tether.off[0],cb.tether.off[1]];
       const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
@@ -92,8 +92,8 @@ function substep(h){
       if(cb.spoolAngle !== undefined){
         cb._spoolAngle = cb.spoolAngle;
       } else {
-        const S0=bodies[bodyIndex(cb.spool.id)]; if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
-        let T0; if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
+        const S0=bodies[bodyIndex(cb.spool.id)]; if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; continue; }
+        let T0; if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; continue; }
           const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; } else T0=[cb.tether.off[0],cb.tether.off[1]];
         const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
         const anchorAngle0=S0.th+cb.localAngle;
@@ -118,38 +118,26 @@ function substep(h){
     // cb._spoolAngle (see persistence below), never chained from a moving
     // reference — so a slack cable's raw departure geometry never drifts.
     const f=cableFrame(cb, cb._spoolAngle);
-    if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
+    if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; continue; }
 
-    let C, active, cols, cols2=null;
-    if(f.fullyWound){
-      // Cable fully wound: spool anchor = separation point.  Two constraints:
-      // spool angle cannot increase (i.e. spool-centre and tether cannot move
-      // away from each other in the direction that would increase the wound arc),
-      // and spool-centre ↔ tether distance is rigid (neither closer nor farther).
-      // Implemented as a 2-DOF hinge between the tether point and the anchor.
-      const Cx=f.T[0]-f.Ax, Cy=f.T[1]-f.Ay;
-      const vQx=f.S.vx-f.S.w*f.ry_anchor, vQy=f.S.vy+f.S.w*f.rx_anchor;
-      const vTx=f.tb ? (f.tb.vx-f.tb.w*f.tryy) : 0;
-      const vTy=f.tb ? (f.tb.vy+f.tb.w*f.trx) : 0;
-      const dd=Math.hypot(Cx,Cy);
-      const nx=dd>1e-9 ? Cx/dd : (f.ux||1), ny=dd>1e-9 ? Cy/dd : (f.uy||0);
-      const sepRate=nx*(vTx-vQx)+ny*(vTy-vQy);
-      cols=[]; cols2=[];
-      if(!f.S.static){ cols.push([f.is,-1,0, f.ry_anchor]); cols2.push([f.is,0,-1,-f.rx_anchor]); }
-      if(f.tb&&!f.tb.static){ cols.push([f.ti,1,0,-f.tryy]); cols2.push([f.ti,0,1,f.trx]); }
-      C=Cx;
-      active = (Math.hypot(Cx,Cy)>1e-4 || sepRate>0) && (cols.length>0 || cols2.length>0);
-      cb._C2=Cy;
-      cb._hinge=true;
-      cb._Lallow=0;
-    } else {
-      C=f.totalUsed - cb.Ltot;
-      cb._Lallow=f.Lallow;
-      cols=f.cols;
-      active = C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0);
-      cb._hinge=false;
-    }
-    cb._C=C; cb._cols=cols; cb._cols2=cols2; cb._active=active;
+    // At full wind (Lallow<=0, no free length left) this used to switch to a
+    // rigid 2-DOF hinge pinning the tether straight to the material anchor
+    // A. That pin point is wrong whenever the accumulated wrap isn't a whole
+    // number of turns from the anchor (the general case) — Q, the true
+    // current departure point, sits elsewhere on the rim — so the hinge
+    // yanked the body across the spool toward A in one step, an
+    // energy-adding discontinuity a player would see as an unphysical jump.
+    // There's no need for a special case at all: the tangent-branch row's
+    // Jacobian (§06.3) is finite and well-defined in the ℓ→0 limit — it's
+    // the tangent-line direction at Q, which continuously becomes the
+    // tangent direction *at the tether itself* as Q→T — so the same one-row
+    // taut constraint pins the tether to the rim and only blocks the
+    // wind-further direction, exactly as the design note's end-stop
+    // (CABLE.md §C.4 step 6) intends, with no discontinuity to cross.
+    const C=f.totalUsed - cb.Ltot;
+    cb._Lallow=f.Lallow;
+    const active = C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0);
+    cb._C=C; cb._cols=f.cols; cb._active=active;
     // Freeze the wound-length bookkeeping while slack (design note §C.4): a limp
     // cable's wrap is indeterminate, so only a taut/end-stop-active step commits
     // the new spoolAngle. A slack tether still moves freely and is still drawn
@@ -169,7 +157,6 @@ function substep(h){
   for(const cb of cables){
     if(cb._active){
       cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C});
-      if(cb._cols2){ cb._rows.push(rows.length); rows.push({cols:cb._cols2, C:(cb._C2||0)}); }
     }
   }
   const m=rows.length;

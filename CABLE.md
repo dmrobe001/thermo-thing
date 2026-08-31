@@ -195,9 +195,20 @@ active       taut / slack flag
 > the "robust alternative" fallback in the dead zone (using the row's own current
 > velocity rather than a solved multiplier, since the multiplier isn't known until
 > after the row is included). Step 5 is `cableFrame`'s `cols` plus the shared
-> Baumgarte scaling every row gets in §08.3. Step 6's fully-wound stop is a 2-DOF
-> hinge pinning tether to anchor (code §08.2's `fullyWound` branch) rather than a
-> clamped `ell_min`; the fully-unwound stop is the rod-regime branch, as specified.
+> Baumgarte scaling every row gets in §08.3.
+>
+> Step 6's fully-wound stop used to switch to a 2-DOF hinge pinning the tether
+> straight to the material anchor A — but A is only the correct pin point when
+> the accumulated wrap happens to be a whole number of turns; in general the
+> true departure point Q sits elsewhere on the rim, so the hinge yanked the
+> body across the spool in one step, an energy-adding jump. Fixed by dropping
+> the special case entirely: the tangent-mode row's Jacobian is finite as
+> `ℓ→0` (see the singularity note below) and its direction continuously
+> becomes tangent to the rim *at the tether itself* as `Q→T`, so the same
+> one-row taut constraint carries through the full-wind boundary with no
+> discontinuity to cross — closer to this section's own "clamp `ell_min`"
+> suggestion than a hinge ever was. The fully-unwound stop is unchanged (the
+> rod-regime branch, as specified).
 
 ### Robustness notes
 
@@ -223,9 +234,23 @@ active       taut / slack flag
 > step. A slack cable's wound-length bookkeeping therefore holds exactly at its last
 > taut value — a swinging tether can no longer silently rewind or overwind the spool
 > while the rope is slack — and picks back up from live geometry the instant it goes
-> taut again, matching this section's intent. The σ-flip-only-at-Δ=0 property and the
-> fully-wound singularity guard were both already structurally guaranteed by the
-> existing `tangentWins`/`fullyWound` construction and needed no change.
+> taut again, matching this section's intent. The σ-flip-only-at-Δ=0 property was
+> already structurally guaranteed by the existing `tangentWins` construction and
+> needed no change.
+>
+> The near-full-wrap singularity guard needed one real fix, though: a body
+> winding in fast can overshoot past `d = rs` in a single step (the angular
+> rate genuinely diverges as `ℓ→0`), and the Jacobian branch was gated on
+> `tangentWins && !tetherInside` — so that one step would drop out of the
+> tangent-mode row into the anchor/rod formula aimed at the *wrong* point
+> (`Qtan`, not `A`), another energy-adding direction discontinuity. `Lfree` is
+> defined (0 once `d≤rs`) regardless of which side of the rim `d` lands on, so
+> gating the Jacobian on `tangentWins` alone — matching `Q`'s own selection
+> logic — carries the correct row through the overshoot with no jump; a small
+> floor on the `d²` denominator guards the genuine (if unlikely) case of `d`
+> landing very close to the spool centre in one step. Verified with a headless
+> harness: energy stays smooth through a full-wind pass even when the tether's
+> overshoot carries it to within 1% of the spool radius of dead centre.
 
 ## C.5 Two-spool generalization
 

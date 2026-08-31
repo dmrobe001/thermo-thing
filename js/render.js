@@ -21,10 +21,13 @@ function render(){
   if(sim.showGrid) drawGrid();
   drawAxes();
   violCount=0;
+  // Bodies paint first so every constraint/force-element visualization —
+  // joint dots, tether points, rods, rims — draws in front of them instead
+  // of being occluded by a body's opaque fill.
+  for(const b of bodies) drawBody(b);
   for(const g of gases) drawGas(g);
   for(const cb of cables) drawCable(cb);
   for(const con of constraints) drawConstraint(con);
-  for(const b of bodies) drawBody(b);
   drawHandles();
   if(sim.showForces && sim.running){ for(const con of constraints) drawReaction(con); for(const g of gases) drawGasForce(g); }
   if(pending) drawPending();
