@@ -46,7 +46,10 @@ function substep(h){
   //    B=centre, A=anchor, C=tether) is tracked as an unbounded signed value
   //    in cb._spoolAngle, unwrapped each step so it accumulates continuously.
   //    The separation point (Q) and wound arc are derived from that each step.
-  //    Unilateral: active only when taut and pulling.
+  //    Unilateral: active only when taut and pulling. cb._spoolAngle only
+  //    commits a new value on an active step — while slack the wound-length
+  //    bookkeeping freezes at its last taut value, since a limp cable's wrap
+  //    is otherwise indeterminate (design note §C.4).
   const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
   for(const cb of cables){ cb._rows=[];
     // Migrate old saves: if no localAngle, reconstruct spoolAngle from old wrap/side
@@ -111,11 +114,11 @@ function substep(h){
       }
     }
 
+    // Candidate frame: recomputed live every step from the frozen reference
+    // cb._spoolAngle (see persistence below), never chained from a moving
+    // reference — so a slack cable's raw departure geometry never drifts.
     const f=cableFrame(cb, cb._spoolAngle);
     if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
-
-    cb._spoolAngle = f.spoolAngle;
-    cb.spoolAngle  = f.spoolAngle;           // persist across save/load
 
     let C, active, cols, cols2=null;
     if(f.fullyWound){
@@ -147,6 +150,12 @@ function substep(h){
       cb._hinge=false;
     }
     cb._C=C; cb._cols=cols; cb._cols2=cols2; cb._active=active;
+    // Freeze the wound-length bookkeeping while slack (design note §C.4): a limp
+    // cable's wrap is indeterminate, so only a taut/end-stop-active step commits
+    // the new spoolAngle. A slack tether still moves freely and is still drawn
+    // from live geometry (render.js/inspector.js reread cb.spoolAngle fresh each
+    // frame) — only the persisted reference used for next step's continuity holds.
+    if(active){ cb._spoolAngle = f.spoolAngle; cb.spoolAngle = f.spoolAngle; }
   }
 
   // ---- §08.3 · constraint assembly -> Schur solve -> impulse apply ----
