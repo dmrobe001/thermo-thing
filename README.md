@@ -37,5 +37,6 @@ mechanical-sandbox-spec.md  original combined specification (source for these do
 README.md               this file
 AGENT.md                codebase navigation guide for developers and AI agents
 DEVELOPMENT.md          physics engine, constraint library, and feature design
+CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```
