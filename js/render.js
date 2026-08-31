@@ -92,28 +92,28 @@ function drawCable(cb){
   const col = cb.sel? '#5aa9f0' : (taut? '#e0c060' : '#8a94a6');
   const [tx,ty]=w2s(f.T[0],f.T[1]);
   ctx.strokeStyle=col; ctx.lineWidth= taut?2.5:1.8;
+  // Straight segment: tether T → separation point Q
   ctx.beginPath(); ctx.moveTo(tx,ty);
-  if(f.mode==='tangent'){
-    // cable line T → natural tangent point Q
-    const [qx,qy]=w2s(f.Qx,f.Qy); ctx.lineTo(qx,qy); ctx.stroke();
-    // wound arc from tangent point toward control point
-    const sweep=Math.min(Math.max(0,f.wb), Math.PI*6);
-    if(sweep>0){
-      ctx.lineWidth=1.8; ctx.beginPath();
-      for(let i=0;i<=24;i++){ const a=f.qang + cb.side*(sweep*i/24);
-        const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a)); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
-      ctx.stroke();
-    }
-  } else {
-    // direct mode: cable goes straight T → control point
-    const [cx,cy]=w2s(f.Qctrl_x,f.Qctrl_y); ctx.lineTo(cx,cy); ctx.stroke();
+  const [qx,qy]=w2s(f.Qx,f.Qy); ctx.lineTo(qx,qy); ctx.stroke();
+  // Wound arc: separation point Q → anchor A (if any winding present)
+  const sweep=Math.abs(f.windAngle);
+  if(sweep > 1e-4){
+    const sign = f.windAngle >= 0 ? 1 : -1;
+    const sweepDraw = Math.min(sweep, Math.PI*8);  // cap visual arc at 4 turns
+    const nSeg = Math.max(24, Math.round(sweepDraw/Math.PI*12));
+    ctx.lineWidth=1.8; ctx.beginPath();
+    for(let i=0;i<=nSeg;i++){
+      const a = f.anchorAngle + sign*(sweep*(1 - i/nSeg));   // A→Q direction
+      const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a));
+      i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
+    ctx.stroke();
   }
   jointDot(f.T[0],f.T[1],col);
-  // control-point handle — always visible when selected
+  // anchor handle — always visible when selected
   if(cb.sel){
-    const [cx2,cy2]=w2s(f.Qctrl_x,f.Qctrl_y);
-    ctx.fillStyle='#13161c'; ctx.beginPath(); ctx.arc(cx2,cy2,5,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx2,cy2,5,0,Math.PI*2); ctx.stroke();
+    const [ax2,ay2]=w2s(f.Ax,f.Ay);
+    ctx.fillStyle='#13161c'; ctx.beginPath(); ctx.arc(ax2,ay2,5,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ax2,ay2,5,0,Math.PI*2); ctx.stroke();
   }
 }
 function drawGas(g){

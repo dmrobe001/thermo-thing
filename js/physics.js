@@ -41,69 +41,84 @@ function substep(h){
     b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i]; }
 
   // ---- §08.2 · cable pre-pass ----
-  // 2) cables: straight tangent + wound remainder.  The spool stores the control
-  //    point in its local frame (cb.localAngle); the wound amount wb is derived
-  //    from the current tangent angle and cb.localAngle each step — no explicit
-  //    wrap accumulation needed.  Unilateral: active only when taut and pulling.
+  // 2) cables: wound arc + straight paid-out segment.  The spool stores the
+  //    anchor in its local frame (cb.localAngle).  The spoolAngle (angle ABC,
+  //    B=centre, A=anchor, C=tether) is tracked as an unbounded signed value
+  //    in cb._spoolAngle, unwrapped each step so it accumulates continuously.
+  //    The separation point (Q) and wound arc are derived from that each step.
+  //    Unilateral: active only when taut and pulling.
   const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
   for(const cb of cables){ cb._rows=[];
-    // Migrate old saves that stored wrap but not localAngle: derive localAngle
-    // from the then-current tangent angle and the saved wrap.
+    // Migrate old saves: if no localAngle, derive it so the anchor sits at the
+    // closest-to-tether rim point and reconstruct spoolAngle from old wrap/side.
     if(cb.localAngle===undefined){
-      const f0=cableFrame(cb,cb._psiRaw,cb._wbRef);   // called with localAngle undefined → wb=0 fallback
-      if(!f0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
-      cb.localAngle=f0.qang-f0.S.th+(cb.wrap||0)*cb.side;
-      cb._psiRaw=f0.qang;
-      cb._wbRef=cb.wrap||0;
+      const S0=bodies[bodyIndex(cb.spool.id)];
+      if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
+      let T0;
+      if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
+        const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; }
+      else T0=[cb.tether.off[0],cb.tether.off[1]];
+      // localAngle = world angle toward tether minus body angle → anchor closest to tether
+      cb.localAngle=Math.atan2(T0[1]-S0.y, T0[0]-S0.x) - S0.th;
+      // Reconstruct spoolAngle from old wrap/side (old side=+1 means CCW → new spoolAngle < 0).
+      if(cb.side !== undefined){
+        const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
+        const beta0 = d0 > S0.r ? Math.acos(Math.max(-1,Math.min(1,S0.r/d0))) : 0;
+        cb.spoolAngle = -cb.side * ((cb.wrap || 0) + beta0);
+      } else {
+        cb.spoolAngle = 0;
+      }
+      cb._spoolAngle = cb.spoolAngle;
     }
-    let f=cableFrame(cb,cb._psiRaw,cb._wbRef); if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
-    const phiRaw=Math.atan2(f.T[1]-f.S.y, f.T[0]-f.S.x);
-    let dPhi=phiRaw-f.qctrl;
-    while(dPhi>Math.PI) dPhi-=Math.PI*2;
-    while(dPhi<-Math.PI) dPhi+=Math.PI*2;
-    const phi=f.qctrl+dPhi;
-    if(cb.side*(f.qctrl-phi)<-1e-4){
-      cb.side*=-1;
-      cb._psiRaw=undefined;
-      cb._wbRef=undefined;
-      const fFlip=cableFrame(cb);
-      if(!fFlip){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; cb._psiRaw=undefined; cb._wbRef=undefined; continue; }
-      f=fFlip;
+    // Migrate saves that have localAngle but predate spoolAngle tracking.
+    // Old code: side=+1 CCW → new spoolAngle<0; side=-1 CW → new spoolAngle>0.
+    if(cb._spoolAngle === undefined){
+      if(cb.spoolAngle !== undefined){
+        cb._spoolAngle = cb.spoolAngle;
+      } else if(cb.side !== undefined){
+        const S0=bodies[bodyIndex(cb.spool.id)]; if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
+        let T0; if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
+          const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; } else T0=[cb.tether.off[0],cb.tether.off[1]];
+        const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
+        const beta0 = d0 > S0.r ? Math.acos(Math.max(-1,Math.min(1,S0.r/d0))) : 0;
+        cb.spoolAngle = -cb.side * ((cb.wrap || 0) + beta0);
+        cb._spoolAngle = cb.spoolAngle;
+      } else {
+        cb._spoolAngle = 0;
+      }
     }
-    cb._psiRaw=f.qang;
-    cb._wbRef=f.wb;
-    const wb=f.wb;
-    cb._wrap=wb;                             // signed wound angle for rendering
-    cb.wrap=Math.max(0,wb);                  // non-negative display field (inspector)
+
+    const f=cableFrame(cb, cb._spoolAngle);
+    if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._cols2=null; cb._Lallow=null; continue; }
+
+    cb._spoolAngle = f.spoolAngle;
+    cb.spoolAngle  = f.spoolAngle;           // persist across save/load
+
     let C, active, cols, cols2=null;
     if(f.fullyWound){
-      const Cx=f.T[0]-f.Qctrl_x, Cy=f.T[1]-f.Qctrl_y;
-      const vQx=f.S.vx-f.S.w*f.ry_ctrl, vQy=f.S.vy+f.S.w*f.rx_ctrl;
+      // Cable fully wound: spool anchor = separation point.  Two constraints:
+      // spool angle cannot increase (i.e. spool-centre and tether cannot move
+      // away from each other in the direction that would increase the wound arc),
+      // and spool-centre ↔ tether distance is rigid (neither closer nor farther).
+      // Implemented as a 2-DOF hinge between the tether point and the anchor.
+      const Cx=f.T[0]-f.Ax, Cy=f.T[1]-f.Ay;
+      const vQx=f.S.vx-f.S.w*f.ry_anchor, vQy=f.S.vy+f.S.w*f.rx_anchor;
       const vTx=f.tb ? (f.tb.vx-f.tb.w*f.tryy) : 0;
       const vTy=f.tb ? (f.tb.vy+f.tb.w*f.trx) : 0;
-      const d=Math.hypot(Cx,Cy);
-      const nx=d>1e-9 ? Cx/d : (f.ux||1), ny=d>1e-9 ? Cy/d : (f.uy||0);
+      const dd=Math.hypot(Cx,Cy);
+      const nx=dd>1e-9 ? Cx/dd : (f.ux||1), ny=dd>1e-9 ? Cy/dd : (f.uy||0);
       const sepRate=nx*(vTx-vQx)+ny*(vTy-vQy);
-      cols=[];
-      cols2=[];
-      if(!f.S.static){ cols.push([f.is,-1,0, f.ry_ctrl]); cols2.push([f.is,0,-1,-f.rx_ctrl]); }
-      if(f.tb && !f.tb.static){ cols.push([f.ti,1,0,-f.tryy]); cols2.push([f.ti,0,1,f.trx]); }
+      cols=[]; cols2=[];
+      if(!f.S.static){ cols.push([f.is,-1,0, f.ry_anchor]); cols2.push([f.is,0,-1,-f.rx_anchor]); }
+      if(f.tb&&!f.tb.static){ cols.push([f.ti,1,0,-f.tryy]); cols2.push([f.ti,0,1,f.trx]); }
       C=Cx;
       active = (Math.hypot(Cx,Cy)>1e-4 || sepRate>0) && (cols.length>0 || cols2.length>0);
       cb._C2=Cy;
       cb._hinge=true;
       cb._Lallow=0;
-    } else if(f.mode==='tangent'){
-      const Lused=f.Lfree+f.rs*wb;
-      C=Lused-cb.Ltot;
-      cb._Lallow=cb.Ltot-f.rs*wb;
-      cols=f.cols;
-      active = C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0);
-      cb._hinge=false;
     } else {
-      const dc=Math.hypot(f.T[0]-f.Qctrl_x, f.T[1]-f.Qctrl_y);
-      C=dc-cb.Ltot;
-      cb._Lallow=cb.Ltot;
+      C=f.totalUsed - cb.Ltot;
+      cb._Lallow=f.Lallow;
       cols=f.cols;
       active = C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0);
       cb._hinge=false;

@@ -10,16 +10,15 @@
 // ============================================================================
 // ---- §16.1 · snapshots (reset baseline) ----
 let saved=null;
-function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})), gT:gases.map(g=>g.T), cW:cables.map(c=>c.wrap) }; }
+function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})), gT:gases.map(g=>g.T), cSA:cables.map(c=>c.spoolAngle) }; }
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
   if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=0;b.vy=0;b.w=0; } }
   gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i]; });
   constraints.forEach(c=>{ c._lam=[]; c._rows=[]; });
   cables.forEach((c,i)=>{
-    if(saved.cW[i]!=null) c.wrap=saved.cW[i];
+    if(saved.cSA[i]!=null){ c.spoolAngle=saved.cSA[i]; }
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
-    c._cols2=null; c._C2=0; c._Lallow=null; c._wrap=0;
-    c._psiRaw=undefined; c._wbRef=undefined; c._hinge=false;
+    c._cols2=null; c._C2=0; c._Lallow=null; c._spoolAngle=undefined; c._hinge=false;
   });
 }
 
