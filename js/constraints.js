@@ -141,7 +141,11 @@ function cableFrame(cb, spoolAngleRef){
   const ux = paidLength > 1e-9 ? (T[0]-Qx)/paidLength : 0;
   const uy = paidLength > 1e-9 ? (T[1]-Qy)/paidLength : 1;
 
-  // Jacobian for d/dt(totalUsed) = 0.
+  // Jacobian for d/dt(totalUsed) = 0. The -rs·sign angular term on the spool row
+  // was re-derived directly from d(totalUsed)/dt (chain rule through spoolAngle,
+  // beta, Lfree) and matches: it is the same physical row as the pre-rebuild
+  // +rs·side, given that convention's side = -sign(spoolAngle) (see the wrap/side
+  // reconstruction in physics.js's cable migration).
   let cols;
   if(tangentWins && !tetherInside){
     const d2 = d*d;

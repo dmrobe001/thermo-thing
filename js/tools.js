@@ -140,7 +140,13 @@ function applyCableHandle(ad,wx,wy){
   while(d>Math.PI) d-=Math.PI*2;
   while(d<-Math.PI) d+=Math.PI*2;
   cb.localAngle+=d;
-  // Recompute spoolAngle and Ltot from new geometry.
+  // Recompute spoolAngle from the new localAngle. Both fields must be set here,
+  // not just one: cb._spoolAngle is the live unwrap-continuity reference substep
+  // reads each physics step (physics.js §08.2) — leaving it stale would make the
+  // next step's unwrap jump by whatever angle the drag just covered; cb.spoolAngle
+  // is the persisted twin saved/loaded with the file, and won't be refreshed by a
+  // substep if the sim is paused. Ltot is re-derived so the drag also changes how
+  // much cable is "let out" at the new anchor, not just where the anchor sits.
   const f=cableFrame(cb); if(!f) return;
   cb._spoolAngle=f.spoolAngle;
   cb.spoolAngle =f.spoolAngle;
