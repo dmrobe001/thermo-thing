@@ -16,20 +16,18 @@ const TOOLS=[
   {id:'body',key:'2',tip:'Add body (2)',svg:'<circle cx="12" cy="12" r="7"/><path d="M12 8v8M8 12h8"/>'},
   {id:'pin',key:'3',tip:'Pin / hinge (3)',svg:'<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/>'},
   {id:'rod',key:'4',tip:'Rigid rod (4)',svg:'<circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M7.5 16.5l9-9"/>'},
-  {id:'weld',key:'5',tip:'Weld (5)',svg:'<rect x="8" y="8" width="8" height="8" rx="1"/><path d="M4 12h4M16 12h4M12 4v4M12 16v4"/>'},
-  {id:'slot',key:'6',tip:'Slot / prismatic (6)',svg:'<path d="M3 9h18M3 15h18"/><rect x="9" y="9" width="6" height="6" rx="1"/>'},
+  {id:'slot',key:'5',tip:'Slot / prismatic (5)',svg:'<path d="M3 9h18M3 15h18"/><rect x="9" y="9" width="6" height="6" rx="1"/>'},
   {id:'belt',key:'b',tip:'Belt (b)',svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
   {id:'knife',key:'k',tip:'Knife-edge wheel (k)',svg:'<path d="M4 16h16"/><path d="M12 16l3-9 3 9"/><circle cx="8" cy="16" r="1.5"/>'},
   {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
   {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
-  {id:'gas',key:'7',tip:'Gas piston (7)',svg:'<rect x="3" y="8" width="11" height="8" rx="1"/><path d="M14 10.5v3M14 12h7M18 9.5v5"/>'},
-  {id:'ground',key:'8',tip:'Ground pin (8)',svg:'<circle cx="12" cy="8" r="3"/><path d="M12 11v3M6 17h12M8 17l-2 3M12 17l-2 3M16 17l-2 3"/>'},
-  {id:'delete',key:'9',tip:'Delete (9)',svg:'<path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/>'},
+  {id:'gas',key:'6',tip:'Gas piston (6)',svg:'<rect x="3" y="8" width="11" height="8" rx="1"/><path d="M14 10.5v3M14 12h7M18 9.5v5"/>'},
+  {id:'delete',key:'7',tip:'Delete (7)',svg:'<path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/>'},
 ];
 let tool='select';
 const rail=document.getElementById('rail');
 TOOLS.forEach((t,i)=>{
-  if(i===1||i===2||i===10){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
+  if(i===1||i===2||i===9){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
   const el=document.createElement('button');el.className='tool';el.dataset.id=t.id;
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
@@ -48,7 +46,7 @@ function pickBody(wx,wy){
     if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
   return -1;
 }
-// topmost body under the cursor that isn't `exceptId` — lets the 2nd pin/weld
+// topmost body under the cursor that isn't `exceptId` — lets the 2nd pin
 // pick reach a body occluded by the one already selected
 function pickBodyExcept(wx,wy,exceptId){
   for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i]; if(b.id===exceptId) continue;
@@ -58,12 +56,13 @@ function pickBodyExcept(wx,wy,exceptId){
 function pickConstraint(wx,wy){
   const tol=10/cam.scale;
   for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i];
+    if(con.type==='rod'){
+      const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
+      if(distSeg(wx,wy,ax,ay,bx,by)<=tol) return i;
+      continue;
+    }
     const A=bodies[bodyIndex(con.a.id)]; if(!A)continue; const [ax,ay]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
-    if(con.type==='pin'||con.type==='weld'){ if((wx-ax)**2+(wy-ay)**2<=tol*tol) return i; }
-    else if(con.type==='ground'){ if((wx-con.world[0])**2+(wy-con.world[1])**2<=tol*tol) return i; }
-    else if(con.type==='rod'){ const B=bodies[bodyIndex(con.b.id)]; if(!B)continue;
-      const [bx,by]=worldPt(B,con.b.off);
-      if(distSeg(wx,wy,ax,ay,bx,by)<=tol) return i; }
+    if(con.type==='pin'){ if((wx-ax)**2+(wy-ay)**2<=tol*tol) return i; }
     else if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B)continue;
       if(distSeg(wx,wy,A.x,A.y,B.x,B.y)<=tol) return i; }
     else if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
@@ -105,12 +104,12 @@ function anchorTarget(wx,wy){
 // ---- §13.3 · constraint handles (edit anchors/directions in place) ----
 // draggable handles carried by each constraint
 function conHandles(con){
+  if(con.type==='rod'){
+    const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
+    return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}];
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
-  if(con.type==='pin'||con.type==='weld'){ const [x,y]=worldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
-  if(con.type==='ground'){ return [{which:'pivot',x:con.world[0],y:con.world[1]}]; }
-  if(con.type==='rod'){ const B=bodies[bodyIndex(con.b.id)]; if(!B) return [];
-    const [ax,ay]=worldPt(A,con.a.off); const [bx,by]=worldPt(B,con.b.off);
-    return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}]; }
+  if(con.type==='pin'){ const [x,y]=worldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
   if(con.type==='slot'){ const f=slotFrame(con);
     return [ {which:'anchor',x:f.wax,y:f.way},
              {which:'dir',x:f.anchor[0]+f.dW[0]*0.8, y:f.anchor[1]+f.dW[1]*0.8} ]; }
@@ -161,23 +160,24 @@ function pickHandle(wx,wy){
 // move an anchor while editing; snaps and (for rods) can re-bind to another body
 function applyHandle(ad, wx, wy){
   const con=ad.con;
-  if(con.type==='pin'||con.type==='weld'){
+  if(con.type==='pin'){
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     const s=snapAnchor(wx,wy,[A.id,B.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
     con.a.off=offOf(A,P); con.b.off=offOf(B,P);
-    if(con.type==='weld') con.restAng=A.th-B.th;
-  } else if(con.type==='ground'){
-    const A=bodies[bodyIndex(con.a.id)];
-    const s=snapAnchor(wx,wy,[A.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
-    con.world=[P[0],P[1]]; con.a.off=offOf(A,P);
   } else if(con.type==='rod'){
-    const s=snapAnchor(wx,wy); lastSnap=s; let body,P;
-    if(s){ body=s.body; P=s.wp; }
-    else { const bi=pickBody(wx,wy); if(bi>=0){ body=bodies[bi]; P=[wx,wy]; }
-           else { body=bodies[bodyIndex(ad.which==='A'?con.a.id:con.b.id)]; P=[wx,wy]; } }
-    const ep = ad.which==='A'? con.a : con.b; ep.id=body.id; ep.off=offOf(body,P);
-    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-    const [ax,ay]=worldPt(A,con.a.off), [bx,by]=worldPt(B,con.b.off); con.len=Math.hypot(ax-bx,ay-by);
+    // Snap to a body if one is under/near the cursor; otherwise the end
+    // re-binds to the background at the raw world point.
+    const s=snapAnchor(wx,wy); lastSnap=s;
+    const ep = ad.which==='A'? con.a : con.b;
+    if(s){ ep.id=s.body.id; ep.off=offOf(s.body,s.wp); }
+    else { const bi=pickBody(wx,wy);
+      if(bi>=0){ ep.id=bodies[bi].id; ep.off=offOf(bodies[bi],[wx,wy]); }
+      else { ep.id=null; ep.off=[wx,wy]; } }
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+    con.len=Math.hypot(wax-wbx,way-wby);
+    // Keep any welded end's rest angle consistent with the edited geometry.
+    if(con.weldA) setRodWeld(con,'A',true);
+    if(con.weldB) setRodWeld(con,'B',true);
   }
   else if(con.type==='slot'){
     if(ad.which==='anchor'){
@@ -216,8 +216,8 @@ function startPinch(){
 
 // ---- §13.5 · pointerdown (per-tool dispatch) ----
 // This is where each tool builds its constraint. The branches, in order, handle:
-// pinch guard, pan, body, select (+handles/grab), delete, ground, gas, belt/cvt,
-// knife, cable, pin/rod/weld, slot. Search  tool==='<name>'  to reach one.
+// pinch guard, pan, body, select (+handles/grab), delete, gas, belt/cvt,
+// knife, cable, pin, rod, slot. Search  tool==='<name>'  to reach one.
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);
   const rect=cv.getBoundingClientRect();
@@ -259,11 +259,6 @@ cv.addEventListener('pointerdown',e=>{
     const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ gases.splice(gsi,1); clearSelection(); saveState(); return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); }
-    return;
-  }
-  if(tool==='ground'){
-    const t=anchorTarget(wx,wy);
-    if(t){ constraints.push({type:'ground', a:{id:t.body.id, off:offOf(t.body,t.wp)}, world:[t.wp[0],t.wp[1]], sel:false}); saveState(); }
     return;
   }
   if(tool==='gas'){
@@ -328,36 +323,38 @@ cv.addEventListener('pointerdown',e=>{
     pending=null; saveState();
     return;
   }
-  if(tool==='pin'||tool==='rod'||tool==='weld'){
+  if(tool==='pin'){
     // FIRST pick — snapped anchor on body A; pending.wp is the pivot world point
     if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
       pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
-    const Aid=pending.id, Aoff=pending.off, Abody=bodies[bodyIndex(Aid)];
-    let Bbody, Boff;
-    if(tool==='rod'){
-      // a rod spans a distance: the second click is its own (snapped) endpoint
-      const t=anchorTarget(wx,wy); if(!t) return;
-      Bbody=t.body; Boff=offOf(Bbody,t.wp);
-    } else {
-      // pin / weld share one pivot: the second click only *names* body B — click
-      // any part of it, including where A covers it — and B is anchored at the pivot
-      const bi=pickBodyExcept(wx,wy,Aid);
-      Bbody = bi>=0 ? bodies[bi] : (()=>{ const s=snapAnchor(wx,wy); return (s&&s.body.id!==Aid)?s.body:null; })();
-      if(!Bbody) return;                     // nothing indicated — keep the pivot and wait
-      Boff = offOf(Bbody, pending.wp);        // place B's anchor at the first pivot
-    }
-    if(Bbody.id===Aid){ return; }
-    if(tool==='pin'){
-      constraints.push({type:'pin', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff}, sel:false});
-    } else if(tool==='weld'){
-      constraints.push({type:'weld', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff},
-                        restAng: Abody.th-Bbody.th, sel:false});
-    } else if(tool==='rod'){
-      const [wax,way]=worldPt(Abody,Aoff); const [wbx,wby]=worldPt(Bbody,Boff);
-      constraints.push({type:'rod', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff},
-                        len:Math.hypot(wax-wbx,way-wby), sel:false});
-    }
+    const Aid=pending.id, Aoff=pending.off;
+    // the second click only *names* body B — click any part of it, including
+    // where A covers it — and B is anchored at the first pivot
+    const bi=pickBodyExcept(wx,wy,Aid);
+    const Bbody = bi>=0 ? bodies[bi] : (()=>{ const s=snapAnchor(wx,wy); return (s&&s.body.id!==Aid)?s.body:null; })();
+    if(!Bbody || Bbody.id===Aid) return;   // nothing indicated — keep the pivot and wait
+    const Boff = offOf(Bbody, pending.wp); // place B's anchor at the first pivot
+    constraints.push({type:'pin', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff}, sel:false});
     pending=null; saveState();
+    return;
+  }
+  if(tool==='rod'){
+    // Each end snaps to a body if one is under/near the click, else attaches
+    // to the background at the raw world point (id:null).
+    if(!pending){ const t=anchorTarget(wx,wy);
+      pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+      return; }
+    const t=anchorTarget(wx,wy);
+    const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
+    const Aep={id:pending.id, off:pending.off}; pending=null;
+    if(Aep.id==null && Bep.id==null) return;      // a rod needs at least one real body
+    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself
+    // A rod touching the background defaults to both ends welded — a rigid
+    // strut out of the wall — since that's the anchoring use case; the user
+    // can tap either end afterward to free it into a pin.
+    const bg = Aep.id==null || Bep.id==null;
+    constraints.push(makeRodCon(Aep, Bep, bg, bg));
+    saveState();
     return;
   }
   if(tool==='slot'){
@@ -410,8 +407,10 @@ cv.addEventListener('pointermove',e=>{
       const [gx,gy]=worldPt(G,drag.off); G.x+=mouseWorld[0]-gx; G.y+=mouseWorld[1]-gy;
       projectPositions(8);
     } else {
-      // pull the grabbed point toward the cursor; the island articulates to comply
-      const temp={type:'ground', a:{id:G.id, off:drag.off}, world:[mouseWorld[0],mouseWorld[1]]};
+      // pull the grabbed point toward the cursor; the island articulates to comply.
+      // 'dragpin' is an internal-only row type (§06.5) — never added to
+      // `constraints`, just fed through projectPositions as a transient goal.
+      const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[mouseWorld[0],mouseWorld[1]]};
       projectPositions(8,[temp]);
     }
     saveState();
@@ -425,7 +424,14 @@ function endPointer(e){
   if(pointers.size===0) pinchCooldown=false;
   if(pinchCooldown){ cancelSingle(); return; }
 
-  if(anchorDrag){ anchorDrag=null; lastSnap=null; downScreen=null; return; }
+  if(anchorDrag){
+    // A tap (no drag) on a rod's own control point toggles that end between a
+    // freely-rotating pin and a rotation-locked weld, instead of relocating it.
+    if(!movedFar && anchorDrag.con && anchorDrag.con.type==='rod' && (anchorDrag.which==='A'||anchorDrag.which==='B')){
+      toggleRodWeld(anchorDrag.con, anchorDrag.which); saveState();
+    }
+    anchorDrag=null; lastSnap=null; downScreen=null; return;
+  }
   if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
   else if(bodyPreview){ const r=bodyPreview.r<0.12?0.4:bodyPreview.r;
     const b=makeBody(bodyPreview.cx,bodyPreview.cy,r,false); bodies.push(b); bodyPreview=null;

@@ -44,17 +44,20 @@ function reactionOf(con){
   if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
     return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }
+  if(con.type==='rod'){
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+    let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;
+    const r={x:wax,y:way, fx:(dx/L)*(l[0]/h), fy:(dy/L)*(l[0]/h)};
+    let idx=1;
+    if(con.weldA){ r.tau=l[idx]/h; idx++; }
+    if(con.weldB && r.tau===undefined){ r.tau=l[idx]/h; }
+    return r;
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return null;
   const [wax,way]=worldPt(A,con.a.off);
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const nx=-hh[1]/hl, ny=hh[0]/hl; return {x:wax,y:way, fx:nx*(l[0]/h), fy:ny*(l[0]/h)}; }
-  if(con.type==='pin'||con.type==='ground'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }
-  if(con.type==='rod'){
-    const B=bodies[bodyIndex(con.b.id)]; const [wbx,wby]=worldPt(B,con.b.off);
-    let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;
-    return {x:wax,y:way, fx:(dx/L)*(l[0]/h), fy:(dy/L)*(l[0]/h)};
-  }
-  if(con.type==='weld'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h, tau:l[2]/h}; }
+  if(con.type==='pin'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }
   if(con.type==='slot'){ const f=slotFrame(con);
     return {x:f.wax,y:f.way, fx:f.n[0]*(l[0]/h), fy:f.n[1]*(l[0]/h),
             tau:(con.lockRot&&l[1]!==undefined)? l[1]/h : undefined}; }
