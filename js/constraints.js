@@ -58,16 +58,22 @@ function gasFrame(g){
 //   Q = D (tangent wins) if |DBC| < |spoolAngle|;  else Q = A.
 //
 //   windAngle (same sign as spoolAngle):
-//     tangent wins: windAngle = spoolAngle − sign·arccos(rs/d)   [= 0 at transition]
+//     tangent wins: windAngle = spoolAngle − sign·arccos(rs/d)   [= 0 at transition;
+//       arccos(rs/d) reads as 0 once d≤rs, so this is one continuous formula]
 //     anchor wins:  windAngle = 0
 //   woundLength = |windAngle| · rs
-//   paidLength  = |T − Q|  (= sqrt(d²−rs²) when tangent wins and d > rs)
+//   paidLength  = Lfree = sqrt(max(0, d²−rs²))  when tangent wins (0 once d≤rs);
+//                 |T − Q|  when anchor wins (Q=A, an ordinary rod to T)
 //   totalUsed   = woundLength + paidLength
 //
-//   Jacobian constrains d/dt(totalUsed) = 0.
-//   Tangent mode (d>rs): Jx=(Dx·Lfree − rs·sign·Dy)/d², Jy=(Dy·Lfree + rs·sign·Dx)/d²;
+//   Jacobian constrains d/dt(totalUsed) = 0, selected by tangentWins alone —
+//   NOT also by d≤rs. A many-turn wind can overshoot to d≤rs for a step near
+//   the ℓ→0 singularity while still genuinely in the tangent regime (large
+//   |spoolAngle|); Lfree is already 0 there, so the tangent-mode row stays
+//   the right (and continuous) one. Only the anchor-wins case is a real rod.
+//   Tangent mode: Jx=(Dx·Lfree − rs·sign·Dy)/d², Jy=(Dy·Lfree + rs·sign·Dx)/d²;
 //     spool [−Jx, −Jy, −rs·sign]; tether [Jx, Jy, moment arm].
-//   Direct mode (Q=A or d≤rs): spool [−ux,−uy, ux·ry_Q−uy·rx_Q]; tether [ux,uy,arm].
+//   Direct/rod mode (Q=A): spool [−ux,−uy, ux·ry_Q−uy·rx_Q]; tether [ux,uy,arm].
 //   Returns null only when the spool body is missing.
 function cableFrame(cb, spoolAngleRef){
   const S=bodies[bodyIndex(cb.spool.id)]; if(!S) return null;
@@ -106,28 +112,33 @@ function cableFrame(cb, spoolAngleRef){
   }
   const sign = spoolAngle >= 0 ? 1 : -1;
 
-  // Tangent point D and DBC angle.
+  // Tangent point D and DBC angle. Lfree is defined for any d (0 once d<=rs)
+  // so it stays the source of truth for the free length even through a
+  // step that momentarily overshoots the rim — see the tangentWins branch
+  // below.
   const tetherInside = d <= rs;
-  let tangentAngle, dbc, beta=0, Lfree=0;
-  if(!tetherInside){
-    beta         = Math.acos(Math.max(-1, Math.min(1, rs/d)));
-    tangentAngle = tetherAngle - sign*beta;    // D on winding side of T→B line
-    dbc          = beta;                        // |DBC| = arccos(rs/d)
-    Lfree        = Math.sqrt(Math.max(0, d*d - rs*rs));
-  } else {
-    tangentAngle = d > 1e-9 ? tetherAngle : anchorAngle;
-    dbc          = 0;
-  }
+  const beta  = tetherInside ? 0 : Math.acos(Math.max(-1, Math.min(1, rs/d)));
+  const Lfree = Math.sqrt(Math.max(0, d*d - rs*rs));
+  const tangentAngle = tetherInside ? (d > 1e-9 ? tetherAngle : anchorAngle) : (tetherAngle - sign*beta);
+  const dbc = beta;                              // |DBC| = arccos(rs/d), 0 when inside
   const rx_tan = rs*Math.cos(tangentAngle), ry_tan = rs*Math.sin(tangentAngle);
   const Qtan_x = S.x + rx_tan, Qtan_y = S.y + ry_tan;
 
-  // Separation point Q.
+  // Separation point Q. tangentWins governs both Q's choice and (below) which
+  // Jacobian form applies — it must NOT also fork on tetherInside: a body
+  // deep in a many-turn wind can overshoot to d<=rs for a step near the
+  // ℓ->0 singularity while still genuinely in the tangent regime (large
+  // |spoolAngle|), and Lfree already degrades continuously to 0 there. Only
+  // gating on tetherInside forced a jump to the anchor-rod formula against
+  // the wrong point (Qtan, not A) for that step — a large, energy-adding
+  // direction discontinuity, not the harmless near-Δ=0 interior tether the
+  // rod formula is actually for (design note §C.6).
   const tangentWins = dbc < Math.abs(spoolAngle) - 1e-10;
   let Qx, Qy, rx_Q, ry_Q, windAngle, paidLength;
   if(tangentWins){
     Qx = Qtan_x; Qy = Qtan_y; rx_Q = rx_tan; ry_Q = ry_tan;
-    windAngle  = !tetherInside ? spoolAngle - sign*beta : spoolAngle;
-    paidLength = !tetherInside ? Lfree : Math.hypot(T[0]-Qx, T[1]-Qy);
+    windAngle  = spoolAngle - sign*beta;
+    paidLength = Lfree;
   } else {
     Qx = Ax; Qy = Ay; rx_Q = rx_anchor; ry_Q = ry_anchor;
     windAngle  = 0;
@@ -136,7 +147,6 @@ function cableFrame(cb, spoolAngleRef){
   const woundLength = Math.abs(windAngle) * rs;
   const totalUsed   = woundLength + paidLength;
   const Lallow      = cb.Ltot - woundLength;
-  const fullyWound  = Lallow <= 1e-6;
 
   const ux = paidLength > 1e-9 ? (T[0]-Qx)/paidLength : 0;
   const uy = paidLength > 1e-9 ? (T[1]-Qy)/paidLength : 1;
@@ -147,8 +157,12 @@ function cableFrame(cb, spoolAngleRef){
   // +rs·side, given that convention's side = -sign(spoolAngle) (see the wrap/side
   // reconstruction in physics.js's cable migration).
   let cols;
-  if(tangentWins && !tetherInside){
-    const d2 = d*d;
+  if(tangentWins){
+    // d2 floors away from 0 for a step that overshoots deep past the rim
+    // (large angular rate near ℓ->0, see cableFrame's header) — Lfree is
+    // already 0 there, so the row is still the correct tangential direction,
+    // just guarded against an actual division by a near-zero d.
+    const d2 = Math.max(d*d, 1e-9);
     const Jx = (Dx*Lfree - rs*sign*Dy) / d2;
     const Jy = (Dy*Lfree + rs*sign*Dx) / d2;
     cols=[];
@@ -162,7 +176,7 @@ function cableFrame(cb, spoolAngleRef){
 
   return {
     S, rs, T, Qx, Qy, ux, uy, cols,
-    spoolAngle, windAngle, woundLength, paidLength, totalUsed, Lallow, fullyWound,
+    spoolAngle, windAngle, woundLength, paidLength, totalUsed, Lallow,
     Lfree, Ax, Ay, rx_anchor, ry_anchor, anchorAngle,
     tangentAngle, rx_tan, ry_tan, Qtan_x, Qtan_y, tangentWins,
     rx_Q, ry_Q, localAngle, tb, ti, trx, tryy, is, tetherInside

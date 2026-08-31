@@ -18,7 +18,7 @@ function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodi
   cables.forEach((c,i)=>{
     if(saved.cSA[i]!=null){ c.spoolAngle=saved.cSA[i]; }
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
-    c._cols2=null; c._C2=0; c._Lallow=null; c._spoolAngle=undefined; c._hinge=false;
+    c._Lallow=null; c._spoolAngle=undefined;
   });
 }
 
