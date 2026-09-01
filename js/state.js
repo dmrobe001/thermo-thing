@@ -15,7 +15,9 @@ const sctx = spark.getContext('2d');
 // ---- §04.2 · world arrays ----
 let bodies = [];        // {x,y,th, vx,vy,w, mass, I, invM, invI, r, static, sel}
 let constraints = [];   // typed; see makers below
-let gases = [];         // gas-piston force elements (see gasFrame / substep step 5)
+let gases = [];         // gas volumes -- vessels/pistons with n,T,gamma (see gasFrame, constraints.js §06.2)
+let heatInteractions = [];  // body<->gas/background heat couplings, see physics.js §08.5
+let flowInteractions = [];  // body<->gas/background mass-flow couplings, see physics.js §08.5
 let cables = [];        // radial-ratchet cable elements (unilateral)
 let springs = [];       // linear (Hookean) spring force elements, see constraints.js §06.6
 let rotSprings = [];    // rotational (torsional) spring force elements, see constraints.js §06.6
@@ -34,8 +36,13 @@ let uid = 1;
 // beta only needs to keep per-step position drift small enough for that rescale's
 // keTarget to stay non-negative, not to be leak-free on its own.
 // reg: Tikhonov term added to the Schur diagonal so redundant rows stay solvable.
+// bg: the background, which counts as an infinite-capacity gas (spec: "the
+// background counts as a gas, with some global temperature and pressure") --
+// any heat/flow interaction whose gasId is null couples to this instead of a
+// real gases[] entry, and it never itself changes from that exchange.
 const sim = { running:false, gravity:true, g:9.8, showForces:true, showGrid:true,
-              h:1/120, maxSub:6, beta:1.0, reg:1e-8, forceRef:1 };
+              h:1/120, maxSub:6, beta:1.0, reg:1e-8, forceRef:1,
+              bg:{T:1.0, P:1.0, gamma:1.4} };
 
 // camera: world point at screen centre, px per world unit
 const cam = { x:0, y:2.2, scale:64 };

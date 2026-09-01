@@ -147,20 +147,34 @@ function slotRailAngle(con){
 }
 
 // ---- §06.2 · gasFrame ----
-// gas cylinder frame: piston point on A, closed-end (head) + axis fixed in B or world.
-// x is the signed gas-column length along the axis (clamped so V never goes <= 0).
+// gas vessel frame: a rectangle of width `bore` running along an axis fixed
+// in the head body's frame (or the world, if head.id is null). The far
+// (piston) face is either a real, movable body -- g.piston:{id,off}, exactly
+// the {id,off} shape every other endpoint uses -- or, when g.piston is null,
+// a fixed length g.len: a static vessel with no movable wall at all (the
+// "two-corner rectangle" placement with neither corner free to move). x is
+// the signed axial length (clamped so V never goes <= 0); everything else
+// (drawGas, gasPolygon, the piston force) is unchanged by which case this is.
 function gasFrame(g){
-  const A=bodies[bodyIndex(g.a.id)];
-  const [pax,pay,prx,pry]=worldPt(A,g.a.off);
   let hx,hy,dW,B=null,ib=-1,hrx=0,hry=0;
   if(g.head.id!=null){ ib=bodyIndex(g.head.id); B=bodies[ib];
     const [x,y,rx,ry]=worldPt(B,g.head.off); hx=x;hy=y;hrx=rx;hry=ry;
     dW=R(B.th,g.head.dir[0],g.head.dir[1]); }
   else { hx=g.head.off[0]; hy=g.head.off[1]; dW=[g.head.dir[0],g.head.dir[1]]; }
   const dl=Math.hypot(dW[0],dW[1])||1; dW=[dW[0]/dl,dW[1]/dl];
-  const x=(pax-hx)*dW[0]+(pay-hy)*dW[1];
-  return {A,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,0.03)};
+  let A=null, ia=-1, pax,pay,prx=0,pry=0,x;
+  if(g.piston){ ia=bodyIndex(g.piston.id); A=bodies[ia];
+    const [px,py,rx,ry]=worldPt(A,g.piston.off); pax=px;pay=py;prx=rx;pry=ry;
+    x=(pax-hx)*dW[0]+(pay-hy)*dW[1];
+  } else {
+    x=g.len; pax=hx+dW[0]*x; pay=hy+dW[1]*x;
+  }
+  return {A,ia,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,0.03)};
 }
+// Midpoint of a gas's rectangle -- a cheap stand-in for its centroid, used
+// only for drawing/hit-testing heat/flow interactions (render.js §11.4c,
+// tools.js §13.2), never for physics.
+function gasCentroid(g){ const f=gasFrame(g); return [(f.hx+f.pax)/2,(f.hy+f.pay)/2]; }
 
 // ---- §06.3 · cableFrame ----
 // Cable geometry based on a consistently-defined spool angle.
