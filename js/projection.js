@@ -53,13 +53,25 @@ function reactionOf(con){
     if(con.weldB && r.tau===undefined){ r.tau=l[idx]/h; }
     return r;
   }
+  if(con.type==='slot'){
+    // Row order mirrors rowsFor: prismaticA?, prismaticB?, then the lateral
+    // (point-on-line) row once both are locked.
+    const [wax,way]=epWorld(con.a);
+    let idx=0, tau;
+    if(con.prismaticA){ tau=l[idx]; idx++; }
+    if(con.prismaticB){ if(tau===undefined) tau=l[idx]; idx++; }
+    let fx=0, fy=0;
+    if(con.prismaticA && con.prismaticB && l[idx]!==undefined){
+      const railAngle=(con.b.id!=null?bodies[bodyIndex(con.b.id)].th:0)-con.restAngB;
+      const nx=-Math.sin(railAngle), ny=Math.cos(railAngle);
+      fx=nx*(l[idx]/h); fy=ny*(l[idx]/h);
+    }
+    return {x:wax,y:way, fx, fy, tau: tau!==undefined?tau/h:undefined};
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return null;
   const [wax,way]=worldPt(A,con.a.off);
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const nx=-hh[1]/hl, ny=hh[0]/hl; return {x:wax,y:way, fx:nx*(l[0]/h), fy:ny*(l[0]/h)}; }
   if(con.type==='pin'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }
-  if(con.type==='slot'){ const f=slotFrame(con);
-    return {x:f.wax,y:f.way, fx:f.n[0]*(l[0]/h), fy:f.n[1]*(l[0]/h),
-            tau:(con.lockRot&&l[1]!==undefined)? l[1]/h : undefined}; }
   return null;
 }

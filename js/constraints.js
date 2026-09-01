@@ -7,50 +7,119 @@
 //  a nonholonomic row (velocity-only, no position invariant — excluded from the
 //  §09 position projection). The §08 solver scales C by beta/h (Baumgarte);
 //  the §09 projection uses C directly. Same rows serve both.
-//    §06.1  bodyIndex (id -> array slot)
+//    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
+//           rod/slot constructors and endpoint-lock toggles built on them
 //    §06.2  gasFrame   (cylinder geometry for the gas force element, §08.1/§08.5)
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
-//    §06.4  slotFrame  (point-on-line rail geometry)
+//    §06.4  (retired — see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
 // ============================================================================
 
 // ---- §06.1 · bodyIndex ----
 function bodyIndex(id){ return bodies.findIndex(b=>b.id===id); }
 
-// Resolve a rod endpoint {id, off} to its world point. id===null means the
+// Resolve an endpoint {id, off} to its world point. id===null means the
 // endpoint is fixed to the background (world-anchored) rather than riding a
 // body — off then holds the world coordinate directly, mirroring the
-// null-id convention already used by gas heads, cable tethers and slot lines.
+// null-id convention already used by gas heads and cable tethers. Shared by
+// rod and slot, whose endpoints are both {id, off} pairs.
 function epWorld(ep){
   if(ep.id==null) return [ep.off[0], ep.off[1], 0, 0];
   return worldPt(bodies[bodyIndex(ep.id)], ep.off);
 }
+// The two-endpoint geometry rod and slot both build their rows from: each
+// endpoint resolved (body or background), the segment A->B, its length, and
+// its perpendicular. phi is that segment's live world angle — the reference
+// a weld/prismatic lock's rest angle is measured against.
+function twoPointFrame(con){
+  const hasA=con.a.id!=null, hasB=con.b.id!=null;
+  const A = hasA ? bodies[bodyIndex(con.a.id)] : null;
+  const B = hasB ? bodies[bodyIndex(con.b.id)] : null;
+  const [wax,way,rax,ray] = hasA ? worldPt(A,con.a.off) : [con.a.off[0],con.a.off[1],0,0];
+  const [wbx,wby,rbx,rby] = hasB ? worldPt(B,con.b.off) : [con.b.off[0],con.b.off[1],0,0];
+  const ia = hasA?bodyIndex(con.a.id):-1, ib = hasB?bodyIndex(con.b.id):-1;
+  const dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux, phi=Math.atan2(dy,dx);
+  return {hasA,hasB,A,B,ia,ib,wax,way,rax,ray,wbx,wby,rbx,rby,ux,uy,nx,ny,L,phi};
+}
+// One row locking `which` end's frame angle — a body's θ, or 0 for a
+// background end — to the live direction φ of the segment from B to A.
+// Shared by rod's weld and slot's prismatic lock: both are the same
+// operation (pin an endpoint's rotation to the line joining the two
+// endpoints), just attached to different base constraints.
+function endpointAngleLockRow(which, f, restAng){
+  const {hasA,hasB,ia,ib,rax,ray,rbx,rby,nx,ny,L,phi} = f;
+  const cols=[];
+  if(which==='A'){
+    if(hasA) cols.push([ia, -nx/L, -ny/L, 1+(nx*ray-ny*rax)/L]);
+    if(hasB) cols.push([ib,  nx/L,  ny/L, -(nx*rby-ny*rbx)/L]);
+  } else {
+    if(hasA) cols.push([ia, -nx/L, -ny/L, -(ny*rax-nx*ray)/L]);
+    if(hasB) cols.push([ib,  nx/L,  ny/L, 1+(ny*rbx-nx*rby)/L]);
+  }
+  const thHere = which==='A' ? (hasA?f.A.th:0) : (hasB?f.B.th:0);
+  return { cols, C: thHere-phi-restAng };
+}
+// Capture (or recapture) endpoint `which`'s rest angle against the live A->B
+// direction. Called whenever a per-endpoint lock (rod weld, slot prismatic)
+// turns on, so toggling never snaps geometry.
+function captureRestAngle(con, which){
+  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+  const phi=Math.atan2(way-wby,wax-wbx);
+  const ep = which==='A'?con.a:con.b;
+  const th = ep.id!=null ? bodies[bodyIndex(ep.id)].th : 0;
+  if(which==='A') con.restAngA=th-phi; else con.restAngB=th-phi;
+}
 
 // Build a rod constraint between two endpoints, deriving its rest length and
-// (for any welded end) the rest angle between that end's body — or the fixed
-// world frame, for a background end — and the rod's own direction.
+// (for any welded end) its rest angle.
 function makeRodCon(a,b,weldA,weldB){
   const [wax,way]=epWorld(a), [wbx,wby]=epWorld(b);
-  const len=Math.hypot(wax-wbx,way-wby);
-  const con={type:'rod', a, b, len, weldA:!!weldA, weldB:!!weldB, sel:false};
-  const phi=Math.atan2(way-wby,wax-wbx);
-  if(con.weldA) con.restAngA=(a.id!=null?bodies[bodyIndex(a.id)].th:0)-phi;
-  if(con.weldB) con.restAngB=(b.id!=null?bodies[bodyIndex(b.id)].th:0)-phi;
+  const con={type:'rod', a, b, len:Math.hypot(wax-wbx,way-wby), weldA:!!weldA, weldB:!!weldB, sel:false};
+  if(con.weldA) captureRestAngle(con,'A');
+  if(con.weldB) captureRestAngle(con,'B');
   return con;
 }
 // Set (or clear) one end's weld flag, recapturing that end's rest angle
 // against the rod's *current* direction so toggling never snaps geometry.
 function setRodWeld(con,which,val){
   const key = which==='A'?'weldA':'weldB'; con[key]=!!val;
-  if(con[key]){
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    const phi=Math.atan2(way-wby,wax-wbx);
-    const ep = which==='A'?con.a:con.b;
-    const th = ep.id!=null ? bodies[bodyIndex(ep.id)].th : 0;
-    if(which==='A') con.restAngA=th-phi; else con.restAngB=th-phi;
-  }
+  if(con[key]) captureRestAngle(con,which);
 }
 function toggleRodWeld(con,which){ setRodWeld(con,which, !con[which==='A'?'weldA':'weldB']); }
+
+// Build a slot/rail constraint between two endpoints. Unlike a rod, a slot
+// with both ends "pin" is physically inert (§06.5) — prismaticA/prismaticB
+// are what give it any rows at all, so their rest angles are always needed
+// once either is set.
+function makeSlotCon(a,b,prismaticA,prismaticB){
+  const con={type:'slot', a, b, prismaticA:!!prismaticA, prismaticB:!!prismaticB, sel:false};
+  if(con.prismaticA) captureRestAngle(con,'A');
+  if(con.prismaticB) captureRestAngle(con,'B');
+  return con;
+}
+// Set (or clear) one end's prismatic flag. If this toggle completes the
+// both-locked (rigid) state, also refresh the *other* end's rest angle —
+// it may have gone stale while only one side was locked — so the lateral
+// position lock (added only once both are true, §06.5) starts exactly on
+// the rail with no snap.
+function setSlotLock(con,which,val){
+  const key = which==='A'?'prismaticA':'prismaticB'; con[key]=!!val;
+  if(con[key]) captureRestAngle(con,which);
+  if(con.prismaticA && con.prismaticB){ captureRestAngle(con,'A'); captureRestAngle(con,'B'); }
+}
+function toggleSlotLock(con,which){ setSlotLock(con,which, !con[which==='A'?'prismaticA':'prismaticB']); }
+// The slot's current rail angle, for rendering and for the lateral lock row:
+// tracked via whichever end is locked (they agree once both are), or — with
+// neither locked, the cosmetic-only case — just the live segment direction.
+function slotRailAngle(con){
+  if(con.prismaticB){ const B=con.b.id!=null?bodies[bodyIndex(con.b.id)]:null;
+    return (B?B.th:0)-con.restAngB; }
+  if(con.prismaticA){ const A=con.a.id!=null?bodies[bodyIndex(con.a.id)]:null;
+    return (A?A.th:0)-con.restAngA; }
+  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+  return Math.atan2(way-wby,wax-wbx);
+}
 
 // ---- §06.2 · gasFrame ----
 // gas cylinder frame: piston point on A, closed-end (head) + axis fixed in B or world.
@@ -224,21 +293,9 @@ function cableCurrentLength(cb, f){
   return cf.totalUsed;
 }
 
-// ---- §06.4 · slotFrame ----
-// resolve a slot's world line frame: slider point on A, plus a line (anchor + unit
-// direction) fixed in body B — or in the world when line.id is null
-function slotFrame(con){
-  const A=bodies[bodyIndex(con.a.id)];
-  const [wax,way,rax,ray]=worldPt(A,con.a.off);
-  let anchor,dW,B=null,ib=-1,rbx=0,rby=0;
-  if(con.line.id!=null){ ib=bodyIndex(con.line.id); B=bodies[ib];
-    const [ax,ay,rx,ry]=worldPt(B,con.line.off); anchor=[ax,ay]; rbx=rx; rby=ry;
-    dW=R(B.th, con.line.dir[0], con.line.dir[1]); }
-  else { anchor=[con.line.off[0],con.line.off[1]]; dW=[con.line.dir[0],con.line.dir[1]]; }
-  const dl=Math.hypot(dW[0],dW[1])||1; dW=[dW[0]/dl,dW[1]/dl];
-  const n=[-dW[1],dW[0]];                       // unit normal to the rail
-  return {A,wax,way,rax,ray,B,ib,rbx,rby,anchor,dW,n};
-}
+// ---- §06.4 · (slotFrame retired — slot is now a two-endpoint constraint,
+// built from the shared twoPointFrame/endpointAngleLockRow in §06.1, exactly
+// like rod. See rowsFor's 'slot' branch below.) ----
 
 // ---- §06.5 · rowsFor (constraint -> rows dispatch) ----
 // One branch per con.type; to reach a specific joint's row math, search its tag,
@@ -247,7 +304,11 @@ function slotFrame(con){
 //   rod            1   distance held along the connecting line; +1 per welded
 //                      end (locks that end's body — or the fixed world frame,
 //                      for a background end — to the rod's own direction)
-//   slot           1   point-on-line (across-rail zero); +1 more if lockRot (prismatic)
+//   slot           0   two pins = purely visual; +1 per "prismatic" end
+//                      (locks that end to the segment direction, as rod's
+//                      weld does); +1 more once BOTH ends are prismatic
+//                      (kills lateral drift off the rail — the classic
+//                      point-on-line lock, giving a rigid prismatic joint)
 //   belt           1   fixed phase ratio of two rim angles (holonomic)
 //   knife          1   no-side-slip contact (NONHOLONOMIC, nh:true)
 //   cvt            1   tangential match at a variable-radius contact (NONHOLONOMIC)
@@ -282,58 +343,63 @@ function rowsFor(con){
   if(con.type==='rod'){
     // Either end may be background-anchored (id===null, off holds the world
     // point directly — §06.1 epWorld) instead of riding a body.
-    const hasA=con.a.id!=null, hasB=con.b.id!=null;
-    const A = hasA ? bodies[bodyIndex(con.a.id)] : null;
-    const B = hasB ? bodies[bodyIndex(con.b.id)] : null;
-    const [wax,way,rax,ray] = hasA ? worldPt(A,con.a.off) : [con.a.off[0],con.a.off[1],0,0];
-    const [wbx,wby,rbx,rby] = hasB ? worldPt(B,con.b.off) : [con.b.off[0],con.b.off[1],0,0];
-    const ia = hasA?bodyIndex(con.a.id):-1, ib = hasB?bodyIndex(con.b.id):-1;
-    let dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
-    const ux=dx/L, uy=dy/L, C=L-con.len;
+    const f=twoPointFrame(con);
+    const {hasA,hasB,ia,ib,rax,ray,rbx,rby,ux,uy,L}=f;
     const distCols=[];
     if(hasA) distCols.push([ia, ux, uy, -ux*ray+uy*rax]);
     if(hasB) distCols.push([ib,-ux,-uy,  ux*rby-uy*rbx]);
-    const rows=[{ cols:distCols, C }];
-    // A welded end locks its body's angle (or, for a background end, the fixed
-    // world frame — a zero contribution) to the rod's own direction φ. The
-    // Jacobian is the rod's angular rate ω = n·(vA−vB)/L (n = perp to the rod),
-    // so a weld-A row reads (θȦ − ω) and a weld-B row (θḂ − ω); both share the
-    // same ω terms and differ only in which side's θ̇ is added.
-    // φ = atan2(dy,dx) is recomputed fresh each step (not unwrap-tracked like
-    // the cable's spoolAngle), so a welded end that spins through more than
-    // ~half a turn between steps can see its Baumgarte bias jump — fine for
-    // the intended use (fixed/rigid attachments), not for a fast-spinning weld.
-    if(con.weldA || con.weldB){
-      const nx=-uy, ny=ux, phi=Math.atan2(dy,dx);
-      if(con.weldA){
-        const cols=[];
-        if(hasA) cols.push([ia, -nx/L, -ny/L, 1+(nx*ray-ny*rax)/L]);
-        if(hasB) cols.push([ib,  nx/L,  ny/L, -(nx*rby-ny*rbx)/L]);
-        rows.push({ cols, C: (hasA?A.th:0)-phi-con.restAngA });
-      }
-      if(con.weldB){
-        const cols=[];
-        if(hasA) cols.push([ia, -nx/L, -ny/L, -(ny*rax-nx*ray)/L]);
-        if(hasB) cols.push([ib,  nx/L,  ny/L, 1+(ny*rbx-nx*rby)/L]);
-        rows.push({ cols, C: (hasB?B.th:0)-phi-con.restAngB });
-      }
-    }
+    const rows=[{ cols:distCols, C:L-con.len }];
+    // A welded end locks its body's angle (or, for a background end, the
+    // fixed world frame) to the rod's own direction φ — see
+    // endpointAngleLockRow. φ is recomputed fresh each step (not
+    // unwrap-tracked like the cable's spoolAngle), so a welded end that
+    // spins through more than ~half a turn between steps can see its
+    // Baumgarte bias jump — fine for the intended use (fixed/rigid
+    // attachments), not for a fast-spinning weld.
+    if(con.weldA) rows.push(endpointAngleLockRow('A', f, con.restAngA));
+    if(con.weldB) rows.push(endpointAngleLockRow('B', f, con.restAngB));
     return rows;
   }
   if(con.type==='slot'){
-    // point-on-line: kill the slider point's velocity across the rail normal n.
-    // lockRot adds relative angular lock → prismatic.
-    const f=slotFrame(con);
-    const Dx=f.wax-f.anchor[0], Dy=f.way-f.anchor[1];
-    const C=f.n[0]*Dx+f.n[1]*Dy;
-    const ia=bodyIndex(con.a.id);
-    const row={ cols:[[ia, f.n[0], f.n[1], -f.n[0]*f.ray + f.n[1]*f.rax]], C };
-    if(f.B){ const dDot=f.dW[0]*Dx+f.dW[1]*Dy;
-      row.cols.push([f.ib, -f.n[0], -f.n[1], f.n[0]*f.rby - f.n[1]*f.rbx - dDot]); }
-    const rows=[row];
-    if(con.lockRot){
-      if(f.B) rows.push({cols:[[ia,0,0,1],[f.ib,0,0,-1]], C:((f.A.th-f.B.th)-con.restAng)});
-      else    rows.push({cols:[[ia,0,0,1]], C:(f.A.th-con.restAng)});
+    // A rail between two endpoints (either may be background-anchored, as
+    // for rod). Unlike rod there is no base row: two pins is purely a
+    // visual guide (0 rows). A locked ("prismatic") end adds the same
+    // angle-lock row as rod's weld, pinning that end's frame to the segment
+    // direction. Only once BOTH ends are locked do the two angle-locks pin
+    // down a shared rail direction worth adding a third row for — the
+    // classic point-stays-on-rail lock (killing lateral drift), giving the
+    // rigid prismatic joint. A single locked end therefore constrains
+    // rotation only... except when that end is the background: a fixed
+    // point whose angle to the other end is held constant *is* a fixed
+    // positional rail (a ray from that point), with zero rotation lock on
+    // the other end — this is how a slider gets confined to a line
+    // while still spinning freely (see makeSlotCon call sites, e.g. the
+    // crank/integrator examples). That single-ended case has one caveat:
+    // it locks φ = atan2(...) directly, which is singular if the live
+    // endpoint ever passes through the fixed one — keep the fixed
+    // anchor well outside the slider's range of travel.
+    const f=twoPointFrame(con);
+    const rows=[];
+    if(con.prismaticA) rows.push(endpointAngleLockRow('A', f, con.restAngA));
+    if(con.prismaticB) rows.push(endpointAngleLockRow('B', f, con.restAngB));
+    if(con.prismaticA && con.prismaticB){
+      // Lateral lock: kill point A's drift off the rail, whose direction is
+      // tracked live via B's frame (θ_B − restAngB) rather than
+      // the raw A->B segment — that segment is *always* perpendicular
+      // to its own normal, so using it here would make this row a
+      // tautology. Mirrors the old body-hosted slotFrame exactly (dDot is
+      // the rail normal's own rotation rate, θ_B's contribution to
+      // d/dt[n·D]).
+      const {hasA,hasB,ia,ib,rax,ray,rbx,rby,wax,way,wbx,wby}=f;
+      const railAngle=(hasB?f.B.th:0)-con.restAngB;
+      const rdx=Math.cos(railAngle), rdy=Math.sin(railAngle);
+      const rnx=-rdy, rny=rdx;
+      const Dx=wax-wbx, Dy=way-wby;
+      const cols=[];
+      if(hasA) cols.push([ia, rnx, rny, -rnx*ray+rny*rax]);
+      if(hasB){ const dDot=rdx*Dx+rdy*Dy;
+        cols.push([ib, -rnx, -rny, rnx*rby-rny*rbx-dDot]); }
+      rows.push({ cols, C: rnx*Dx+rny*Dy });
     }
     return rows;
   }

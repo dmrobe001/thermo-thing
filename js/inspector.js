@@ -46,11 +46,11 @@ function renderInspector(){
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
-    const isRod=c.type==='rod';
-    const title = c.type==='slot' ? (c.lockRot?'Prismatic slider':'Slot · rail')
+    const isRod=c.type==='rod', isSlot=c.type==='slot';
+    const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
                 : ({pin:'Pin · hinge',rod:'Rigid rod',
                     belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
-    const showTorque = (isRod && (c.weldA||c.weldB)) || (c.type==='slot'&&c.lockRot);
+    const showTorque = (isRod && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
     const isBelt=c.type==='belt', isCvt=c.type==='cvt';
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
@@ -59,9 +59,12 @@ function renderInspector(){
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d−rA) ⁄ rA</span><span class="val" id="f_ratio">—</span></div>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
+    if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
+        <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
                : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier λ ⁄ h — run the sim to read it.'
+               : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier λ ⁄ h — the force this joint carries. Run the sim to read it.';
     p.innerHTML=`
       <h3>${title}</h3><p class="sub">${c.type} constraint</p>
@@ -69,19 +72,19 @@ function renderInspector(){
         <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">—</span></div>
         ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">—</span></div>':''}
         ${c.type==='rod'?`<div class="field"><span class="lab">length</span><span class="val">${c.len.toFixed(3)}</span></div>`:''}
-        ${c.type==='slot'?`<label class="chk"><input type="checkbox" id="f_lock" ${c.lockRot?'checked':''}> lock rotation (prismatic)</label>`:''}
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
       </div>
       <button class="del" id="f_del">Delete constraint</button>`;
-    if(c.type==='slot'){ document.getElementById('f_lock').onchange=ev=>{ c.lockRot=ev.target.checked;
-      if(c.lockRot){ const A=bodies[bodyIndex(c.a.id)], B=c.line.id!=null?bodies[bodyIndex(c.line.id)]:null;
-        c.restAng = B? A.th-B.th : A.th; } renderInspector(); saveState(); }; }
     if(isBelt){ document.getElementById('f_cross').onchange=ev=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       c.sense=ev.target.checked?-1:1; c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; renderInspector(); saveState(); }; }
     if(isRod){
       document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
       document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
+    }
+    if(isSlot){
+      document.getElementById('f_lockA').onchange=ev=>{ setSlotLock(c,'A',ev.target.checked); renderInspector(); saveState(); };
+      document.getElementById('f_lockB').onchange=ev=>{ setSlotLock(c,'B',ev.target.checked); renderInspector(); saveState(); };
     }
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
   } else if(selGas){

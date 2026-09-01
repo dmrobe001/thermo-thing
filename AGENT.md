@@ -58,7 +58,7 @@ Give new code a home in an existing section (and register it in that section's s
 |---|---|---|
 | `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `gases`, `cables`; `sim`; `cam` |
 | `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshMass`, `w2s`/`s2w` |
-| `js/constraints.js` | §06 | `bodyIndex`, `gasFrame`, `cableFrame`, `slotFrame`, `rowsFor` |
+| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `twoPointFrame`, `gasFrame`, `cableFrame`, `rowsFor` |
 | `js/solver.js` | §07 | `solveLinear` — dense Gauss–Jordan on the Schur complement |
 | `js/physics.js` | §08 | `substep` — forces → constraint solve → position integration → thermodynamics |
 | `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` |
