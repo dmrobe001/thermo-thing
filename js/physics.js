@@ -1,14 +1,17 @@
 // ============================================================================
 //  §08 · PHYSICS SUBSTEP
-//  One fixed-step advance of the entire world, in five inline stages. This is a
+//  One fixed-step advance of the entire world, in six inline stages. This is a
 //  velocity-impulse form: forces integrate to candidate velocities, then a
 //  single constraint solve projects those velocities onto the manifold, then
-//  positions integrate, then the gas state advances by the first law.
+//  positions integrate, then the gas state advances by the first law, then an
+//  energy-conservation rescale closes the gap the earlier stages only
+//  approximate.
 //    §08.1  applied forces -> candidate velocities (gravity, drag spring, gas)
 //    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
 //    §08.5  gas thermodynamics (first law: dU = deltaQ - P dV)
+//    §08.6  energy-conservation rescale (exact, chain-length-independent)
 //  The stage numbers below (1..5) are the original inline markers; the §08.x
 //  tokens above are the greppable handles.
 // ============================================================================
@@ -16,6 +19,12 @@
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
   const N=bodies.length;
+  // Energy-conservation target: the mechanical+gas total this substep must
+  // return to, absorbing whatever the Baumgarte-stabilized solve below gets
+  // only approximately right (see §08.6). Skipped while the user is actively
+  // dragging a body -- that spring is meant to inject/remove energy visibly.
+  const preE = energy().tot;
+  const grabbing = !!(grab && bodies[grab.bi] && !bodies[grab.bi].static);
   // 1) accumulate applied forces, then integrate into candidate velocities v*
   const FX=new Array(N).fill(0), FY=new Array(N).fill(0), TAU=new Array(N).fill(0);
   for(let i=0;i<N;i++){ const b=bodies[i]; if(b.static) continue;
@@ -197,6 +206,7 @@ function substep(h){
   // 5) thermodynamics: dU = deltaQ - P dV, with deltaQ = kappa(T_res - T) dt when connected.
   //    (R = 1 in abstract units; c_v = 1/(gamma-1).) Work leaves the gas as the
   //    same P·DeltaV the piston force just did on the mechanism -> energy is consistent.
+  let totalQ=0;
   for(const g of gases){
     const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
     const Q=(g.connected? g.kappa*(g.Tres-g.T):0)*h;
@@ -204,5 +214,34 @@ function substep(h){
     g.T += dU/(g.n*(1/(g.gamma-1)));
     if(g.T<1e-4) g.T=1e-4;
     g._Q=Q/h;
+    totalQ+=Q;
+  }
+
+  // ---- §08.6 · energy-conservation rescale ----
+  // The Baumgarte-stabilized solve (§08.3) is only an approximate velocity
+  // projection -- its leak grows with per-substep drift and with how many
+  // rows are coupled, which is why a beta tuned to look flat on a double
+  // pendulum still leaks visibly on longer chains (spec drift note, §04.3).
+  // Rather than chase a bigger gain (a shorter correction lag traded for a
+  // bigger per-step kick, and a lower instability ceiling on longer chains),
+  // close the gap exactly: absent a live drag (which legitimately injects/
+  // removes energy) the mechanical+gas total entering this substep (preE),
+  // plus whatever heat a connected reservoir legitimately added (totalQ), is
+  // treated as an invariant. Any discrepancy after the constraint solve,
+  // integration, and thermodynamics above is folded back by a single uniform
+  // rescale of every body's velocity -- the same idea as a velocity-
+  // rescaling thermostat in molecular dynamics. This is exact regardless of
+  // chain length, unlike Baumgarte, and needs no new per-mechanism tuning.
+  if(!grabbing){
+    const post=energy();
+    const keTarget=preE+totalQ-post.pe-post.U;
+    if(keTarget>0 && post.ke>1e-12){
+      const s=Math.sqrt(keTarget/post.ke);
+      for(const b of bodies){ if(b.static)continue; b.vx*=s; b.vy*=s; b.w*=s; }
+    }
+    // keTarget<=0 (all mechanical energy would have to come from an
+    // impossible negative KE) or the system is momentarily at rest: leave
+    // velocities as-is rather than divide by ~0 or inject energy from
+    // nothing -- rare, and self-corrects next substep once ke>0 again.
   }
 }

@@ -26,7 +26,11 @@ let uid = 1;
 // double pendulum) right at the extremes of a swing, where drift is largest. beta=1
 // (correct ~all of the drift within one substep) was found empirically to minimize
 // that leak across the example mechanisms while staying well under the ~2.5-3
-// instability threshold for kb·h at this step size.
+// instability threshold for kb·h at this step size. This leak still scales up with
+// chain length (a 5+-link chain visibly loses energy even at beta=1) -- physics.js
+// §08.6 closes that gap exactly with a post-solve energy-conservation rescale, so
+// beta only needs to keep per-step position drift small enough for that rescale's
+// keTarget to stay non-negative, not to be leak-free on its own.
 // reg: Tikhonov term added to the Schur diagonal so redundant rows stay solvable.
 const sim = { running:false, gravity:true, g:9.8, showForces:true, showGrid:true,
               h:1/120, maxSub:6, beta:1.0, reg:1e-8, forceRef:1 };
