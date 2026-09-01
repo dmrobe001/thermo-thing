@@ -6,7 +6,7 @@
 //    §13.2  picking & snapping (pickBody/Constraint, distSeg, snapAnchor, ...)
 //    §13.3  constraint handles (conHandles, pickHandle, applyHandle)
 //    §13.4  pointer state (multi-touch map, pinch, cancelSingle)
-//    §13.5  pointerdown  (per-tool dispatch — where constraints are created)
+//    §13.5  pointerdown  (per-tool dispatch -- where constraints are created)
 //    §13.6  pointermove  (drag/pan/pinch/handle articulation)
 //    §13.7  pointerup / cancel / wheel
 // ============================================================================
@@ -46,7 +46,7 @@ function pickBody(wx,wy){
     if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
   return -1;
 }
-// topmost body under the cursor that isn't `exceptId` — lets the 2nd pin
+// topmost body under the cursor that isn't `exceptId` -- lets the 2nd pin
 // pick reach a body occluded by the one already selected
 function pickBodyExcept(wx,wy,exceptId){
   for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i]; if(b.id===exceptId) continue;
@@ -62,7 +62,7 @@ function pickConstraint(wx,wy){
       continue;
     }
     if(con.type==='slot'){
-      // The rail is an infinite line (drawn viewport-spanning) — hit-test
+      // The rail is an infinite line (drawn viewport-spanning) -- hit-test
       // perpendicular distance to it, not a bounded segment.
       const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
       const railAngle=slotRailAngle(con);
@@ -100,7 +100,7 @@ function snapAnchor(wx,wy,allow){
   }
   return best;
 }
-// resolve a click to {body, wp} — snap first, else any body under the cursor
+// resolve a click to {body, wp} -- snap first, else any body under the cursor
 function anchorTarget(wx,wy){
   const s=snapAnchor(wx,wy); if(s) return {body:s.body, wp:s.wp, snap:s};
   const bi=pickBody(wx,wy); if(bi>=0) return {body:bodies[bi], wp:[wx,wy], snap:null};
@@ -143,7 +143,7 @@ function applyCableHandle(ad,wx,wy){
   cb.localAngle+=d;
   // Recompute spoolAngle from the new localAngle. Both fields must be set here,
   // not just one: cb._spoolAngle is the live unwrap-continuity reference substep
-  // reads each physics step (physics.js §08.2) — leaving it stale would make the
+  // reads each physics step (physics.js §08.2) -- leaving it stale would make the
   // next step's unwrap jump by whatever angle the drag just covered; cb.spoolAngle
   // is the persisted twin saved/loaded with the file, and won't be refreshed by a
   // substep if the sim is paused. Ltot is re-derived so the drag also changes how
@@ -218,7 +218,7 @@ cv.addEventListener('pointerdown',e=>{
   pointers.set(e.pointerId,{x:px,y:py});
   mouseScreen=[px,py]; mouseWorld=s2w(px,py);
 
-  if(pointers.size===2){ cancelSingle(); startPinch(); return; }   // second finger → pinch, never a tool action
+  if(pointers.size===2){ cancelSingle(); startPinch(); return; }   // second finger -> pinch, never a tool action
   if(pointers.size>2) return;
 
   const [wx,wy]=mouseWorld;
@@ -260,7 +260,7 @@ cv.addEventListener('pointerdown',e=>{
       pending = t ? {gas:true, headId:t.body.id, headWp:t.wp, wp:t.wp}
                   : {gas:true, headId:null, headWp:[wx,wy], wp:[wx,wy]};
       return; }
-    // SECOND click = piston face on a body; axis runs head → piston (expansion +)
+    // SECOND click = piston face on a body; axis runs head -> piston (expansion +)
     const t=anchorTarget(wx,wy); if(!t) return;
     const dx=t.wp[0]-pending.headWp[0], dy=t.wp[1]-pending.headWp[1]; const L=Math.hypot(dx,dy);
     if(L<0.2) return;
@@ -317,15 +317,15 @@ cv.addEventListener('pointerdown',e=>{
     return;
   }
   if(tool==='pin'){
-    // FIRST pick — snapped anchor on body A; pending.wp is the pivot world point
+    // FIRST pick -- snapped anchor on body A; pending.wp is the pivot world point
     if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
       pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
     const Aid=pending.id, Aoff=pending.off;
-    // the second click only *names* body B — click any part of it, including
-    // where A covers it — and B is anchored at the first pivot
+    // the second click only *names* body B -- click any part of it, including
+    // where A covers it -- and B is anchored at the first pivot
     const bi=pickBodyExcept(wx,wy,Aid);
     const Bbody = bi>=0 ? bodies[bi] : (()=>{ const s=snapAnchor(wx,wy); return (s&&s.body.id!==Aid)?s.body:null; })();
-    if(!Bbody || Bbody.id===Aid) return;   // nothing indicated — keep the pivot and wait
+    if(!Bbody || Bbody.id===Aid) return;   // nothing indicated -- keep the pivot and wait
     const Boff = offOf(Bbody, pending.wp); // place B's anchor at the first pivot
     constraints.push({type:'pin', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff}, sel:false});
     pending=null; saveState();
@@ -342,8 +342,8 @@ cv.addEventListener('pointerdown',e=>{
     const Aep={id:pending.id, off:pending.off}; pending=null;
     if(Aep.id==null && Bep.id==null) return;      // a rod needs at least one real body
     if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself
-    // A rod touching the background defaults to both ends welded — a rigid
-    // strut out of the wall — since that's the anchoring use case; the user
+    // A rod touching the background defaults to both ends welded -- a rigid
+    // strut out of the wall -- since that's the anchoring use case; the user
     // can tap either end afterward to free it into a pin.
     const bg = Aep.id==null || Bep.id==null;
     constraints.push(makeRodCon(Aep, Bep, bg, bg));
@@ -362,8 +362,8 @@ cv.addEventListener('pointerdown',e=>{
     const Aep={id:pending.id, off:pending.off}; pending=null;
     if(Aep.id==null && Bep.id==null) return;      // needs at least one real body
     if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rail a body to itself
-    // A slot touching the background defaults to both ends prismatic — a
-    // fixed rail — since that's the confinement use case; tapping either end
+    // A slot touching the background defaults to both ends prismatic -- a
+    // fixed rail -- since that's the confinement use case; tapping either end
     // afterward frees it back into a plain (visual-only) pin.
     const bg = Aep.id==null || Bep.id==null;
     constraints.push(makeSlotCon(Aep, Bep, bg, bg));
@@ -402,7 +402,7 @@ cv.addEventListener('pointermove',e=>{
       projectPositions(8);
     } else {
       // pull the grabbed point toward the cursor; the island articulates to comply.
-      // 'dragpin' is an internal-only row type (§06.5) — never added to
+      // 'dragpin' is an internal-only row type (§06.5) -- never added to
       // `constraints`, just fed through projectPositions as a transient goal.
       const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[mouseWorld[0],mouseWorld[1]]};
       projectPositions(8,[temp]);

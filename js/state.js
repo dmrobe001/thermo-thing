@@ -22,7 +22,7 @@ let uid = 1;
 // ---- §04.3 · sim parameters & camera ----
 // h: fixed step. maxSub: max substeps per frame. beta: Baumgarte gain (spec §3.4).
 // A gain much below 1 under-corrects each step's position drift at this h, which
-// bleeds kinetic energy every substep — most visibly on multi-body chains (e.g. the
+// bleeds kinetic energy every substep -- most visibly on multi-body chains (e.g. the
 // double pendulum) right at the extremes of a swing, where drift is largest. beta=1
 // (correct ~all of the drift within one substep) was found empirically to minimize
 // that leak across the example mechanisms while staying well under the ~2.5-3

@@ -1,4 +1,4 @@
-# Cable / Spool Constraint — Design Note
+# Cable / Spool Constraint -- Design Note
 
 Design of the winding-cable constraint: a strand of fixed total length that wraps
 around one or two spools, carries tension only, and conserves energy exactly. This
@@ -6,8 +6,8 @@ note is written to slot alongside `DEVELOPMENT.md`; it references that document'
 section numbers (§4.1 belt/rod rows, §4.3 unilateral/hard-stops, §6.5 row assembly,
 §8.3 the velocity-projection solve) rather than repeating them.
 
-> **Status (as built):** The single-spool (point ↔ spool) case described below —
-> §C.1 through §C.4, §C.6, §C.7 — is implemented (code §06.3 `cableFrame`, code
+> **Status (as built):** The single-spool (point <-> spool) case described below --
+> §C.1 through §C.4, §C.6, §C.7 -- is implemented (code §06.3 `cableFrame`, code
 > §08.2). The two-spool generalization (§C.5) and the open items (§C.8) are not yet
 > built.
 
@@ -16,7 +16,7 @@ section numbers (§4.1 belt/rod rows, §4.3 unilateral/hard-stops, §6.5 row ass
 An inextensible, massless cable on a frictionless spool stores no energy and does no
 net work. Its tension is a workless constraint force, exactly like a rod's. Any
 kinetic energy lost by the current implementation is a formulation artifact, not
-physics — so the cable does **not** need to be modeled as an idealized elastic, and
+physics -- so the cable does **not** need to be modeled as an idealized elastic, and
 should not be. Elasticity would reintroduce stiff-ODE timestepping and a springy
 energy channel that muddies the energy accounting the sandbox exists to expose, and
 it would forfeit the finite, exactly-reachable extent that makes a rope feel like a
@@ -24,30 +24,30 @@ rope.
 
 The reason it is conservative: a point tethered to a fixed spool of radius `R` by a
 taut cable traces the **involute of the circle**. Parameterize the taut
-configurations by the departure-point rim angle `β`:
+configurations by the departure-point rim angle `beta`:
 
 ```
-p(β) = c + R·(cosβ, sinβ) + (L − R·β)·(−sinβ, cosβ)
+p(beta) = c + R·(cosbeta, sinbeta) + (L - R·beta)·(-sinbeta, cosbeta)
 ```
 
-with `c` the spool center, `L` the total length, and `ℓ = L − R·β` the free
+with `c` the spool center, `L` the total length, and `ell = L - R·beta` the free
 (unwound) length. Differentiating:
 
 ```
-dp/dβ = ℓ·(−cosβ, −sinβ)
+dp/dbeta = ell·(-cosbeta, -sinbeta)
 ```
 
 The body's only permitted motion is **perpendicular to the string direction**
-`(−sinβ, cosβ)`. Tension acts along the string; permitted motion is orthogonal to it;
+`(-sinbeta, cosbeta)`. Tension acts along the string; permitted motion is orthogonal to it;
 therefore the tension does no work and kinetic energy is conserved as the cable winds
-in and `ℓ` shrinks. (This is the classic tetherball result: constant speed, spiraling
+in and `ell` shrinks. (This is the classic tetherball result: constant speed, spiraling
 radius, string always normal to the path.)
 
 **Consequence for the solver.** The taut constraint is a single row that removes the
-velocity component *along the current string direction* — a slot-like row `ŝ·v = 0`
-with `ŝ` recomputed each step. Because the true motion is already perpendicular to
-`ŝ`, the §8.3 projection removes a component that is ≈ 0, so the impulse it applies —
-and the energy it removes — is near zero to integration order, exactly as for a rod.
+velocity component *along the current string direction* -- a slot-like row `s_hat·v = 0`
+with `s_hat` recomputed each step. Because the true motion is already perpendicular to
+`s_hat`, the §8.3 projection removes a component that is ~= 0, so the impulse it applies --
+and the energy it removes -- is near zero to integration order, exactly as for a rod.
 If the current implementation instead phrases the row against distance-to-center or
 distance-to-a-fixed-anchor, its direction is not perpendicular to the involute
 motion, the projection fights real motion every step, and that is where the energy
@@ -56,8 +56,8 @@ leaks.
 > **As built:** `cableFrame`'s row is the gradient of `totalUsed` (wound arc length +
 > tangent segment length) with respect to the tether point's position, not a naive
 > distance-to-center row. That gradient is exactly the tangent-line unit vector
-> `ŝ = (T−Q)/|T−Q|` — the extra `rs·sign·Dy/Dx` terms in `Jx`/`Jy` are precisely the
-> correction that makes it so, rather than the plain `(T−center)` direction a
+> `s_hat = (T-Q)/|T-Q|` -- the extra `rs·sign·Dy/Dx` terms in `Jx`/`Jy` are precisely the
+> correction that makes it so, rather than the plain `(T-center)` direction a
 > distance constraint would use. This is the energy-conserving row described above.
 
 ## C.2 One object, not several special cases
@@ -69,57 +69,57 @@ collapses the whole family:
 
 | Ends | Radii | Result |
 |---|---|---|
-| point ↔ point | R₁ = R₂ = 0 | plain rod, no wrap (already in library, §4.1) |
-| point ↔ spool | one R = 0 | tetherball / falling-weight cable |
-| spool ↔ spool | both R > 0 | two-pulley belt-cable |
+| point <-> point | R_1 = R_2 = 0 | plain rod, no wrap (already in library, §4.1) |
+| point <-> spool | one R = 0 | tetherball / falling-weight cable |
+| spool <-> spool | both R > 0 | two-pulley belt-cable |
 
 The two-spool case falls out of the one-spool code for free once the departure
 geometry is per-end. This is §4's "one atomic operation applied to different
 features," with the feature being a per-end radius.
 
-> **As built:** Only point ↔ spool exists (`cb.tether` is always a bare point;
-> `cb.spool` always carries a radius). Point ↔ point stays the separate `rod`
-> constraint rather than a cable with both radii zero. Spool ↔ spool (§C.5) is not
-> implemented — see the two-spool generalization below for what that would add.
+> **As built:** Only point <-> spool exists (`cb.tether` is always a bare point;
+> `cb.spool` always carries a radius). Point <-> point stays the separate `rod`
+> constraint rather than a cable with both radii zero. Spool <-> spool (§C.5) is not
+> implemented -- see the two-spool generalization below for what that would add.
 
 ### The wrap coordinate
 
-Track, per end, an accumulated wrap angle `Δ ≥ 0`, so the free length is
-`ℓ = L − R·Δ` (summed over both ends in the two-spool case). `Δ = 0` is fully
-unwound (departure point coincides with the material anchor); increasing `Δ` is
-winding on. `Δ` carries the **integer turn count**, which the instantaneous geometry
-(known only mod 2π) cannot, so it is what makes multi-turn and reversible winding
+Track, per end, an accumulated wrap angle `Delta >= 0`, so the free length is
+`ell = L - R·Delta` (summed over both ends in the two-spool case). `Delta = 0` is fully
+unwound (departure point coincides with the material anchor); increasing `Delta` is
+winding on. `Delta` carries the **integer turn count**, which the instantaneous geometry
+(known only mod 2pi) cannot, so it is what makes multi-turn and reversible winding
 well-defined.
 
 The three awkward cases the cable must survive all map onto this coordinate:
 
-- **Fully unwound, tangent would fall past the anchor** → the **lower end-stop**
-  `Δ = 0`. Below it, the departure point cannot slide past the material tie-off, so
+- **Fully unwound, tangent would fall past the anchor** -> the **lower end-stop**
+  `Delta = 0`. Below it, the departure point cannot slide past the material tie-off, so
   the constraint pivots at the anchor and becomes an ordinary rod to a point on the
-  spool. The transition is continuous: at `Δ = 0` the tangent point *is* the anchor,
-  so `ŝ` does not jump.
-- **Tether inside the spool perimeter** → can occur *only* in that unwound rod
+  spool. The transition is continuous: at `Delta = 0` the tangent point *is* the anchor,
+  so `s_hat` does not jump.
+- **Tether inside the spool perimeter** -> can occur *only* in that unwound rod
   regime, where it is harmless (a rod needs no tangent). In the wrapped regime the
-  free segment is a tangent ray, which only reaches points with `d ≥ R`, so a wrapped
-  tether is automatically outside. Gating wrapping on `d ≥ R` means `sqrt(d² − R²)`
+  free segment is a tangent ray, which only reaches points with `d >= R`, so a wrapped
+  tether is automatically outside. Gating wrapping on `d >= R` means `sqrt(d² - R²)`
   is never taken of a negative number.
-- **Both ends spools** → the common-tangent-of-two-circles construction: one length
-  row, two wrap coordinates, reducing to the existing belt `R₁ω₁ = R₂ω₂` when both
+- **Both ends spools** -> the common-tangent-of-two-circles construction: one length
+  row, two wrap coordinates, reducing to the existing belt `R_1*omega_1 = R_2*omega_2` when both
   centers are fixed.
 
-**Key decoupling for stability.** The string direction `ŝ` depends only on current
-positions and the wind sign — *not* on how much is wrapped. So the taut velocity row
-is local and cheap, while `Δ` is slow bookkeeping used only to detect the two
+**Key decoupling for stability.** The string direction `s_hat` depends only on current
+positions and the wind sign -- *not* on how much is wrapped. So the taut velocity row
+is local and cheap, while `Delta` is slow bookkeeping used only to detect the two
 end-stops and to stabilize position drift. Keeping these separate is what makes
 many-turn winding numerically calm.
 
 > **As built:** `cb.spoolAngle` (the ABC angle at the spool center, from anchor to
-> tether, unwrapped continuously) plays the role of `Δ`; `windAngle` (its
+> tether, unwrapped continuously) plays the role of `Delta`; `windAngle` (its
 > tangent-wins/anchor-wins reduction) is the unsigned wrap amount, and
-> `woundLength = |windAngle|·rs` is `R·Δ`. The anchor/rod-regime end-stop (`Δ = 0`)
+> `woundLength = |windAngle|·rs` is `R·Delta`. The anchor/rod-regime end-stop (`Delta = 0`)
 > falls out of the same `tangentWins` comparison that picks the departure point, so
 > there is no separate branch for it. The wrap coordinate now *does* freeze while
-> slack (see the robustness note below) — it did not before this pass, which was the
+> slack (see the robustness note below) -- it did not before this pass, which was the
 > one place the as-built code deviated from this section's stability argument.
 
 ## C.3 Per-cable state
@@ -143,7 +143,7 @@ active       taut / slack flag
 > angle (see §C.2's as-built note); `sigma` is derived each step from that angle's
 > sign rather than stored separately; `cb.Ltot` is `L`; `cb._active` is `active`.
 
-## C.4 Per-step algorithm — single-spool cable (point P, spool at c)
+## C.4 Per-step algorithm -- single-spool cable (point P, spool at c)
 
 ```
 1. GEOMETRY
@@ -188,9 +188,9 @@ active       taut / slack flag
    fully unwound:  Delta = 0                  => handled by rod regime in step 2.
 ```
 
-> **As built:** Steps 1–2 are `cableFrame`'s tangent/anchor construction
+> **As built:** Steps 1-2 are `cableFrame`'s tangent/anchor construction
 > (`tangentWins` picks the regime; `Q` is `pivot`). Step 3's update now only commits
-> when the row is active — see the robustness note below. Step 4's gate is
+> when the row is active -- see the robustness note below. Step 4's gate is
 > `C>-1e-4 && (C>1e-4 || rowJv(f.cols)>0)`, which is the geometric gate plus exactly
 > the "robust alternative" fallback in the dead zone (using the row's own current
 > velocity rather than a solved multiplier, since the multiplier isn't known until
@@ -198,33 +198,33 @@ active       taut / slack flag
 > Baumgarte scaling every row gets in §08.3.
 >
 > Step 6's fully-wound stop used to switch to a 2-DOF hinge pinning the tether
-> straight to the material anchor A — but A is only the correct pin point when
+> straight to the material anchor A -- but A is only the correct pin point when
 > the accumulated wrap happens to be a whole number of turns; in general the
 > true departure point Q sits elsewhere on the rim, so the hinge yanked the
 > body across the spool in one step, an energy-adding jump. Fixed by dropping
 > the special case entirely: the tangent-mode row's Jacobian is finite as
-> `ℓ→0` (see the singularity note below) and its direction continuously
-> becomes tangent to the rim *at the tether itself* as `Q→T`, so the same
+> `ell->0` (see the singularity note below) and its direction continuously
+> becomes tangent to the rim *at the tether itself* as `Q->T`, so the same
 > one-row taut constraint carries through the full-wind boundary with no
-> discontinuity to cross — closer to this section's own "clamp `ell_min`"
+> discontinuity to cross -- closer to this section's own "clamp `ell_min`"
 > suggestion than a hinge ever was. The fully-unwound stop is unchanged (the
 > rod-regime branch, as specified).
 
 ### Robustness notes
 
-- **The near-full-wrap singularity is physical, not fixable.** Speed is `ℓ·|Δ̇|`, so
-  as `ℓ → 0` the winding rate diverges — the tether whips around the rim. Clamp
+- **The near-full-wrap singularity is physical, not fixable.** Speed is `ell·|Delta_dot|`, so
+  as `ell -> 0` the winding rate diverges -- the tether whips around the rim. Clamp
   `ell_min`, and substep when `ell` is small if needed. No reformulation removes this;
   a real tetherball has the same singularity.
 - **Verify the `sigma` sign** against a known orbit: start a body in a circular orbit
-  that should wind in, and confirm `Delta` increases. The `phi ∓ sigma·gamma`
+  that should wind in, and confirm `Delta` increases. The `phi -+ sigma·gamma`
   convention depends on the engine's angle handedness.
-- **Freezing `Δ` while slack** is a deliberate modeling choice, and a principled one:
+- **Freezing `Delta` while slack** is a deliberate modeling choice, and a principled one:
   a limp frictionless rope's wrap is indeterminate, and holding it is exactly a static
-  no-slip condition on the wound portion — consistent with the "friction is absent or
+  no-slip condition on the wound portion -- consistent with the "friction is absent or
   perfectly static, expressed as a constraint" invariant. Comment it as intent.
-- **Direction reversal (σ flip)** can only occur while passing through `Δ = 0` (the
-  rod regime), where σ is re-read from the bending direction as the body leaves the
+- **Direction reversal (sigma flip)** can only occur while passing through `Delta = 0` (the
+  rod regime), where sigma is re-read from the bending direction as the body leaves the
   anchor.
 
 > **As built:** The freezing note above is now implemented: `cableFrame` is still
@@ -232,21 +232,21 @@ active       taut / slack flag
 > gate and rendering always see live, correct geometry), but code §08.2 only writes
 > the result back into `cb._spoolAngle`/`cb.spoolAngle` when the row is active that
 > step. A slack cable's wound-length bookkeeping therefore holds exactly at its last
-> taut value — a swinging tether can no longer silently rewind or overwind the spool
-> while the rope is slack — and picks back up from live geometry the instant it goes
-> taut again, matching this section's intent. The σ-flip-only-at-Δ=0 property was
+> taut value -- a swinging tether can no longer silently rewind or overwind the spool
+> while the rope is slack -- and picks back up from live geometry the instant it goes
+> taut again, matching this section's intent. The sigma-flip-only-at-Delta=0 property was
 > already structurally guaranteed by the existing `tangentWins` construction and
 > needed no change.
 >
 > The near-full-wrap singularity guard needed one real fix, though: a body
 > winding in fast can overshoot past `d = rs` in a single step (the angular
-> rate genuinely diverges as `ℓ→0`), and the Jacobian branch was gated on
-> `tangentWins && !tetherInside` — so that one step would drop out of the
+> rate genuinely diverges as `ell->0`), and the Jacobian branch was gated on
+> `tangentWins && !tetherInside` -- so that one step would drop out of the
 > tangent-mode row into the anchor/rod formula aimed at the *wrong* point
 > (`Qtan`, not `A`), another energy-adding direction discontinuity. `Lfree` is
-> defined (0 once `d≤rs`) regardless of which side of the rim `d` lands on, so
-> gating the Jacobian on `tangentWins` alone — matching `Q`'s own selection
-> logic — carries the correct row through the overshoot with no jump; a small
+> defined (0 once `d<=rs`) regardless of which side of the rim `d` lands on, so
+> gating the Jacobian on `tangentWins` alone -- matching `Q`'s own selection
+> logic -- carries the correct row through the overshoot with no jump; a small
 > floor on the `d²` denominator guards the genuine (if unlikely) case of `d`
 > landing very close to the spool centre in one step. Verified with a headless
 > harness: energy stays smooth through a full-wind pass even when the tether's
@@ -275,10 +275,10 @@ opposite-handed winds -> internal / crossed  (offset uses R1 + R2)
    Each end has its own anchor end-stop (Delta = 0) and its own fully-wound stop.
 ```
 
-Fixed centers with both ends fully wrapped recovers `R₁ω₁ = R₂ω₂`: the existing belt
+Fixed centers with both ends fully wrapped recovers `R_1*omega_1 = R_2*omega_2`: the existing belt
 (§4.1) is the rigid special case of this constraint.
 
-> **As built:** Not implemented. Cables remain point ↔ spool only.
+> **As built:** Not implemented. Cables remain point <-> spool only.
 
 ## C.6 Degeneracy guards
 
@@ -287,7 +287,7 @@ Fixed centers with both ends fully wrapped recovers `R₁ω₁ = R₂ω₂`: the
 - **Strand passing through a disk** (possible for a short rope from a rim anchor to an
   interior tether): decide whether spools are "solid." With no collision model the
   honest default is to allow it, but flag the case so a guard can be added later.
-- **Interior tether** (`d ≤ R`): keep firmly in the rod regime so the tangent
+- **Interior tether** (`d <= R`): keep firmly in the rod regime so the tangent
   construction is never evaluated inside the disk.
 
 > **As built:** The first two guards are only relevant to the two-spool case and
@@ -299,12 +299,12 @@ Fixed centers with both ends fully wrapped recovers `R₁ω₁ = R₂ω₂`: the
 
 Every regime is one workless direction row carrying a single shared multiplier:
 tension acts along the strand, permitted motion is perpendicular to it, and there is
-no energy channel anywhere — including across the taut/slack and anchor/tangent
+no energy channel anywhere -- including across the taut/slack and anchor/tangent
 transitions, because position and velocity are continuous through both and the
 constraint force is zero at the instant of switching. Nothing here kills kinetic
 energy, and the elastic-rope idea remains unnecessary. If numerical conditioning near
 degeneracy is wanted, add a small CFM / regularization term (the existing `sim.reg`),
-which softens the row without storing energy — distinct from a physical spring and
+which softens the row without storing energy -- distinct from a physical spring and
 free of the pre-extent springiness the design deliberately avoids.
 
 ## C.8 Open items
@@ -314,5 +314,5 @@ free of the pre-extent springiness the design deliberately avoids.
 - Choice of active-set discipline: geometric gate vs. multiplier-sign gate (C.4
   step 4), and whether to run cables inside the main equality solve with an active-set
   toggle or on the separate LCP path (§3.7) once that exists.
-- Whether spools are solid (collision guard for C.6) — deferred until there is a
+- Whether spools are solid (collision guard for C.6) -- deferred until there is a
   contact model.

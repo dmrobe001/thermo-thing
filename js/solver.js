@@ -1,8 +1,8 @@
 // ============================================================================
 //  §07 · LINEAR SOLVE
 //  Dense Gauss-Jordan with partial pivoting, solving one symmetric system
-//  K·x = b in place. K here is the Schur complement J·M⁻¹·Jᵀ (assembled in
-//  §08.3 and §09), i.e. the reduced form of the KKT system in spec §3.2 — not
+//  K·x = b in place. K here is the Schur complement J·M^-1·J^T (assembled in
+//  §08.3 and §09), i.e. the reduced form of the KKT system in spec §3.2 -- not
 //  the full saddle matrix, and not (yet) factored with Cholesky or split per
 //  island. See the design-drift notes in the spec for where this sits on the
 //  solver ladder (spec §3.5, §3.6).

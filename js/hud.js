@@ -27,7 +27,7 @@ function updateHUD(){
   document.getElementById('eTotHead').textContent=e.tot.toFixed(2);
   document.getElementById('status').textContent=
     `${sim.running?'running':'paused'} · ${bodies.length} bodies · ${constraints.length} constraints`
-    + (!sim.running && violCount ? ` · ⚠ ${violCount} unsatisfied` : '');
+    + (!sim.running && violCount ? ` · [!] ${violCount} unsatisfied` : '');
   if(sim.running){ eHist.push(e.tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
   if(selBody||selConstraint||selGas||selCable) updateInspectorLive();
 }

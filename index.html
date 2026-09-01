@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================================
-     MECHANISM  BENCH  —  SOURCE MAP  (read this first)
+     MECHANISM  BENCH  --  SOURCE MAP  (read this first)
      ============================================================================
      This project is organized as an HTML shell (index.html) plus a set of
      JavaScript modules under js/. Navigate the simulator code by SECTION
@@ -10,12 +10,12 @@
        Every section header carries a token:  §NN  for a top-level section,
        §NN.M  for a sub-section, written with the section sign "§" (the same
        sigil the design spec uses). A token appears in exactly three places:
-       this index, that section's own header comment, and — for a section that
-       has children — its local sub-index inside that header.
+       this index, that section's own header comment, and -- for a section that
+       has children -- its local sub-index inside that header.
 
        To jump, search the file for the token exactly as printed:
-         · search  §08     → this index line, the §08 header, and its sub-index
-         · search  §08.3   → straight to that one sub-section, nothing else
+         · search  §08     -> this index line, the §08 header, and its sub-index
+         · search  §08.3   -> straight to that one sub-section, nothing else
        Read a section header before its body: it lists the sub-sections beneath
        it, so you can grep onward without ever scanning the code between.
 
@@ -221,11 +221,11 @@
     <div id="hint">
       <b>Drop a mass:</b> pick the Body tool (2), then click-drag on the field.<br>
       <b>Make a hinge:</b> Pin tool (3), click one body then another.<br>
-      <b>Anchor it:</b> Rod tool (4), click empty space then a body — it welds to the wall by default; tap an end to toggle pin/weld.<br>
-      Or load an example from the panel →
+      <b>Anchor it:</b> Rod tool (4), click empty space then a body -- it welds to the wall by default; tap an end to toggle pin/weld.<br>
+      Or load an example from the panel ->
     </div>
     <div id="ledger">
-      <div id="ledgerHead"><span class="car">▾</span><span>Energy</span><span id="eTotHead">0.00</span></div>
+      <div id="ledgerHead"><span class="car">v</span><span>Energy</span><span id="eTotHead">0.00</span></div>
       <div id="ledgerBody">
         <div class="row"><span class="k">kinetic</span><span class="v" id="eKE">0.00</span></div>
         <div class="row"><span class="k">potential</span><span class="v" id="ePE">0.00</span></div>
@@ -242,22 +242,22 @@
 </div>
 
 <!-- ============================================================================
-     JavaScript modules — loaded in dependency order.
+     JavaScript modules -- loaded in dependency order.
      All scripts are plain globals (no ES modules); each file is self-contained
      within its section boundary and depends only on globals declared before it.
-     §04 state       → canvas handles, world arrays, sim/camera params
-     §05 geometry    → R, worldPt, makeBody, w2s/s2w  (depends on §04)
-     §06 constraints → rowsFor, gasFrame, cableFrame, twoPointFrame  (§04, §05)
-     §07 solver      → solveLinear  (standalone)
-     §08 physics     → substep  (§04–§07)
-     §09 projection  → projectPositions, reactionOf  (§04–§07)
-     §10 loop        → frame  (§08, §11, §12)
-     §11 render      → render, drawBody, …  (§04–§06, §09)
-     §12 hud         → updateHUD, drawSpark  (§04, §10)
-     §13 tools       → TOOLS, setTool, pointer handlers  (§04–§06, §09, §11, §14)
-     §14 inspector   → renderInspector, updateInspectorLive  (§04–§06, §09, §15, §16)
-     §15 examples    → loadExample  (§04, §05, §14)
-     §16 transport   → saveState, setRunning, boot  (§04, §08–§13)
+     §04 state       -> canvas handles, world arrays, sim/camera params
+     §05 geometry    -> R, worldPt, makeBody, w2s/s2w  (depends on §04)
+     §06 constraints -> rowsFor, gasFrame, cableFrame, twoPointFrame  (§04, §05)
+     §07 solver      -> solveLinear  (standalone)
+     §08 physics     -> substep  (§04-§07)
+     §09 projection  -> projectPositions, reactionOf  (§04-§07)
+     §10 loop        -> frame  (§08, §11, §12)
+     §11 render      -> render, drawBody, ...  (§04-§06, §09)
+     §12 hud         -> updateHUD, drawSpark  (§04, §10)
+     §13 tools       -> TOOLS, setTool, pointer handlers  (§04-§06, §09, §11, §14)
+     §14 inspector   -> renderInspector, updateInspectorLive  (§04-§06, §09, §15, §16)
+     §15 examples    -> loadExample  (§04, §05, §14)
+     §16 transport   -> saveState, setRunning, boot  (§04, §08-§13)
      ============================================================================ -->
 <script src="js/state.js"></script>
 <script src="js/geometry.js"></script>
