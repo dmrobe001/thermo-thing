@@ -44,7 +44,7 @@ function updateHUD(){
     `${sim.running?'running':'paused'} · ${bodies.length} bodies · ${constraints.length} constraints`
     + (!sim.running && violCount ? ` · [!] ${violCount} unsatisfied` : '');
   if(sim.running){ eHist.push(e.tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
-  if(selBody||selConstraint||selGas||selCable||selSpring||selRotSpring) updateInspectorLive();
+  if(selBody||selConstraint||selGas||selCable||selSpring||selRotSpring||selHeat||selFlow) updateInspectorLive();
 }
 // ---- §12.3 · drawSpark ----
 function drawSpark(){

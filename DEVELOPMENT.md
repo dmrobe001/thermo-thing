@@ -21,7 +21,7 @@ Here `a` is the vector of body accelerations, `lambda` is the vector of Lagrange
 
 Because constraints are enforced through multipliers, they are satisfied at the acceleration level to the precision of the linear solve -- this is the *exact* enforcement the design requires, not a penalty approximation.
 
-> **Status (as built):** Implemented in equivalent velocity-impulse form. Code §08.1 integrates the applied forces to candidate velocities; code §08.3 then solves the Schur complement (code §07) for the multipliers `lambda` and applies `M^-1 J^T lambda` as a single velocity projection. This is the discrete counterpart of the acceleration-level system above: the explicit `J_dot·v` term is absorbed into that projection rather than assembled, and `beta*phi` is the Baumgarte term `sim.beta/h · C`. Baumgarte alone is only an approximate velocity projection -- its leak grows with per-substep drift and with how many rows are coupled (visibly worse on a 5-link chain than a double pendulum for the same `beta`). Code §08.6 closes that gap exactly, independent of chain length: absent a live drag or an active reservoir (both legitimate energy sources/sinks), the mechanical+gas total entering the substep is treated as an invariant, and any post-solve discrepancy is folded back with a single uniform velocity rescale -- the same idea as a velocity-rescaling thermostat.
+> **Status (as built):** Implemented in equivalent velocity-impulse form. Code §08.1 integrates the applied forces to candidate velocities; code §08.3 then solves the Schur complement (code §07) for the multipliers `lambda` and applies `M^-1 J^T lambda` as a single velocity projection. This is the discrete counterpart of the acceleration-level system above: the explicit `J_dot·v` term is absorbed into that projection rather than assembled, and `beta*phi` is the Baumgarte term `sim.beta/h · C`. Baumgarte alone is only an approximate velocity projection -- its leak grows with per-substep drift and with how many rows are coupled (visibly worse on a 5-link chain than a double pendulum for the same `beta`). Code §08.6 closes that gap exactly, independent of chain length: absent a live drag or an active heat/flow interaction (both legitimate energy sources/sinks), the mechanical+gas total entering the substep is treated as an invariant, and any post-solve discrepancy is folded back with a single uniform velocity rescale -- the same idea as a velocity-rescaling thermostat.
 
 ### 3.3 The constraint class boundary
 
@@ -114,31 +114,33 @@ The one genuinely new first-class object beyond physical constraints is the **si
 
 ## 6. Thermodynamic and force elements
 
-### 6.1 Gas piston
+### 6.1 Gas vessels and pistons
 
-A gas element maintains its equation of state `P = nRT/V` at all times (instantaneous equilibrium). Its volume `V` is a geometric function of the mechanism's state (piston displacement × area). Each step it computes its pressure from current volume and temperature and applies the resulting force `P·A` to the piston follower, contributing to `f` before the constraint solve. It is otherwise an ordinary force element.
+A gas element is a rectangular vessel that maintains its equation of state `P = nT/V` at all times (instantaneous equilibrium; `R = 1` in these abstract units). It is defined by two endpoints, exactly the `{id, off}` shape every other feature uses: `head` (a corner fixed in some body's frame, or the world, carrying the rectangle's axis direction) and `piston` (the far corner along that axis) -- the same two-corner selection a rectangular body placement uses. `piston` is either a real body -- a movable wall, making this a piston -- or `null`, in which case the rectangle's length is a fixed constant (`len`): a sealed vessel with no moving part at all, useful purely as a heat/flow node (§6.2). Either way `V = bore · length`.
 
-### 6.2 Reservoir and heat exchange
+**The background counts as a gas too** (`sim.bg`: a fixed, player-set temperature and pressure, infinite capacity) -- it is the implicit far side of any heat/flow interaction that names no gas (§6.2), and the pressure a piston's open face pushes against.
 
-A reservoir has a finite heat capacity and a temperature `T_res` that drifts as heat is drawn from or dumped into it. Heat crosses the gas boundary at finite rate through a finite conductance:
+**The piston is two bodies.** The movable wall (`piston`) feels the net force of internal gas pressure against the background's, normal to its face: `F = (P_gas - P_bg)·bore`, along the vessel's axis; the rest of the vessel (`head`'s body, or nothing if head is world-fixed) feels the equal and opposite reaction. Placing a gas whose far corner lands on a body auto-creates a **mutually prismatic joint** between that body and the head -- an ordinary `slot` constraint with both ends locked (§4.1), marked `hidden` so it never renders or gets picked, deleted only by deleting the gas. This is bookkeeping the gas needs to exist as two rigid bodies at all, not a joint the player composed, hence not visualized.
 
-```
-Q_dot = kappa (T_res - T_gas)
-```
+### 6.2 Heat and flow interactions
 
-The gas temperature evolves by the first law with instantaneous equilibrium:
+Reservoirs are gone as a per-gas bolt-on; heat and mass exchange are now **interactions**, first-class objects each naming one solid body and one gas-or-background (`gasId === null` reads as the background, mirroring the null-id convention used everywhere else). A lone interaction moves nothing -- exchange only happens when **two** interactions share the same body, one on each side of it: the body is a wall between two gas-like things, and the pair couples whatever they each name *through* that body. This is deliberately symmetric with how a piston's two bodies work: a body-mediated relation between two other things, not a special reservoir type.
 
-```
-n c_v T_dot = kappa (T_res - T_gas) - P·V_dot
-```
+The rate depends on geometry the same way for both kinds: the **contact area** between the body's own outline and each named gas's rectangle (`geometry.js` §05.2c, a general convex-polygon clip -- a circle is approximated as a 20-gon so one routine handles every body shape), and the **smaller of the pair's two areas** is what limits the exchange (conduction/flow through a wall is bottlenecked by whichever side touches less of it). Each interaction carries its own conductivity/flow-restriction `k`; a pair's combined rate uses them in series, `1/k_eff = 1/k_1 + 1/k_2`, like two conductors back to back.
 
-Reservoir connection is switchable (which reservoir, if any, the gas is currently coupled to). When no reservoir is connected the gas is isolated and traverses an adiabat automatically by energy conservation -- **adiabatic branches are not built, they emerge.**
+**Heat.** `Q_dot = k_eff · area_min · (T_other - T_self)`, exactly Newton's law of cooling generalized to two finite-capacity sides (`C = n/(gamma-1)` per gas; the background is infinite capacity and never itself moves). Rather than integrate that ODE forward one `Q_dot·h` step at a time -- which can overshoot equilibrium at a large `k·h` -- both sides' temperatures are solved **exactly** for the substep: the temperature difference decays as `D(t) = D_0 · exp(-lambda t)` (`lambda = k_eff·area_min·(1/C_1 + 1/C_2)`) while the weighted sum `C_1 T_1 + C_2 T_2` stays exactly conserved, so both `T`s land in closed form, unconditionally stable for any step size -- literally the "approached exponentially" the spec calls for, not a design choice layered on top of an Euler step.
 
-> **Status (as built):** Simplified. In code §08.5, `T_res` is a fixed setpoint (a slider) with conductance `kappa` -- i.e. an *infinite*-capacity reservoir that neither drifts nor depletes -- and a single reservoir attaches per gas via a `connected` toggle rather than being switchable among several. The finite-capacity, depleting reservoir and multi-reservoir switching described above are pending. The `kappa = 0` adiabatic limit *is* implemented and emerges correctly -- that is exactly the gas-spring example.
+**Flow** is the same closed-form relaxation with pressure and moles playing temperature and capacity's roles: holding `T`/`V` fixed over the substep (the same instantaneous-equilibrium stance `P=nT/V` already takes), each side's "pressure per mole" `s = T/V` is constant, so `P_A - P_B` decays exponentially exactly like the heat difference did, converging on the pressure-equalizing split of the two sides' combined moles (or, against the background, on whatever `n` gives the vessel `P_bg`). Moles that cross carry the *source* gas's own internal energy with them (`dn · cv_src · T_src`), absorbed into the destination at its own `cv` -- mirroring real mixing -- while the gas left behind keeps its own `T`, since removing gas at a given temperature doesn't change the temperature of what remains.
+
+**Forces.** Flowing mass also pushes back on the vessels it crosses -- a thrust-like `|deltaP|`-scaled recoil along each side's own axis, applied at the same head/piston attachment points as the pressure force, equal-and-opposite between two real vessels and single-sided against the background (spec: "gas mass flowing from one vessel to another should apply appropriate equal and opposite forces on the vessels... flow to/from the background just applies a force to the vessel"). Its mechanical work is credited back into the same non-mechanical energy ledger the moles' own carried internal energy already uses (physics.js §08.0b/§08.1), so the exact energy-conservation rescale (§3.2's status note, §08.6) treats it as legitimate input rather than erasing it as drift.
+
+When no interaction touches a gas at all it is isolated and traverses an adiabat automatically by energy conservation (the mechanical `P·dV` term of §6.1, alone) -- **adiabatic branches are not built, they emerge**, exactly as before; the gas-spring example is precisely this case.
+
+> **Status (as built):** Implemented as described (code §08.0b). Every interaction's rate law and both relaxations are exact closed-form solutions, not stepped ODEs, so they stay stable regardless of `sim.h`/`k`. Multiple simultaneous pairs on one substep are resolved by sequential operator splitting (each pair's relaxation sees the previous pair's already-updated state) rather than one joint solve -- fine at this step size, and the per-pair math is still exactly energy/mole-conserving on its own.
 
 ### 6.3 Emergent process branches
 
-This is the modeling stance for the whole thermodynamic side: idealized process branches are *consequences* of the force law and the coupling, not trajectories imposed on the machine. An isothermal branch is the gas held at constant `T_w` by reservoir coupling, which for an ideal gas is identical to `P is proportional to 1/V`, which is identical to *constant mechanical power* delivered by the gas (`DeltaU = 0`, so `P·V_dot = Q_dot = kappa(T_res - T_w)` = const). "Hold the isotherm" and "hold the gas power constant" and "hold `V_dot/V` constant" are three faces of one condition; the last two are things a governor can regulate directly, whereas temperature is not mechanically measurable in this world. A load-controlled cycle realizes the isotherm by regulating rate, not by tracing a shape.
+This is the modeling stance for the whole thermodynamic side: idealized process branches are *consequences* of the force law and the coupling, not trajectories imposed on the machine. An isothermal branch is the gas held at constant `T_w` by a heat interaction to a much larger (near-infinite-capacity) gas or the background, which for an ideal gas is identical to `P is proportional to 1/V`, which is identical to *constant mechanical power* delivered by the gas (`DeltaU = 0`, so `P·V_dot = Q_dot = k_eff·area(T_bath - T_w)` = const). "Hold the isotherm" and "hold the gas power constant" and "hold `V_dot/V` constant" are three faces of one condition; the last two are things a governor can regulate directly, whereas temperature is not mechanically measurable in this world. A load-controlled cycle realizes the isotherm by regulating rate, not by tracing a shape.
 
 ### 6.4 Springs
 
@@ -154,13 +156,13 @@ Instrumentation is not an add-on; it is a consequence of the solver. Every bilat
 
 - Per body: `(x, y, theta, x_dot, y_dot, theta_dot)`, kinetic energy.
 - Per constraint: its multiplier `lambda` (reaction force/torque) and the power crossing it.
-- Per gas element: `P, V, T`, heat flow `Q_dot`, work rate `P·V_dot`, cumulative heat and work.
-- Per reservoir: `T_res`, remaining stored energy, cumulative heat exchanged.
+- Per gas element: `P, V, T, n`, heat+flow rate `Q_dot`, work rate `P·V_dot`, cumulative heat and work.
+- Per heat/flow interaction: live contact area, and the rate it's currently moving.
 - System-level: total energy by category, with a running balance so that dissipation-free operation is visibly conservative.
 
 This turns the constraint library into a measurement layer and is most of what makes a thermodynamics demonstrator convincing.
 
-> **Status (as built):** Partially surfaced. Live today: system energy by category -- kinetic, potential, gas internal, and spring potential (§6.4) -- with a running total and sparkline (code §12); per-constraint reaction force/torque `lambda/h`, both in the inspector and as on-canvas arrows (code §09.3, §11.6); and per-gas `P, V, T, Q_dot` (code §14.3). Not yet surfaced: the power crossing each constraint (`rate × lambda`), the gas work rate `P·V_dot`, cumulative heat and work, and per-reservoir stored/exchanged energy. These are all recoverable from quantities the solve already computes; only the readout is missing.
+> **Status (as built):** Partially surfaced. Live today: system energy by category -- kinetic, potential, gas internal, and spring potential (§6.4) -- with a running total and sparkline (code §12); per-constraint reaction force/torque `lambda/h`, both in the inspector and as on-canvas arrows (code §09.3, §11.6); per-gas `P, V, T, n, Q_dot` (code §14.3); and per-interaction live contact area (code §14.3). Not yet surfaced: the power crossing each constraint (`rate × lambda`), the gas work rate `P·V_dot`, cumulative heat and work, and a split of `Q_dot` into its heat vs. flow-carried parts (today it's their sum). These are all recoverable from quantities the solve already computes; only the readout is missing.
 
 ## 8. Editing model and UX
 

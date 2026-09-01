@@ -22,7 +22,9 @@ const TOOLS=[
   {id:'knife',key:'k',tip:'Knife-edge wheel (k)',svg:'<path d="M4 16h16"/><path d="M12 16l3-9 3 9"/><circle cx="8" cy="16" r="1.5"/>'},
   {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
   {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
-  {id:'gas',key:'6',tip:'Gas piston (6)',svg:'<rect x="3" y="8" width="11" height="8" rx="1"/><path d="M14 10.5v3M14 12h7M18 9.5v5"/>'},
+  {id:'gas',key:'6',tip:'Gas vessel / piston (6)',svg:'<rect x="3" y="8" width="11" height="8" rx="1"/><path d="M14 10.5v3M14 12h7M18 9.5v5"/>'},
+  {id:'heat',key:'h',tip:'Heat interaction (h)',svg:'<path d="M8 3c-2 3 1 3-1 6-2 3 1 5 2 5 2 0 3-2 2-4 2 1 3 3 1 6-3 2-6 0-6-3 0-2 1-3 2-5-1-1-1-3 0-5z"/>'},
+  {id:'flow',key:'f',tip:'Flow interaction (f)',svg:'<path d="M4 12c3-4 6 4 9 0M4 8c3-4 6 4 9 0M4 16c3-4 6 4 9 0"/><path d="M17 8l3 4-3 4"/>'},
   {id:'spring',key:'8',tip:'Linear spring (8)',svg:'<circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="6" r="2.4"/><path d="M7 16.5l2-3 3 6 3-6 2 3"/>'},
   {id:'rotspring',key:'9',tip:'Rotational spring (9)',svg:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 11a1 1 0 1 0 1 1"/>'},
   {id:'delete',key:'7',tip:'Delete (7)',svg:'<path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/>'},
@@ -84,13 +86,21 @@ function constraintHit(con,wx,wy){
   return false;
 }
 function pickConstraint(wx,wy){
-  for(let i=constraints.length-1;i>=0;i--){ if(constraintHit(constraints[i],wx,wy)) return i; }
+  // A gas's auto-created piston<->cylinder link is `hidden` (not visualized,
+  // tools.js §13.5) -- never let it be picked, only deleted by deleting the
+  // gas itself (purgeGas).
+  for(let i=constraints.length-1;i>=0;i--){ if(!constraints[i].hidden && constraintHit(constraints[i],wx,wy)) return i; }
   return -1;
 }
 // per-gas / per-cable hit tests, mirroring pickGas/pickCable (inspector.js
 // §14.1) -- used the same way, to test one specific already-selected object.
 function gasHit(g,wx,wy){ const tol=12/cam.scale; const f=gasFrame(g);
   return distSeg(wx,wy,f.hx,f.hy,f.pax,f.pay)<=tol; }
+// heat/flow interaction hit test, shared by both kinds -- the same dashed
+// line render.js §11.4c draws (body centre -> gas centroid, or a short stub
+// toward the background).
+function interactionHit(it,wx,wy){ const tol=12/cam.scale; const ep=interactionEndpoints(it); if(!ep) return false;
+  return distSeg(wx,wy,ep.p0[0],ep.p0[1],ep.p1[0],ep.p1[1])<=tol; }
 function cableHit(cb,wx,wy){ const tol=10/cam.scale; const f=cableFrame(cb); if(!f) return false;
   return distSeg(wx,wy,f.T[0],f.T[1],f.Qx,f.Qy)<=tol; }
 // spring / rotSpring hit tests, same role as gasHit/cableHit above -- springs
@@ -311,6 +321,19 @@ function applyHandle(ad, wx, wy){
 function scaleOffOnBody(ep, bodyId, ratio){
   if(ep && ep.id===bodyId && ep.off) ep.off=[ep.off[0]*ratio, ep.off[1]*ratio];
 }
+// Remove a gas and everything that exists only because of it: its hidden
+// piston<->cylinder prismatic link (tools.js §13.5, tagged with gasLink) and
+// any heat/flow interaction that names it -- otherwise those would dangle,
+// referencing a gasId nothing resolves to. Shared by the gas delete-tool,
+// the inspector's own "Delete gas" button, and the body-deletion cascade
+// below (a gas loses its physical meaning entirely once either of its two
+// boundary bodies is gone).
+function purgeGas(g){
+  gases=gases.filter(x=>x!==g);
+  constraints=constraints.filter(c=>!(c.hidden && c.gasLink===g.id));
+  heatInteractions=heatInteractions.filter(h=>h.gasId!==g.id);
+  flowInteractions=flowInteractions.filter(f=>f.gasId!==g.id);
+}
 // Resize the selected body by dragging its rim (§13.5/§13.6): every control
 // point anchored on it -- pin/rod/slot/knife offsets, gas cylinder/head
 // offsets, a cable tether offset -- scales by the same ratio as the radius,
@@ -342,7 +365,7 @@ function resizeBody(b, newR){
         con.restPhase=con.rA*A.th - con.sense*con.rB*B.th; }
     }
   }
-  for(const g of gases){ scaleOffOnBody(g.a, b.id, ratio); if(g.head) scaleOffOnBody(g.head, b.id, ratio); }
+  for(const g of gases){ if(g.piston) scaleOffOnBody(g.piston, b.id, ratio); if(g.head) scaleOffOnBody(g.head, b.id, ratio); }
   for(const cb of cables){ scaleOffOnBody(cb.tether, b.id, ratio); }
   // Springs (constraints.js §06.6): scale endpoint offsets like rod does,
   // leaving restLen untouched -- same precedent as rod's `len`, which the
@@ -372,7 +395,7 @@ function applyRectResize(b, newHw, newHh, newX, newY){
   const ratioX=newHw/b.hw, ratioY=newHh/b.hh;
   if(!isFinite(ratioX) || !isFinite(ratioY) || ratioX<=0 || ratioY<=0) return;
   for(const con of constraints){ scaleOffOnBodyXY(con.a,b.id,ratioX,ratioY); if(con.b) scaleOffOnBodyXY(con.b,b.id,ratioX,ratioY); }
-  for(const g of gases){ scaleOffOnBodyXY(g.a,b.id,ratioX,ratioY); if(g.head) scaleOffOnBodyXY(g.head,b.id,ratioX,ratioY); }
+  for(const g of gases){ if(g.piston) scaleOffOnBodyXY(g.piston,b.id,ratioX,ratioY); if(g.head) scaleOffOnBodyXY(g.head,b.id,ratioX,ratioY); }
   for(const cb of cables){ scaleOffOnBodyXY(cb.tether,b.id,ratioX,ratioY); }
   for(const sp of springs){ scaleOffOnBodyXY(sp.a,b.id,ratioX,ratioY); scaleOffOnBodyXY(sp.b,b.id,ratioX,ratioY); }
   b.mass*=ratioX*ratioY; b.hw=newHw; b.hh=newHh; b.x=newX; b.y=newY;
@@ -433,6 +456,8 @@ function updateHover(wx,wy){
     // §13.4/§13.5 below) so a constraint/gas/cable coincident with a body is
     // still reachable instead of always losing to the body underneath it
     const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
+    const hii=pickHeatInteraction(wx,wy); if(hii>=0){ if(!heatInteractions[hii].sel) hover=heatInteractions[hii]; return; }
+    const fii=pickFlowInteraction(wx,wy); if(fii>=0){ if(!flowInteractions[fii].sel) hover=flowInteractions[fii]; return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
     const spi=pickSpring(wx,wy); if(spi>=0){ if(!springs[spi].sel) hover=springs[spi]; return; }
@@ -443,6 +468,8 @@ function updateHover(wx,wy){
   if(tool==='delete'){
     // interactions take priority over bodies, matching the delete order (§13.5)
     const cci=pickConstraint(wx,wy); if(cci>=0){ hover=constraints[cci]; return; }
+    const hii=pickHeatInteraction(wx,wy); if(hii>=0){ hover=heatInteractions[hii]; return; }
+    const fii=pickFlowInteraction(wx,wy); if(fii>=0){ hover=flowInteractions[fii]; return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ hover=gases[gsi]; return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ hover=cables[cbi]; return; }
     const spi=pickSpring(wx,wy); if(spi>=0){ hover=springs[spi]; return; }
@@ -464,6 +491,15 @@ function updateHover(wx,wy){
   }
   if(tool==='knife'||tool==='rotspring'){
     const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
+    return;
+  }
+  if(tool==='heat'||tool==='flow'){
+    // first click needs a solid body; the second picks the gas (or empty
+    // space/background) it pairs that body with -- spec: "This interaction
+    // must have a solid body as one participant, and either a gas or the
+    // background as the other".
+    if(!pending){ const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi]; return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0) hover=gases[gsi];
     return;
   }
   // 'body'/'rectbody' tools have no existing element to highlight -- their
@@ -537,6 +573,10 @@ cv.addEventListener('pointerdown',e=>{
     // selected thing is a no-op past the redundant render).
     const cci=pickConstraint(wx,wy);
     if(cci>=0){ selectConstraint(cci); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const hii=pickHeatInteraction(wx,wy);
+    if(hii>=0){ selectHeatInteraction(hii); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const fii=pickFlowInteraction(wx,wy);
+    if(fii>=0){ selectFlowInteraction(fii); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const gsi=pickGas(wx,wy);
     if(gsi>=0){ selectGas(gsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const cbi=pickCable(wx,wy);
@@ -595,8 +635,10 @@ function runToolClick(wx,wy){
     // interactions take priority over bodies (updateHover, §13.4, mirrors
     // this order) -- a constraint/gas/cable coincident with a body is what
     // most often needs deleting without also taking the body out with it.
-    const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
-    const gsi=pickGas(wx,wy); if(gsi>=0){ gases.splice(gsi,1); clearSelection(); saveState(); return; }
+    const cci=pickConstraint(wx,wy); if(cci>=0 && !constraints[cci].hidden){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
+    const hii=pickHeatInteraction(wx,wy); if(hii>=0){ heatInteractions.splice(hii,1); clearSelection(); saveState(); return; }
+    const fii=pickFlowInteraction(wx,wy); if(fii>=0){ flowInteractions.splice(fii,1); clearSelection(); saveState(); return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0){ purgeGas(gases[gsi]); clearSelection(); saveState(); return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); return; }
     const spi=pickSpring(wx,wy); if(spi>=0){ springs.splice(spi,1); clearSelection(); saveState(); return; }
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ rotSprings.splice(rsi,1); clearSelection(); saveState(); return; }
@@ -605,24 +647,63 @@ function runToolClick(wx,wy){
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
+      // A gas loses its physical meaning entirely once either boundary body
+      // (piston or head) is gone -- purge it (and, transitively, whatever
+      // referenced it) rather than leave a dangling bodyIndex lookup.
+      for(const g of gases.filter(g=>(g.piston&&g.piston.id===id)||g.head.id===id)) purgeGas(g);
+      heatInteractions=heatInteractions.filter(h=>h.bodyId!==id);
+      flowInteractions=flowInteractions.filter(f=>f.bodyId!==id);
       bodies.splice(bi,1); clearSelection(); saveState(); }
     return;
   }
   if(tool==='gas'){
-    // FIRST click = closed end (head): on a cylinder body, or empty for a world-fixed head
+    // Two clicks, like a rectangular body placement's opposite corners
+    // (spec: "their volume set by the same corner selections as a
+    // rectangular body placement"): first the closed (head) corner, then the
+    // far corner. The far corner may land on a body -- that body becomes the
+    // movable wall (a real piston), auto-linked to the head with a hidden
+    // mutually-prismatic joint (spec's piston update, "not visualized") -- or
+    // on empty space/the head's own body, giving a fixed-length vessel with
+    // no movable wall at all. Either way the new gas starts in equilibrium
+    // with the background (spec: "by default gasses should have T and P
+    // equal to background").
     if(!pending){ const t=anchorTarget(wx,wy);
       pending = t ? {gas:true, headId:t.body.id, headWp:t.wp, wp:t.wp}
                   : {gas:true, headId:null, headWp:[wx,wy], wp:[wx,wy]};
       return; }
-    // SECOND click = piston face on a body; axis runs head -> piston (expansion +)
-    const t=anchorTarget(wx,wy); if(!t) return;
-    const dx=t.wp[0]-pending.headWp[0], dy=t.wp[1]-pending.headWp[1]; const L=Math.hypot(dx,dy);
+    const headId=pending.headId, headWp=pending.headWp; pending=null;
+    const t=anchorTarget(wx,wy);
+    const farBody = (t && t.body.id!==headId) ? t.body : null;
+    const farWp = farBody ? t.wp : [wx,wy];
+    const dx=farWp[0]-headWp[0], dy=farWp[1]-headWp[1]; const L=Math.hypot(dx,dy);
     if(L<0.2) return;
-    const axis=[dx/L,dy/L]; const A=t.body;
-    const head = pending.headId!=null
-      ? (()=>{ const B=bodies[bodyIndex(pending.headId)]; return {id:B.id, off:offOf(B,pending.headWp), dir:R(-B.th,axis[0],axis[1])}; })()
-      : {id:null, off:[pending.headWp[0],pending.headWp[1]], dir:axis};
-    pending=null; saveState();
+    const axis=[dx/L,dy/L];
+    const head = headId!=null
+      ? (()=>{ const B=bodies[bodyIndex(headId)]; return {id:B.id, off:offOf(B,headWp), dir:R(-B.th,axis[0],axis[1])}; })()
+      : {id:null, off:[headWp[0],headWp[1]], dir:axis};
+    const bore=0.6, V=bore*L, T=sim.bg.T, gamma=sim.bg.gamma, n=Math.max(sim.bg.P*V/T, 1e-6);
+    const g={kind:'gas', id:uid++, head, piston:null, bore, n, T, gamma, sel:false};
+    if(farBody){
+      g.piston={id:farBody.id, off:offOf(farBody,farWp)};
+      const link=makeSlotCon({id:farBody.id,off:g.piston.off},{id:head.id,off:head.off},true,true);
+      link.hidden=true; link.gasLink=g.id;
+      constraints.push(link);
+    } else { g.len=L; }
+    gases.push(g);
+    saveState();
+    return;
+  }
+  if(tool==='heat' || tool==='flow'){
+    // click a solid body, then click a gas (or empty/background) -- spec:
+    // "This interaction must have a solid body as one participant, and
+    // either a gas or the background as the other participant."
+    if(!pending){ const bi=pickBody(wx,wy); if(bi<0) return;
+      pending={interaction:tool, bodyId:bodies[bi].id, wp:[bodies[bi].x,bodies[bi].y]}; return; }
+    const bodyId=pending.bodyId; pending=null;
+    const gsi=pickGas(wx,wy); const gasId = gsi>=0 ? gases[gsi].id : null;
+    const rec={kind:tool, id:uid++, bodyId, gasId, k:2, sel:false};
+    if(tool==='heat') heatInteractions.push(rec); else flowInteractions.push(rec);
+    saveState();
     return;
   }
   if(tool==='belt' || tool==='cvt'){

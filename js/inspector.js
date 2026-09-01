@@ -7,17 +7,28 @@
 // ============================================================================
 // ---- §14.1 · selection state ----
 let selBody=null, selConstraint=null, selGas=null, selCable=null, selSpring=null, selRotSpring=null;
+let selHeat=null, selFlow=null;
 function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); gases.forEach(g=>g.sel=false); cables.forEach(c=>c.sel=false);
   springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false);
-  selBody=null; selConstraint=null; selGas=null; selCable=null; selSpring=null; selRotSpring=null; renderInspector(); }
+  heatInteractions.forEach(h=>h.sel=false); flowInteractions.forEach(f=>f.sel=false);
+  selBody=null; selConstraint=null; selGas=null; selCable=null; selSpring=null; selRotSpring=null;
+  selHeat=null; selFlow=null; renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
 function selectGas(i){ clearSelection(); gases[i].sel=true; selGas=gases[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
 function selectSpring(i){ clearSelection(); springs[i].sel=true; selSpring=springs[i]; renderInspector(); }
 function selectRotSpring(i){ clearSelection(); rotSprings[i].sel=true; selRotSpring=rotSprings[i]; renderInspector(); }
+function selectHeatInteraction(i){ clearSelection(); heatInteractions[i].sel=true; selHeat=heatInteractions[i]; renderInspector(); }
+function selectFlowInteraction(i){ clearSelection(); flowInteractions[i].sel=true; selFlow=flowInteractions[i]; renderInspector(); }
 function pickGas(wx,wy){
   for(let i=gases.length-1;i>=0;i--){ if(gasHit(gases[i],wx,wy)) return i; }
+  return -1; }
+function pickHeatInteraction(wx,wy){
+  for(let i=heatInteractions.length-1;i>=0;i--){ if(interactionHit(heatInteractions[i],wx,wy)) return i; }
+  return -1; }
+function pickFlowInteraction(wx,wy){
+  for(let i=flowInteractions.length-1;i>=0;i--){ if(interactionHit(flowInteractions[i],wx,wy)) return i; }
   return -1; }
 function pickCable(wx,wy){
   for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
@@ -149,38 +160,53 @@ function renderInspector(){
     }
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
   } else if(selGas){
-    const g=selGas;
+    const g=selGas; const hasPiston=!!g.piston;
     p.innerHTML=`
-      <h3>Gas piston</h3><p class="sub">force element · P = nRT / V</p>
+      <h3>Gas</h3><p class="sub">${hasPiston?'vessel + piston · ':'fixed vessel · '}P = nT / V</p>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">pressure P</span><span class="val" id="g_P">--</span></div>
         <div class="field"><span class="lab">volume V</span><span class="val" id="g_V">--</span></div>
         <div class="field"><span class="lab">temp T</span><span class="val" id="g_T">--</span></div>
-        <div class="field"><span class="lab">heat Q_dot</span><span class="val" id="g_Q">--</span></div>
+        <div class="field"><span class="lab">heat+flow Q_dot</span><span class="val" id="g_Q">--</span></div>
       </div>
       <div class="card"><div class="cardhead">gas</div>
-        <div class="field"><span class="lab">amount n</span><span class="val" id="g_nL">${g.n.toFixed(1)}</span></div>
-        <input type="range" id="g_n" min="0.5" max="10" step="0.1" value="${g.n}" style="width:100%">
+        <div class="field"><span class="lab">amount n</span><span class="val" id="g_nL">${g.n.toFixed(2)}</span></div>
+        <input type="range" id="g_n" min="0.1" max="10" step="0.1" value="${g.n}" style="width:100%">
         <div class="field"><span class="lab">gamma (index)</span><span class="val" id="g_gL">${g.gamma.toFixed(2)}</span></div>
         <input type="range" id="g_g" min="1.05" max="1.7" step="0.01" value="${g.gamma}" style="width:100%">
         <div class="field"><span class="lab">bore A</span><span class="val" id="g_bL">${g.bore.toFixed(2)}</span></div>
         <input type="range" id="g_b" min="0.3" max="3" step="0.05" value="${g.bore}" style="width:100%">
-      </div>
-      <div class="card"><div class="cardhead">reservoir</div>
-        <label class="chk"><input type="checkbox" id="g_conn" ${g.connected?'checked':''}> connected</label>
-        <div class="field"><span class="lab">T_res</span><span class="val" id="g_TrL">${g.Tres.toFixed(2)}</span></div>
-        <input type="range" id="g_Tr" min="0.2" max="3" step="0.05" value="${g.Tres}" style="width:100%">
-        <div class="field"><span class="lab">conductance kappa</span><span class="val" id="g_kL">${g.kappa.toFixed(1)}</span></div>
-        <input type="range" id="g_k" min="0" max="30" step="0.5" value="${g.kappa}" style="width:100%">
-        <p class="muted" style="margin:8px 0 0">kappa = 0 is adiabatic (a gas spring). Connect a warm/cold reservoir to move heat across the boundary at finite rate.</p>
+        ${hasPiston?'':`<div class="field"><span class="lab">length</span><span class="val" id="g_lL">${g.len.toFixed(2)}</span></div>
+        <input type="range" id="g_l" min="0.1" max="5" step="0.05" value="${g.len}" style="width:100%">`}
+        <p class="muted" style="margin:8px 0 0">${hasPiston
+          ?'The movable wall feels internal pressure against the background’s -- add heat/flow interactions (their own tools) to couple this gas to another vessel or the background.'
+          :'No movable wall: a fixed-volume vessel, only useful via heat/flow interactions elsewhere.'}</p>
       </div>
       <button class="del" id="g_del">Delete gas</button>`;
     const bind=(id,lab,key,fix)=>{ const el=document.getElementById(id);
       el.oninput=ev=>{ g[key]=parseFloat(ev.target.value); document.getElementById(lab).textContent=g[key].toFixed(fix); saveState(); }; };
-    bind('g_n','g_nL','n',1); bind('g_g','g_gL','gamma',2); bind('g_b','g_bL','bore',2);
-    bind('g_Tr','g_TrL','Tres',2); bind('g_k','g_kL','kappa',1);
-    document.getElementById('g_conn').onchange=ev=>{ g.connected=ev.target.checked; saveState(); };
-    document.getElementById('g_del').onclick=()=>{ gases=gases.filter(x=>x!==g); clearSelection(); saveState(); };
+    bind('g_n','g_nL','n',2); bind('g_g','g_gL','gamma',2); bind('g_b','g_bL','bore',2);
+    if(!hasPiston) bind('g_l','g_lL','len',2);
+    document.getElementById('g_del').onclick=()=>{ purgeGas(g); clearSelection(); saveState(); };
+  } else if(selHeat || selFlow){
+    const it=selHeat||selFlow; const isHeat=!!selHeat;
+    const gas = it.gasId!=null ? gases.find(x=>x.id===it.gasId) : null;
+    p.innerHTML=`
+      <h3>${isHeat?'Heat':'Flow'} interaction</h3>
+      <p class="sub">body ${it.bodyId} ↔ ${gas?('gas '+gas.id):'background'}</p>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field"><span class="lab">contact area</span><span class="val" id="i_area">--</span></div>
+      </div>
+      <div class="card"><div class="cardhead">${isHeat?'conductivity':'flow restriction'}</div>
+        <div class="field"><span class="lab">k</span><span class="val" id="i_kL">${it.k.toFixed(2)}</span></div>
+        <input type="range" id="i_k" min="0" max="20" step="0.1" value="${it.k}" style="width:100%">
+        <p class="muted" style="margin:8px 0 0">Two interactions on the same body -- one to each gas/background -- couple those gases through it, at a rate set by their combined k and the smaller of the two contact areas.</p>
+      </div>
+      <button class="del" id="i_del">Delete interaction</button>`;
+    document.getElementById('i_k').oninput=ev=>{ it.k=parseFloat(ev.target.value); document.getElementById('i_kL').textContent=it.k.toFixed(2); saveState(); };
+    document.getElementById('i_del').onclick=()=>{
+      if(isHeat) heatInteractions=heatInteractions.filter(x=>x!==it); else flowInteractions=flowInteractions.filter(x=>x!==it);
+      clearSelection(); saveState(); };
   } else if(selCable){
     const cb=selCable;
     p.innerHTML=`
@@ -240,6 +266,13 @@ function renderInspector(){
     p.innerHTML=`
       <h3>Bench</h3><p class="sub">nothing selected</p>
       <p class="muted">Select a body or constraint to inspect it. Every joint reports the reaction force it carries once the sim is running.</p>
+      <div class="card"><div class="cardhead">background</div>
+        <p class="muted" style="margin:0 0 8px">Counts as an infinite-capacity gas -- any heat/flow interaction pointed at empty space couples to this instead of a placed gas.</p>
+        <div class="field"><span class="lab">temp T</span><span class="val" id="bg_TL">${sim.bg.T.toFixed(2)}</span></div>
+        <input type="range" id="bg_T" min="0.2" max="3" step="0.05" value="${sim.bg.T}" style="width:100%">
+        <div class="field"><span class="lab">pressure P</span><span class="val" id="bg_PL">${sim.bg.P.toFixed(2)}</span></div>
+        <input type="range" id="bg_P" min="0" max="5" step="0.05" value="${sim.bg.P}" style="width:100%">
+      </div>
       <div class="card"><div class="cardhead">examples</div>
         <div class="examples">
           <button data-ex="pendulum">Rigid pendulum</button>
@@ -247,6 +280,7 @@ function renderInspector(){
           <button data-ex="fourbar">Four-bar linkage</button>
           <button data-ex="crank">Slider-crank + piston</button>
           <button data-ex="gasspring">Gas spring</button>
+          <button data-ex="heatengine">Piston + heat/flow</button>
           <button data-ex="skate">Skate (knife-edge)</button>
           <button data-ex="integrator">Wheel integrator (CVT)</button>
           <button data-ex="cable">Cable ratchet</button>
@@ -254,9 +288,12 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c/q tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c/q/h/f tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
+    const bindBg=(id,lab,key,fix)=>{ const el=document.getElementById(id);
+      el.oninput=ev=>{ sim.bg[key]=parseFloat(ev.target.value); document.getElementById(lab).textContent=sim.bg[key].toFixed(fix); }; };
+    bindBg('bg_T','bg_TL','T',2); bindBg('bg_P','bg_PL','P',2);
   }
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----
@@ -286,7 +323,12 @@ function updateInspectorLive(){
     const eP=document.getElementById('g_P'); if(eP){ eP.textContent=P.toFixed(3);
       document.getElementById('g_V').textContent=(g.bore*f.xc).toFixed(3);
       document.getElementById('g_T').textContent=g.T.toFixed(3);
-      document.getElementById('g_Q').textContent=(g._Q||0).toFixed(3); } }
+      document.getElementById('g_Q').textContent=(g._Q||0).toFixed(3); }
+    if(!g.piston) setLive('g_l',g.len); }
+  if(selHeat||selFlow){ const it=selHeat||selFlow; const body=bodies[bodyIndex(it.bodyId)];
+    const gas = it.gasId!=null ? gases.find(x=>x.id===it.gasId) : null;
+    const el=document.getElementById('i_area');
+    if(el && body) el.textContent = (gas ? bodyGasOverlapArea(body,gas).toFixed(3) : '∞ (background)'); }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);

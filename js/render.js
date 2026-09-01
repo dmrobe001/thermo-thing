@@ -7,6 +7,7 @@
 //    §11.3  bodies            (drawBody, jointDot)
 //    §11.4  gas & cable       (drawCable, drawGas, drawGasForce)
 //    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
+//    §11.4c heat & flow overlays (drawHeatInteraction, drawFlowInteraction)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
 //    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
@@ -33,9 +34,15 @@ function render(){
   for(const cb of cables) drawCable(cb);
   for(const sp of springs) drawSpring(sp);
   for(const rs of rotSprings) drawRotSpring(rs);
-  for(const con of constraints) drawConstraint(con);
+  // A gas's auto-created piston<->cylinder prismatic (tools.js §13.5, marked
+  // `hidden`) is deliberately not visualized (spec: "a mutually prismatic
+  // interaction which is not visualized") -- it's bookkeeping for the gas,
+  // not a joint the player placed.
+  for(const con of constraints) if(!con.hidden) drawConstraint(con);
+  for(const hi of heatInteractions) drawHeatInteraction(hi);
+  for(const fi of flowInteractions) drawFlowInteraction(fi);
   drawHandles();
-  if(sim.showForces && sim.running){ for(const con of constraints) drawReaction(con); for(const g of gases) drawGasForce(g); }
+  if(sim.showForces && sim.running){ for(const con of constraints) if(!con.hidden) drawReaction(con); for(const g of gases) drawGasForce(g); }
   if(pending) drawPending();
   if(bodyPreview) drawPreview();
   drawSnap();
@@ -206,6 +213,45 @@ function drawGas(g){
   // piston face
   const [pc1,pc2]=w2s(P1[0],P1[1]), [pd1,pd2]=w2s(P2[0],P2[1]);
   ctx.lineWidth=3.5;ctx.beginPath();ctx.moveTo(pc1,pc2);ctx.lineTo(pd1,pd2);ctx.stroke();
+}
+// ---- §11.4c · heat & flow interaction overlays ----
+// Each interaction couples one body to one gas (or the background,
+// gasId===null) -- drawn as a short dashed line from the body's centre to
+// the gas's centroid (constraints.js gasCentroid), or, for the background, a
+// fixed-length stub topped with a small hatch mark standing in for "open to
+// atmosphere". Purely a rate-law-input visualization: color alone tells heat
+// (warm) from flow (cool) apart.
+function interactionEndpoints(it){
+  const body=bodies[bodyIndex(it.bodyId)]; if(!body) return null;
+  const gas = it.gasId!=null ? gases.find(g=>g.id===it.gasId) : null;
+  const p0=[body.x,body.y];
+  if(gas) return {p0, p1:gasCentroid(gas), bg:false};
+  return {p0, p1:[body.x, body.y+0.55], bg:true};
+}
+function drawInteractionLine(ep,col){
+  const [x0,y0]=w2s(ep.p0[0],ep.p0[1]), [x1,y1]=w2s(ep.p1[0],ep.p1[1]);
+  ctx.save();
+  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+  ctx.setLineDash([]);
+  if(ep.bg){
+    const ang=Math.atan2(y1-y0,x1-x0);
+    for(const off of [-6,0,6]){ const px=x1-Math.sin(ang)*off, py=y1+Math.cos(ang)*off;
+      const ex=px+Math.cos(ang)*10, ey=py+Math.sin(ang)*10;
+      ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(ex,ey); ctx.stroke(); }
+  }
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x0,y0,3.5,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+function drawHeatInteraction(hi){
+  const ep=interactionEndpoints(hi); if(!ep) return;
+  const sel=hi.sel, hoverOn=!sel&&hover===hi;
+  drawInteractionLine(ep, sel?'#5aa9f0':hoverOn?'#8fc4f7':'#e0895a');
+}
+function drawFlowInteraction(fi){
+  const ep=interactionEndpoints(fi); if(!ep) return;
+  const sel=fi.sel, hoverOn=!sel&&hover===fi;
+  drawInteractionLine(ep, sel?'#5aa9f0':hoverOn?'#8fc4f7':'#5ac2e0');
 }
 function drawGasForce(g){
   const f=gasFrame(g); const P=g._P||g.n*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
