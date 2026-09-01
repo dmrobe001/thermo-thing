@@ -234,6 +234,12 @@ function substep(h){
   // chain length, unlike Baumgarte, and needs no new per-mechanism tuning.
   if(!grabbing){
     const post=energy();
+    // totalQ is the raw reservoir heat Q (not net dU): the P·dV term inside
+    // dU=Q-P·dV is internal work already transferred into the mechanism's
+    // KE/PE by §08.1/§08.3/§08.4 and reflected in post.pe/post.ke, so adding
+    // it again here would double-count it. Only the externally-sourced Q
+    // belongs in the invariant alongside preE (which already includes the
+    // gas's own pre-substep internal energy).
     const keTarget=preE+totalQ-post.pe-post.U;
     if(keTarget>0 && post.ke>1e-12){
       const s=Math.sqrt(keTarget/post.ke);
