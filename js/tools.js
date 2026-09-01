@@ -142,7 +142,13 @@ function cableHandlePos(cb){
 }
 function pickCableHandle(wx,wy){
   const tol=11/cam.scale;
-  for(let i=cables.length-1;i>=0;i--){
+  // the selected cable's own handle takes priority over any other cable's
+  // handle occupying the same point -- otherwise a click meant to drag the
+  // selection's control point can be hijacked into re-selecting whichever
+  // cable happens to sit on top there instead.
+  if(selCable){ const h=cableHandlePos(selCable);
+    if(h && Math.hypot(wx-h.x,wy-h.y)<=tol) return {cb:selCable,cbi:cables.indexOf(selCable),which:'ctrl'}; }
+  for(let i=cables.length-1;i>=0;i--){ if(cables[i]===selCable) continue;
     const h=cableHandlePos(cables[i]); if(!h) continue;
     if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {cb:cables[i],cbi:i,which:'ctrl'}; }
   return null;
@@ -170,7 +176,13 @@ function applyCableHandle(ad,wx,wy){
 }
 function pickHandle(wx,wy){
   const tol=11/cam.scale;
-  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i];
+  // the selected constraint's own control points take priority over any
+  // other constraint's handle occupying the same point -- mirrors
+  // pickCableHandle above, for the same reason.
+  if(selConstraint){
+    for(const h of conHandles(selConstraint)){
+      if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:selConstraint,which:h.which,ci:constraints.indexOf(selConstraint)}; } }
+  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i]; if(con===selConstraint) continue;
     for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,ci:i}; } }
   return null;
 }
