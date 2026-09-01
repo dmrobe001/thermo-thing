@@ -236,18 +236,20 @@ function drawConstraint(con){
   }
   else if(con.type==='cvt'){
     const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
-    let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d, uy=rvy/d;
-    const px=A.x+ux*A.r, py=A.y+uy*A.r;              // contact on A's rim toward B
-    drawRim(A.x,A.y,A.r,col);
-    const [ax,ay]=w2s(A.x,A.y), [bx,by]=w2s(B.x,B.y);
-    ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([2,3]);
-    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();ctx.setLineDash([]);
-    jointDot(px,py,col);
+    const d=Math.hypot(B.x-A.x,B.y-A.y)||1e-6;
+    const rB=Math.max(d-A.r,0);                        // current contact radius on B, the disk
+    drawRim(A.x,A.y,A.r,col,A.th);                      // wheel: fixed perimeter
+    drawRim(B.x,B.y,rB,col,B.th);                       // disk: current contact radius
   }
 }
-function drawRim(x,y,r,col){ const [sx,sy]=w2s(x,y);
-  ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
-  ctx.beginPath();ctx.arc(sx,sy,r*cam.scale,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]); }
+// Dotted circle whose dash phase is tied to `ang` (the owning body's rotation),
+// so the pattern visibly spins with the body rather than staying screen-fixed.
+// Screen angle runs opposite world angle (w2s flips y), so the dash offset —
+// measured as arc length along the canvas path — carries a matching sign flip.
+function drawRim(x,y,r,col,ang=0){ const [sx,sy]=w2s(x,y); const rr=r*cam.scale;
+  ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.lineDashOffset=-ang*rr;
+  ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);ctx.stroke();
+  ctx.setLineDash([]);ctx.lineDashOffset=0; }
 function beltTangents(ax,ay,ra, bx,by,rb, sense){
   const dx=bx-ax, dy=by-ay, d=Math.hypot(dx,dy)||1e-6; const base=Math.atan2(dy,dx); const segs=[];
   if(sense>0){ let c=(ra-rb)/d; c=Math.max(-1,Math.min(1,c)); const g=Math.acos(c);
