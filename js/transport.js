@@ -53,7 +53,7 @@ window.addEventListener('keydown',e=>{
   if(e.code==='Space'){ e.preventDefault(); setRunning(!sim.running); }
   else if(e.key==='r'||e.key==='R'){ setRunning(false); restoreState(); eHist.length=0; }
   else if(e.key==='s'||e.key==='S'){ if(!sim.running){ if(!saved)saveState(); substep(sim.h);} }
-  else if(e.key==='Escape'){ pending=null; setTool('select'); }
+  else if(e.key==='Escape'){ pending=null; bodyPreview=null; setTool('select'); }
   else if(e.key==='Delete'||e.key==='Backspace'){ if(selBody){const id=selBody.id;
       constraints=constraints.filter(c=>c.a.id!==id&&!(c.b&&c.b.id===id)); bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}
       else if(selConstraint){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); } }

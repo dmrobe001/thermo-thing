@@ -72,8 +72,9 @@ function drawBody(b){
     ctx.fillStyle='#cdd5e0'; ctx.fill();
   }
   const hoverOn = hover===b;
-  ctx.lineWidth = b.sel?2.5: hoverOn?2:1.4;
-  ctx.strokeStyle = b.sel? '#5aa9f0': hoverOn? '#8fc4f7':'#7c8798';
+  const resizeOn = hoverHandle && hoverHandle.kind==='resize' && hoverHandle.b===b;
+  ctx.lineWidth = resizeOn?3.5 : b.sel?2.5: hoverOn?2:1.4;
+  ctx.strokeStyle = resizeOn?'#8fd0ff' : b.sel? '#5aa9f0': hoverOn? '#8fc4f7':'#7c8798';
   ctx.stroke();
   // orientation tick + centre dot (shows spin)
   const [tx,ty]=w2s(b.x+Math.cos(b.th)*b.r, b.y+Math.sin(b.th)*b.r);
