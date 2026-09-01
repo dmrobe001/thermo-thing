@@ -8,20 +8,27 @@
 //    §12.3  drawSpark  (total-energy trace)
 // ============================================================================
 // ---- §12.1 · energy ----
-function energy(){
+// island is an optional {bodyIdx,springs,rotSprings,gases} scope (see
+// physics.js §08.0/§08.6) restricting the totals to one momentum-island
+// instead of the whole world; omit it for the HUD's whole-scene reading.
+function energy(island){
+  const bs = island ? island.bodyIdx.map(i=>bodies[i]) : bodies;
+  const sps = island ? island.springs : springs;
+  const rss = island ? island.rotSprings : rotSprings;
+  const gss = island ? island.gases : gases;
   let ke=0, pe=0;
-  for(const b of bodies){ if(b.static)continue;
+  for(const b of bs){ if(b.static)continue;
     ke+=0.5*b.mass*(b.vx*b.vx+b.vy*b.vy)+0.5*b.I*b.w*b.w;
     if(sim.gravity) pe+=b.mass*sim.g*b.y;
   }
-  let U=0; for(const g of gases) U += g.n*(1/(g.gamma-1))*g.T;   // internal energy of the gas
+  let U=0; for(const g of gss) U += g.n*(1/(g.gamma-1))*g.T;   // internal energy of the gas
   // spring potential energy: 0.5*k*deviation^2 for each linear (length) and
   // rotational (angle) spring, so §08.6's rescale sees them as a legitimate
   // KE<->PE channel rather than a discrepancy to erase (see physics.js §08.6).
   let SPE=0;
-  for(const sp of springs){ const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
+  for(const sp of sps){ const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
     const L=Math.hypot(wax-wbx,way-wby); SPE += 0.5*sp.k*(L-sp.restLen)*(L-sp.restLen); }
-  for(const rs of rotSprings){ const dev=rotSpringRelAngle(rs)-rs.restAngle; SPE += 0.5*rs.k*dev*dev; }
+  for(const rs of rss){ const dev=rotSpringRelAngle(rs)-rs.restAngle; SPE += 0.5*rs.k*dev*dev; }
   return {ke,pe,U,SPE,tot:ke+pe+U+SPE};
 }
 // ---- §12.2 · updateHUD ----
