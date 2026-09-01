@@ -35,7 +35,7 @@ function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodi
 // ---- §16.2 · transport (play / step / reset) ----
 const btnPlay=document.getElementById('btnPlay');
 function setRunning(r){ sim.running=r; btnPlay.textContent=r?'Pause':'Play'; btnPlay.classList.toggle('on',r);
-  if(r){ saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; hover=null; hoverHandle=null; } }
+  if(r){ saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; hover=null; hoverHandle=null; hoverSnap=null; } }
 btnPlay.onclick=()=>setRunning(!sim.running);
 document.getElementById('btnStep').onclick=()=>{ if(sim.running)return; if(!saved)saveState(); projectPositions(20); substep(sim.h); };
 document.getElementById('btnReset').onclick=()=>{ setRunning(false); restoreState(); eHist.length=0; };

@@ -32,7 +32,7 @@ TOOLS.forEach((t,i)=>{
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
 });
-function setTool(id){ tool=id; pending=null; bodyPreview=null; hover=null; hoverHandle=null;
+function setTool(id){ tool=id; pending=null; bodyPreview=null; hover=null; hoverHandle=null; hoverSnap=null;
   document.querySelectorAll('.tool').forEach(e=>e.classList.toggle('on',e.dataset.id===id));
   cv.style.cursor = id==='select'?'default': id==='delete'?'not-allowed':'crosshair';
   document.getElementById('modehint').textContent = TOOLS.find(t=>t.id===id).tip;
@@ -258,30 +258,55 @@ function applyBodyResize(rd, wx, wy){
 // active pointers keyed by id, for one-finger pan and two-finger pinch-zoom
 const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
+let clickArmed=false;   // non-select tools: the tap-committed click (§13.5/§13.7)
 let anchorDrag=null, lastSnap=null, resizeDrag=null;
-function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; }
+function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; clickArmed=false; }
 
 // `hover` highlights whatever body/interaction sits under the cursor when it
 // isn't already selected; `hoverHandle` highlights a control point of the
-// *selected* interaction when the cursor is over it. Both are recomputed on
-// every pointermove (§13.6) and cleared whenever the pointer is busy doing
-// something else (dragging, panning, pinching, ...).
-let hover=null, hoverHandle=null;
+// *selected* interaction when the cursor is over it; `hoverSnap` highlights
+// the specific anchor location (body centre/edge) a placement tool would
+// attach to. All three are recomputed on every pointermove (§13.6) and
+// cleared whenever the pointer is busy doing something else (dragging,
+// panning, pinching, ...).
+let hover=null, hoverHandle=null, hoverSnap=null;
 function updateHover(wx,wy){
-  hover=null; hoverHandle=null;
-  if(sim.running || tool!=='select') return;
-  // a control point of the already-selected interaction takes priority
-  const ch=pickCableHandle(wx,wy);
-  if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
-  const h=pickHandle(wx,wy);
-  if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which}; return; }
-  // ...as does the selected body's rim, the resize handle
-  if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
-  // otherwise highlight whatever is under the cursor, unless it's the selection
-  const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
-  const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
-  const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
-  const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
+  hover=null; hoverHandle=null; hoverSnap=null;
+  if(sim.running) return;
+  if(tool==='select'){
+    // a control point of the already-selected interaction takes priority
+    const ch=pickCableHandle(wx,wy);
+    if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
+    const h=pickHandle(wx,wy);
+    if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which}; return; }
+    // ...as does the selected body's rim, the resize handle
+    if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
+    // otherwise highlight whatever is under the cursor, unless it's the selection
+    const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
+    const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
+    const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
+    return;
+  }
+  if(tool==='delete'){
+    // interactions take priority over bodies, matching the delete order (§13.5)
+    const cci=pickConstraint(wx,wy); if(cci>=0){ hover=constraints[cci]; return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0){ hover=gases[gsi]; return; }
+    const cbi=pickCable(wx,wy); if(cbi>=0){ hover=cables[cbi]; return; }
+    const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
+    return;
+  }
+  if(tool==='pin'||tool==='rod'||tool==='slot'||tool==='gas'||tool==='cable'){
+    // these tools attach to a snapped anchor (body centre/edge) or a bare body
+    const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
+    return;
+  }
+  if(tool==='belt'||tool==='cvt'||tool==='knife'){
+    const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
+    return;
+  }
+  // 'body' tool has no existing element to highlight -- its own live preview
+  // (bodyPreview, render.js §11.7) already shows where the new body will go
 }
 
 function startPinch(){
@@ -299,10 +324,12 @@ function startPinch(){
 // Every non-select tool, and every select-tool click that doesn't land on
 // the current selection's own draggable region (a handle, its rim, or its
 // body), arms `panning` as a fallback: pinch/drag/scroll pan and zoom
-// regardless of the active tool, and a tool's own click action (placing a
-// pending anchor, picking a new selection, ...) always fires immediately on
-// pointerdown -- a subsequent drag just pans the view on top of it, it never
-// also creates or moves anything. Search  tool==='<name>'  to reach one.
+// regardless of the active tool. A non-select tool's own click action
+// (placing a pending anchor, deleting whatever is under the cursor, ...) is
+// deferred until pointerup (`clickArmed`, consumed by endPointer / runToolClick
+// below) and only actually runs if the gesture turns out to be a tap rather
+// than a drag -- otherwise the drag would both pan *and* place/delete
+// something. Search  tool==='<name>'  to reach one.
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);
   const rect=cv.getBoundingClientRect();
@@ -314,7 +341,7 @@ cv.addEventListener('pointerdown',e=>{
   if(pointers.size>2) return;
 
   const [wx,wy]=mouseWorld;
-  downScreen=[px,py]; movedFar=false;
+  downScreen=[px,py]; movedFar=false; clickArmed=false;
 
   if(e.button===1 || (e.button===0 && e.altKey)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
 
@@ -363,10 +390,19 @@ cv.addEventListener('pointerdown',e=>{
     return;
   }
 
-  // every other tool: arm the background pan up front, then run the tool's
-  // own click logic -- a drag from here always just pans (§13.6/§13.7).
+  // every other tool: arm the background pan up front, but *don't* run the
+  // tool's own click logic yet -- a drag from here must only pan, never also
+  // place/delete something. The click logic is deferred to pointerup
+  // (§13.7 endPointer) and only fires if the gesture turns out to be a tap
+  // (!movedFar); a real drag is left to have panned and nothing else.
   panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y};
-
+  clickArmed=true;
+  return;
+});
+// the click logic for every non-select tool, run only on a confirmed tap
+// (pointerdown that never turned into a drag) -- see the pointerdown handler
+// above for why this is deferred instead of firing immediately.
+function runToolClick(wx,wy){
   if(tool==='body'){
     // two clicks, like every other creation tool: first click drops the
     // centre and previews the radius live as the pointer hovers afterward
@@ -378,13 +414,16 @@ cv.addEventListener('pointerdown',e=>{
     return;
   }
   if(tool==='delete'){
+    // interactions take priority over bodies (updateHover, §13.4, mirrors
+    // this order) -- a constraint/gas/cable coincident with a body is what
+    // most often needs deleting without also taking the body out with it.
+    const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
+    const gsi=pickGas(wx,wy); if(gsi>=0){ gases.splice(gsi,1); clearSelection(); saveState(); return; }
+    const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ const id=bodies[bi].id;
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
-      bodies.splice(bi,1); clearSelection(); saveState(); return; }
-    const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
-    const gsi=pickGas(wx,wy); if(gsi>=0){ gases.splice(gsi,1); clearSelection(); saveState(); return; }
-    const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); }
+      bodies.splice(bi,1); clearSelection(); saveState(); }
     return;
   }
   if(tool==='gas'){
@@ -503,7 +542,7 @@ cv.addEventListener('pointerdown',e=>{
     saveState();
     return;
   }
-});
+}
 
 // ---- §13.6 · pointermove (drag / pan / pinch / handle articulation) ----
 cv.addEventListener('pointermove',e=>{
@@ -524,7 +563,7 @@ cv.addEventListener('pointermove',e=>{
   if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
   if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
 
-  if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; }
+  if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; hoverSnap=null; }
   else updateHover(mouseWorld[0],mouseWorld[1]);
   if(tool==='select') cv.style.cursor = resizeDrag ? 'grabbing' : (hoverHandle && hoverHandle.kind==='resize') ? 'grab' : 'default';
 
@@ -572,12 +611,24 @@ function endPointer(e){
     anchorDrag=null; lastSnap=null; downScreen=null; return;
   }
   if(resizeDrag){ resizeDrag=null; downScreen=null; return; }
+  // commit a non-select tool's click now, but only for a genuine tap -- a
+  // pointer that moved far enough to count as a drag already just panned
+  // (§13.5/§13.6), and a cancelled pointer (e.g. an interrupted gesture)
+  // shouldn't place/delete anything either. Recompute the world point from
+  // this event's own coordinates (not the possibly-stale `mouseWorld`) so
+  // the action fires exactly where the tap was released.
+  if(clickArmed && !movedFar && e.type==='pointerup'){
+    const rect=cv.getBoundingClientRect();
+    const [ux,uy]=s2w(e.clientX-rect.left, e.clientY-rect.top);
+    runToolClick(ux,uy);
+  }
+  clickArmed=false;
   if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
   drag=null; grab=null; downScreen=null;
 }
 cv.addEventListener('pointerup',endPointer);
 cv.addEventListener('pointercancel',endPointer);
-cv.addEventListener('pointerleave',()=>{ hover=null; hoverHandle=null; });
+cv.addEventListener('pointerleave',()=>{ hover=null; hoverHandle=null; hoverSnap=null; });
 cv.addEventListener('wheel',e=>{ e.preventDefault();
   const rect=cv.getBoundingClientRect(); const mx=e.clientX-rect.left,my=e.clientY-rect.top;
   const before=s2w(mx,my); cam.scale*=Math.exp(-e.deltaY*0.0012);

@@ -315,9 +315,13 @@ function drawHandles(){
       ctx.fillStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill(); } }
 }
 function drawSnap(){
-  if(!anchorDrag || !lastSnap) return;
-  const [sx,sy]=w2s(lastSnap.wp[0],lastSnap.wp[1]);
+  // an active handle drag's live snap takes priority; otherwise show a
+  // placement tool's hover snap (updateHover, tools.js §13.4) -- the anchor
+  // (body centre/edge) a click would attach to right now
+  const s = (anchorDrag && lastSnap) ? lastSnap : hoverSnap;
+  if(!s) return;
+  const [sx,sy]=w2s(s.wp[0],s.wp[1]);
   ctx.strokeStyle='#57c78a';ctx.lineWidth=2;ctx.setLineDash([3,3]);
   ctx.beginPath();ctx.arc(sx,sy,9,0,Math.PI*2);ctx.stroke();ctx.setLineDash([]);
-  ctx.fillStyle='#57c78a';ctx.font='10px ui-monospace, monospace';ctx.fillText(lastSnap.kind, sx+12, sy-9);
+  ctx.fillStyle='#57c78a';ctx.font='10px ui-monospace, monospace';ctx.fillText(s.kind, sx+12, sy-9);
 }
