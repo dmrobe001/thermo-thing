@@ -258,7 +258,7 @@ function applyBodyResize(rd, wx, wy){
 // active pointers keyed by id, for one-finger pan and two-finger pinch-zoom
 const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
-let downWorld=[0,0], clickArmed=false;   // non-select tools: the tap-committed click (§13.5/§13.7)
+let clickArmed=false;   // non-select tools: the tap-committed click (§13.5/§13.7)
 let anchorDrag=null, lastSnap=null, resizeDrag=null;
 function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; clickArmed=false; }
 
@@ -337,7 +337,7 @@ cv.addEventListener('pointerdown',e=>{
   pointers.set(e.pointerId,{x:px,y:py});
   mouseScreen=[px,py]; mouseWorld=s2w(px,py);
 
-  if(pointers.size===2){ cancelSingle(); clickArmed=false; startPinch(); return; }   // second finger -> pinch, never a tool action
+  if(pointers.size===2){ cancelSingle(); startPinch(); return; }   // second finger -> pinch, never a tool action
   if(pointers.size>2) return;
 
   const [wx,wy]=mouseWorld;
@@ -396,7 +396,7 @@ cv.addEventListener('pointerdown',e=>{
   // (§13.7 endPointer) and only fires if the gesture turns out to be a tap
   // (!movedFar); a real drag is left to have panned and nothing else.
   panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y};
-  downWorld=[wx,wy]; clickArmed=true;
+  clickArmed=true;
   return;
 });
 // the click logic for every non-select tool, run only on a confirmed tap
@@ -614,8 +614,14 @@ function endPointer(e){
   // commit a non-select tool's click now, but only for a genuine tap -- a
   // pointer that moved far enough to count as a drag already just panned
   // (§13.5/§13.6), and a cancelled pointer (e.g. an interrupted gesture)
-  // shouldn't place/delete anything either.
-  if(clickArmed && !movedFar && e.type==='pointerup') runToolClick(downWorld[0], downWorld[1]);
+  // shouldn't place/delete anything either. Recompute the world point from
+  // this event's own coordinates (not the possibly-stale `mouseWorld`) so
+  // the action fires exactly where the tap was released.
+  if(clickArmed && !movedFar && e.type==='pointerup'){
+    const rect=cv.getBoundingClientRect();
+    const [ux,uy]=s2w(e.clientX-rect.left, e.clientY-rect.top);
+    runToolClick(ux,uy);
+  }
   clickArmed=false;
   if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
   drag=null; grab=null; downScreen=null;
