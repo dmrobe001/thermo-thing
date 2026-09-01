@@ -341,13 +341,19 @@ function rowsFor(con){
   if(con.type==='dragpin'){
     // Internal-only: pins a point on A to a fixed world point. Never a user
     // constraint -- §13.6 feeds one through projectPositions as a transient
-    // goal while the player drags a body around in edit mode.
+    // goal while the player drags a body around in edit mode. Marked `soft`
+    // so projectPositions gives it extra compliance (§09.1): it's a UI pull,
+    // not a real joint, and in any DOF a real constraint also has a say over
+    // (dragging a rod's free end off the circle its weld allows, a slider off
+    // its rail), the real joint should win outright rather than splitting the
+    // difference and showing up as a violation on a mechanism that's actually
+    // fully satisfied within its own reachable directions.
     const A = bodies[bodyIndex(con.a.id)];
     const [wax,way,rax,ray] = worldPt(A,con.a.off);
     const ia = bodyIndex(con.a.id);
     return [
-      { cols:[[ia,1,0,-ray]], C: wax-con.world[0] },
-      { cols:[[ia,0,1, rax]], C: way-con.world[1] }
+      { cols:[[ia,1,0,-ray]], C: wax-con.world[0], soft:true },
+      { cols:[[ia,0,1, rax]], C: way-con.world[1], soft:true }
     ];
   }
   if(con.type==='pin'){

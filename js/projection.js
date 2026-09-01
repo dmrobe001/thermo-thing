@@ -12,6 +12,14 @@
 // heavy/static bodies move least. `extra` holds transient constraints (e.g. a
 // drag goal). Used at Play and while articulating a dragged body. Nonholonomic
 // rows (nh:true) are skipped -- they have no position invariant to project onto.
+// Extra compliance folded into a `soft` row's own diagonal term (relative to
+// its own weight, so it scales with whatever body/mass it happens to touch --
+// see the dragpin row in constraints.js). Sized so a soft row alone (nothing
+// else contending for the same DOF) still closes to within a fraction of a
+// percent of its target over `iters` Newton passes, while a hard row sharing
+// that DOF drowns it out almost entirely -- the hard row's own diagonal carries
+// no such penalty, so the least-squares split leans overwhelmingly its way.
+const DRAG_SOFT_ALPHA = 1;
 function projectPositions(iters, extra){
   const cons = (extra && extra.length) ? constraints.concat(extra) : constraints;
   for(let it=0; it<iters; it++){
@@ -26,6 +34,7 @@ function projectPositions(iters, extra){
         for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue; const im=invMdiag(bodies[bi]);
           s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
         Kt[i][j]=s; Kt[j][i]=s; }
+      if(rows[i].soft) Kt[i][i]+=Kt[i][i]*DRAG_SOFT_ALPHA;
       Kt[i][i]+=sim.reg;
     }
     const rhs=rows.map(r=>-r.C);

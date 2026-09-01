@@ -33,7 +33,13 @@ function substep(h){
       const [wx,wy,rx,ry]=worldPt(b,grab.off);
       const vpx=b.vx - b.w*ry, vpy=b.vy + b.w*rx;
       const K=40*b.mass, Cd=9*b.mass;
-      const Fx=K*(mouseWorld[0]-wx)-Cd*vpx, Fy=K*(mouseWorld[1]-wy)-Cd*vpy;
+      // Same screen-space-capped pull as the pose-mode drag (§05.4, tools.js
+      // §13.6): the spring's *reach* saturates with on-screen distance, so a
+      // body a constraint won't let follow the cursor gets pulled by a bounded
+      // force instead of one that keeps growing with however far the mouse has
+      // strayed.
+      const [px,py]=saturatingPull(wx,wy,mouseWorld[0],mouseWorld[1],DRAG_CAP_PX);
+      const Fx=K*px-Cd*vpx, Fy=K*py-Cd*vpy;
       FX[i]+=Fx; FY[i]+=Fy; TAU[i]+=rx*Fy-ry*Fx;
     }
   }

@@ -36,3 +36,25 @@ function W(){ return cv.clientWidth; }
 function H(){ return cv.clientHeight; }
 function w2s(wx,wy){ return [ W()/2 + (wx-cam.x)*cam.scale, H()/2 - (wy-cam.y)*cam.scale ]; }
 function s2w(sx,sy){ return [ cam.x + (sx-W()/2)/cam.scale, cam.y - (sy-H()/2)/cam.scale ]; }
+
+// ---- §05.4 · saturating drag pull ----
+// Screen-space-capped offset from a world point toward a world target, used
+// everywhere a dragged body is pulled toward the cursor (tools.js §13.6 pose
+// drag, physics.js §08.1 play-mode grab spring). Grows ~1:1 with the on-screen
+// distance for a small, precise tug -- so an unconstrained body still tracks
+// the cursor exactly -- but asymptotes to capPx screen pixels' worth of world
+// distance however far the cursor is dragged, instead of growing without
+// bound. That keeps a constrained body (a rod welded to the background, a
+// slider on a fixed rail) from being yanked toward an ever more distant,
+// unreachable goal when the drag has a component the joint can't satisfy --
+// the joint's own rows stay near-exactly solved instead of being outvoted by
+// a runaway pull.
+const DRAG_CAP_PX = 80;
+function saturatingPull(fromWx, fromWy, toWx, toWy, capPx){
+  const dx=toWx-fromWx, dy=toWy-fromWy, d=Math.hypot(dx,dy);
+  if(d<1e-9) return [0,0];
+  const capW = capPx/cam.scale;
+  const mag = capW*(1-Math.exp(-d/capW));
+  const s = mag/d;
+  return [dx*s, dy*s];
+}
