@@ -282,10 +282,13 @@ function updateHover(wx,wy){
     // ...as does the selected body's rim, the resize handle
     if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
     // otherwise highlight whatever is under the cursor, unless it's the selection
-    const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
+    // -- interactions take priority over bodies (matching the delete order,
+    // §13.4/§13.5 below) so a constraint/gas/cable coincident with a body is
+    // still reachable instead of always losing to the body underneath it
     const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
+    const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
     return;
   }
   if(tool==='delete'){
@@ -374,18 +377,21 @@ cv.addEventListener('pointerdown',e=>{
     // nothing of the current selection was hit -- a fresh topmost pick, which
     // changes the selection (a body's pick also arms its drag/grab in the
     // same gesture: it becomes selected here, before any pointermove, so a
-    // drag starting on it still satisfies "starts on the selected thing")
-    const bi=pickBody(wx,wy);
-    if(bi>=0){ selectBody(bi);
-      if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
-      else { drag={bi, off:localOff(bi,wx,wy)}; }
-      return; }
+    // drag starting on it still satisfies "starts on the selected thing").
+    // Interactions take priority over bodies here too (matching updateHover
+    // and the delete-tool order, §13.4) so a constraint/gas/cable coincident
+    // with a body is what gets selected, not the body occluding it.
     const cci=pickConstraint(wx,wy);
     if(cci>=0){ selectConstraint(cci); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const gsi=pickGas(wx,wy);
     if(gsi>=0){ selectGas(gsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const cbi=pickCable(wx,wy);
     if(cbi>=0){ selectCable(cbi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const bi=pickBody(wx,wy);
+    if(bi>=0){ selectBody(bi);
+      if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
+      else { drag={bi, off:localOff(bi,wx,wy)}; }
+      return; }
     panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y,candidate:true};   // one-finger background pan; a tap deselects
     return;
   }
@@ -511,9 +517,10 @@ function runToolClick(wx,wy){
       return; }
     const t=anchorTarget(wx,wy);
     const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
-    const Aep={id:pending.id, off:pending.off}; pending=null;
-    if(Aep.id==null && Bep.id==null) return;      // a rod needs at least one real body
-    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself
+    const Aep={id:pending.id, off:pending.off};
+    if(Aep.id==null && Bep.id==null) return;      // a rod needs at least one real body -- keep pending, wait for a better second click
+    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself -- ditto
+    pending=null;
     // A rod touching the background defaults to both ends welded -- a rigid
     // strut out of the wall -- since that's the anchoring use case; the user
     // can tap either end afterward to free it into a pin.
@@ -531,9 +538,10 @@ function runToolClick(wx,wy){
       return; }
     const t=anchorTarget(wx,wy);
     const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
-    const Aep={id:pending.id, off:pending.off}; pending=null;
-    if(Aep.id==null && Bep.id==null) return;      // needs at least one real body
-    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rail a body to itself
+    const Aep={id:pending.id, off:pending.off};
+    if(Aep.id==null && Bep.id==null) return;      // needs at least one real body -- keep pending, wait for a better second click
+    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rail a body to itself -- ditto
+    pending=null;
     // A slot touching the background defaults to both ends prismatic -- a
     // fixed rail -- since that's the confinement use case; tapping either end
     // afterward frees it back into a plain (visual-only) pin.
