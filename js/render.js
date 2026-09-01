@@ -23,8 +23,11 @@ function render(){
   violCount=0;
   // Bodies paint first so every constraint/force-element visualization --
   // joint dots, tether points, rods, rims -- draws in front of them instead
-  // of being occluded by a body's opaque fill.
-  for(const b of bodies) drawBody(b);
+  // of being occluded by a body's opaque fill. Within that, larger bodies
+  // paint before smaller ones so a small body nested against/inside a big
+  // one is never hidden by it (a sort copy -- `bodies` itself stays in
+  // creation order, which pick/hit-testing still relies on).
+  for(const b of [...bodies].sort((p,q)=>q.r-p.r)) drawBody(b);
   for(const g of gases) drawGas(g);
   for(const cb of cables) drawCable(cb);
   for(const con of constraints) drawConstraint(con);

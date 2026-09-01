@@ -12,7 +12,7 @@
 let saved=null;
 function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})), gT:gases.map(g=>g.T), cSA:cables.map(c=>c.spoolAngle) }; }
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
-  if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=0;b.vy=0;b.w=0; } }
+  if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0; } }
   gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i]; });
   // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
