@@ -21,9 +21,15 @@ let uid = 1;
 
 // ---- §04.3 · sim parameters & camera ----
 // h: fixed step. maxSub: max substeps per frame. beta: Baumgarte gain (spec §3.4).
+// A gain much below 1 under-corrects each step's position drift at this h, which
+// bleeds kinetic energy every substep — most visibly on multi-body chains (e.g. the
+// double pendulum) right at the extremes of a swing, where drift is largest. beta=1
+// (correct ~all of the drift within one substep) was found empirically to minimize
+// that leak across the example mechanisms while staying well under the ~2.5-3
+// instability threshold for kb·h at this step size.
 // reg: Tikhonov term added to the Schur diagonal so redundant rows stay solvable.
 const sim = { running:false, gravity:true, g:9.8, showForces:true, showGrid:true,
-              h:1/120, maxSub:6, beta:0.15, reg:1e-8, forceRef:1 };
+              h:1/120, maxSub:6, beta:1.0, reg:1e-8, forceRef:1 };
 
 // camera: world point at screen centre, px per world unit
 const cam = { x:0, y:2.2, scale:64 };
