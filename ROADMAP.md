@@ -22,7 +22,7 @@ Both machines are assembled entirely from library primitives: gas piston, slot/r
 
 ## 11. Implementation status at a glance
 
-The core is live and honest: maximal-coordinate rigid bodies; the velocity-linear bilateral constraints (pin, rod — either end optionally anchored to the fixed background instead of a body, and independently weldable into a rotation-locked joint there — slot/prismatic, belt, and the nonholonomic knife-edge and CVT); the Baumgarte-stabilized Schur-complement solve; position projection; the reaction-force readout that turns each multiplier into the force its joint carries; the gas piston with finite-rate boundary heat exchange; and a unilateral tetherball cable.
+The core is live and honest: maximal-coordinate rigid bodies; the velocity-linear bilateral constraints (pin; rod and slot/prismatic, both two-endpoint constraints where either end may anchor to the fixed background instead of a body and independently lock into a rotation-locked joint there — a rod always holds its distance, a slot only gains rows once at least one end is locked; belt; and the nonholonomic knife-edge and CVT); the Baumgarte-stabilized Schur-complement solve; position projection; the reaction-force readout that turns each multiplier into the force its joint carries; the gas piston with finite-rate boundary heat exchange; and a unilateral tetherball cable.
 
 The gaps are catalogued in **Status (as built)** notes throughout `DEVELOPMENT.md`, and none is blocked by the architecture — each is additive:
 

@@ -19,11 +19,16 @@ function loadExample(kind){
     const a=dy(-1.2,2.8,0.3), b=dy(1.3,2.9,0.3); rodBG(-1.6,1.2,a); rod(a,b); rodBG(1.6,1.2,b); }
   else if(kind==='crank'){ const pin=dy(-1.0,2.4,0.24); const P=dy(1.7,2.4,0.34);
     rodBG(-1.6,2.4,pin); rod(pin,P);
-    constraints.push({type:'slot', a:{id:P.id,off:[0,0]}, line:{id:null, off:[P.x,P.y], dir:[1,0]},
-                      lockRot:false, restAng:P.th, sel:false}); }
+    // Position-only rail: P (pin, free to rotate) confined to the horizontal
+    // line through a background point that's prismatic. A single locked end
+    // pins φ=atan2(...) directly (§06.5), which is singular if P ever passes
+    // through the anchor — keep it well outside P's travel range.
+    constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x-10,P.y]}, false, true)); }
   else if(kind==='gasspring'){ const P=dy(0,2.8,0.4);
-    constraints.push({type:'slot', a:{id:P.id,off:[0,0]}, line:{id:null, off:[P.x,P.y], dir:[0,1]},
-                      lockRot:true, restAng:P.th, sel:false});
+    // Rigid prismatic: both ends locked, so the rail also confines position
+    // (not just rotation) — P is held on the vertical line through the
+    // background point and can't rotate either.
+    constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x,P.y-1]}, true, true));
     gases.push({kind:'gas', a:{id:P.id,off:[0,0]}, head:{id:null, off:[0,0.5], dir:[0,1]},
                 bore:1.0, n:5, gamma:1.4, T:1.0, Tinit:1.0, kappa:0, Tres:1.0, connected:false, sel:false}); }
   else if(kind==='skate'){ sim.gravity=false; if(gc) gc.checked=false;
@@ -37,7 +42,9 @@ function loadExample(kind){
     // A spin freely about that fixed axis. Replaces the old ground-pin tool.
     constraints.push(makeRodCon({id:null,off:[A.x-0.5,A.y]},{id:A.id,off:[0,0]},true,false));
     const B=dy(1.17,2.6,0.22);
-    constraints.push({type:'slot', a:{id:B.id,off:[0,0]}, line:{id:null, off:[A.x,A.y], dir:[1,0]}, lockRot:false, restAng:0, sel:false});
+    // Position-only rail for the CVT follower B (pin, free to spin) — same
+    // single-locked-background pattern as the crank example above.
+    constraints.push(makeSlotCon({id:B.id,off:[0,0]}, {id:null,off:[A.x-10,A.y]}, false, true));
     constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }
   else if(kind==='cable'){ const S=makeBody(0,4.6,0.4,true); bodies.push(S); const m=dy(0.9,4.4,0.32);
     const dvx=m.x-S.x, dvy=m.y-S.y; const d=Math.hypot(dvx,dvy);

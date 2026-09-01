@@ -72,14 +72,17 @@ Every bilateral constraint in the library is one instance of a single atomic ope
 |---|---|---|
 | Pin / revolute | relative velocity of a shared point is zero | 2 |
 | Rod / distance | relative velocity *along* the connecting line is zero | 1 (+1 per welded end) |
-| Slot / rail (point-on-line) | relative velocity *across* the line is zero | 1 |
-| Prismatic slider | across-line relative velocity zero **and** relative ω zero | 2 |
+| Slot / rail (point-on-line) | across-line drift zero once both ends are locked | 0–3, see below |
+| Prismatic slider | across-line relative velocity zero **and** relative ω zero | see below (slot, both ends locked) |
 | Gear (fixed ratio) | weighted sum of angular rates is zero | 1 |
 | Belt / cable (inextensible) | rim tangential speeds equal | 1 |
 
-The rod and the slot are exact complements: one kills the along-line component, the other the across-line component.
+The rod and the slot are conceptual complements — distance-along-a-line vs. drift-across-one — but are no longer built symmetrically: a rod always carries its base (distance) row, while a slot's base row is optional (see below).
 
-**Weld is a per-endpoint state of a rod, not a separate primitive.** Either end of a rod can independently be a freely-rotating *pin* (the plain 1-row distance constraint) or a rotation-locked *weld*, which adds one row pinning that end's body angle — or, for an end anchored directly to the background rather than to a body, the fixed world frame — to the rod's own direction. A rod with both ends welded to the background is rigid in both position and orientation, which is how a body is now anchored to the world (there is no standalone "static" toggle in the editor); a rod with only its background end welded reproduces the old ground-pin (a fixed pivot the far body spins freely about); a rod with no welds at either end is the original free-swinging distance joint. Either end can be attached to a body or directly to a fixed background point (`id === null`, mirroring the convention already used by gas heads, cable tethers, and world-fixed slot lines) — this is how rods anchor to the background instead of needing an invisible static pivot body.
+**Weld and "prismatic" are the same per-endpoint operation, applied to two different base constraints.** Rod and slot both connect two endpoints, either of which can be a body or attached directly to the fixed background (`id === null`, mirroring the convention already used by gas heads and cable tethers). Any endpoint can independently be a freely-rotating *pin*, or *locked* — a row pinning that endpoint's body angle (or, for a background endpoint, the fixed world frame) to the live direction of the segment joining the two endpoints. For a rod this lock is called a **weld**; for a slot, **prismatic**. The two constraints differ in what's active when neither end is locked and in what a lock implies:
+
+- **Rod** always carries its 1-row distance constraint, regardless of weld state. A rod with both ends welded to the background is rigid in both position and orientation, which is how a body is now anchored to the world (there is no standalone "static" toggle in the editor); a rod with only its background end welded reproduces the old ground-pin (a fixed pivot the far body spins freely about); a rod with no welds at either end is the original free-swinging distance joint.
+- **Slot** carries *no* row at all until at least one end is prismatic — two pins is a purely visual rail (drawn through the two points, no physics). One locked end adds just the angle-lock row (rotation only) — *unless* that end is the background, in which case the endpoint's own angle is a fixed constant, so the row degenerates into pinning the entire rail's position (a fixed ray from that point) with zero rotation lock on the other end; this is how a slider gets confined to a straight line while still spinning freely. Only once *both* ends are prismatic does a third row appear — the classic point-stays-on-the-rail lock, canceling lateral drift — reconstructing the full rigid prismatic joint (no drift, no relative rotation) that `lockRot` used to give directly.
 
 ### 4.2 Nonholonomic bilateral (velocity-only; no stabilization)
 

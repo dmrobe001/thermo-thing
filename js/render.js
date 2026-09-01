@@ -87,16 +87,18 @@ function jointDot(x,y,col){ const [sx,sy]=w2s(x,y);
   ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.fill();
   ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.stroke(); }
 
-// One end of a rod: a ground hatch if it's background-anchored, plus a square
-// (welded — rotation-locked) or a round joint dot (pinned — free to rotate).
-function drawRodEnd(x,y,welded,isBackground,col){
+// One endpoint of a rod or slot: a ground hatch if it's background-anchored,
+// plus a square (locked — rotation-locked to the other endpoint's line, i.e.
+// rod's "weld" or slot's "prismatic") or a round joint dot (pinned — free to
+// rotate).
+function drawEndMarker(x,y,locked,isBackground,col){
   const [sx,sy]=w2s(x,y);
   if(isBackground){
     ctx.strokeStyle=col;ctx.lineWidth=1.5;
     ctx.beginPath();ctx.moveTo(sx,sy+4);ctx.lineTo(sx-7,sy+14);ctx.lineTo(sx+7,sy+14);ctx.closePath();ctx.stroke();
     for(let i=-7;i<=7;i+=4){ctx.beginPath();ctx.moveTo(sx+i,sy+14);ctx.lineTo(sx+i-4,sy+19);ctx.stroke();}
   }
-  if(welded){
+  if(locked){
     ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
     ctx.beginPath();ctx.rect(sx-5,sy-5,10,10);ctx.fill();ctx.stroke();
   } else {
@@ -183,31 +185,37 @@ function drawConstraint(con){
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
     ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-    drawRodEnd(wax,way,con.weldA,con.a.id==null,col);
-    drawRodEnd(wbx,wby,con.weldB,con.b.id==null,col);
+    drawEndMarker(wax,way,con.weldA,con.a.id==null,col);
+    drawEndMarker(wbx,wby,con.weldB,con.b.id==null,col);
+    return;
+  }
+  if(con.type==='slot'){
+    // The rail itself: two parallel lines (a track motif) spanning the
+    // viewport, through the midpoint of the two endpoints, in the current
+    // rail direction (§06.1 slotRailAngle — tracked via whichever end is
+    // locked, or just the live segment direction if neither is).
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+    const railAngle=slotRailAngle(con);
+    const rdx=Math.cos(railAngle), rdy=Math.sin(railAngle);
+    const rnx=-rdy, rny=rdx;
+    const midx=(wax+wbx)/2, midy=(way+wby)/2;
+    const [vx0,vy0]=s2w(0,0), [vx1,vy1]=s2w(W(),H());
+    const span=Math.hypot(vx1-vx0,vy1-vy0);
+    const off=3.5/cam.scale;
+    ctx.strokeStyle=col; ctx.lineWidth=sel?2:1.5;
+    for(const side of [-1,1]){
+      const px=midx+rnx*off*side, py=midy+rny*off*side;
+      const [x1,y1]=w2s(px-rdx*span, py-rdy*span);
+      const [x2,y2]=w2s(px+rdx*span, py+rdy*span);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    }
+    drawEndMarker(wax,way,con.prismaticA,con.a.id==null,col);
+    drawEndMarker(wbx,wby,con.prismaticB,con.b.id==null,col);
     return;
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
   if(con.type==='pin'){ jointDot(wax,way,col); }
-  else if(con.type==='slot'){
-    const f=slotFrame(con);
-    const s=(f.wax-f.anchor[0])*f.dW[0]+(f.way-f.anchor[1])*f.dW[1];
-    const half=Math.max(1.0, Math.abs(s)+0.5);
-    const p1=[f.anchor[0]-f.dW[0]*half, f.anchor[1]-f.dW[1]*half];
-    const p2=[f.anchor[0]+f.dW[0]*half, f.anchor[1]+f.dW[1]*half];
-    const [x1,y1]=w2s(p1[0],p1[1]), [x2,y2]=w2s(p2[0],p2[1]);
-    ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:2;
-    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-    for(const p of [p1,p2]){ const q1=[p[0]-f.n[0]*0.14,p[1]-f.n[1]*0.14], q2=[p[0]+f.n[0]*0.14,p[1]+f.n[1]*0.14];
-      const [c1x,c1y]=w2s(q1[0],q1[1]), [c2x,c2y]=w2s(q2[0],q2[1]);
-      ctx.beginPath();ctx.moveTo(c1x,c1y);ctx.lineTo(c2x,c2y);ctx.stroke(); }
-    ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
-    if(con.lockRot){ const hd=0.17,hn=0.11; const cs=[[hd,hn],[hd,-hn],[-hd,-hn],[-hd,hn]];
-      ctx.beginPath(); cs.forEach((c,i)=>{ const X=f.wax+f.dW[0]*c[0]+f.n[0]*c[1], Y=f.way+f.dW[1]*c[0]+f.n[1]*c[1];
-        const [sx,sy]=w2s(X,Y); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }); ctx.closePath();ctx.fill();ctx.stroke(); }
-    else { const [bx,by]=w2s(f.wax,f.way); ctx.beginPath();ctx.arc(bx,by,5,0,Math.PI*2);ctx.fill();ctx.stroke(); }
-  }
   else if(con.type==='belt'){
     const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
     drawRim(A.x,A.y,con.rA,col); drawRim(B.x,B.y,con.rB,col);

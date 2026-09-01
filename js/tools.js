@@ -61,6 +61,16 @@ function pickConstraint(wx,wy){
       if(distSeg(wx,wy,ax,ay,bx,by)<=tol) return i;
       continue;
     }
+    if(con.type==='slot'){
+      // The rail is an infinite line (drawn viewport-spanning) — hit-test
+      // perpendicular distance to it, not a bounded segment.
+      const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
+      const railAngle=slotRailAngle(con);
+      const nx=-Math.sin(railAngle), ny=Math.cos(railAngle);
+      const midx=(ax+bx)/2, midy=(ay+by)/2;
+      if(Math.abs(nx*(wx-midx)+ny*(wy-midy))<=tol) return i;
+      continue;
+    }
     const A=bodies[bodyIndex(con.a.id)]; if(!A)continue; const [ax,ay]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
     if(con.type==='pin'){ if((wx-ax)**2+(wy-ay)**2<=tol*tol) return i; }
     else if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B)continue;
@@ -68,11 +78,6 @@ function pickConstraint(wx,wy){
     else if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
       const p1=[ax-hh[0]/hl*0.5,ay-hh[1]/hl*0.5], p2=[ax+hh[0]/hl*0.5,ay+hh[1]/hl*0.5];
       if(distSeg(wx,wy,p1[0],p1[1],p2[0],p2[1])<=tol) return i; }
-    else if(con.type==='slot'){ const f=slotFrame(con);
-      const s=(f.wax-f.anchor[0])*f.dW[0]+(f.way-f.anchor[1])*f.dW[1];
-      const half=Math.max(1.0,Math.abs(s)+0.5);
-      const q1=[f.anchor[0]-f.dW[0]*half,f.anchor[1]-f.dW[1]*half], q2=[f.anchor[0]+f.dW[0]*half,f.anchor[1]+f.dW[1]*half];
-      if(distSeg(wx,wy,q1[0],q1[1],q2[0],q2[1])<=tol || (wx-f.wax)**2+(wy-f.way)**2<=tol*tol) return i; }
   }
   return -1;
 }
@@ -104,15 +109,12 @@ function anchorTarget(wx,wy){
 // ---- §13.3 · constraint handles (edit anchors/directions in place) ----
 // draggable handles carried by each constraint
 function conHandles(con){
-  if(con.type==='rod'){
+  if(con.type==='rod'||con.type==='slot'){
     const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
     return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}];
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
   if(con.type==='pin'){ const [x,y]=worldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
-  if(con.type==='slot'){ const f=slotFrame(con);
-    return [ {which:'anchor',x:f.wax,y:f.way},
-             {which:'dir',x:f.anchor[0]+f.dW[0]*0.8, y:f.anchor[1]+f.dW[1]*0.8} ]; }
   if(con.type==='knife'){ const [px,py]=worldPt(A,con.a.off);
     const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     return [ {which:'anchor',x:px,y:py}, {which:'dir',x:px+hh[0]/hl*0.7, y:py+hh[1]/hl*0.7} ]; }
@@ -164,7 +166,7 @@ function applyHandle(ad, wx, wy){
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     const s=snapAnchor(wx,wy,[A.id,B.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
     con.a.off=offOf(A,P); con.b.off=offOf(B,P);
-  } else if(con.type==='rod'){
+  } else if(con.type==='rod'||con.type==='slot'){
     // Snap to a body if one is under/near the cursor; otherwise the end
     // re-binds to the background at the raw world point.
     const s=snapAnchor(wx,wy); lastSnap=s;
@@ -173,26 +175,17 @@ function applyHandle(ad, wx, wy){
     else { const bi=pickBody(wx,wy);
       if(bi>=0){ ep.id=bodies[bi].id; ep.off=offOf(bodies[bi],[wx,wy]); }
       else { ep.id=null; ep.off=[wx,wy]; } }
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    con.len=Math.hypot(wax-wbx,way-wby);
-    // Keep any welded end's rest angle consistent with the edited geometry.
-    if(con.weldA) setRodWeld(con,'A',true);
-    if(con.weldB) setRodWeld(con,'B',true);
-  }
-  else if(con.type==='slot'){
-    if(ad.which==='anchor'){
-      // one anchor: the pin. the rail's reference point on B is kept coincident with it.
-      const A=bodies[bodyIndex(con.a.id)];
-      const allow = con.line.id!=null ? [A.id, con.line.id] : [A.id];
-      const s=snapAnchor(wx,wy,allow); lastSnap=s; const P=s?s.wp:[wx,wy];
-      con.a.off=offOf(A,P);
-      if(con.line.id!=null){ const B=bodies[bodyIndex(con.line.id)]; con.line.off=offOf(B,P); }
-      else con.line.off=[P[0],P[1]];
+    if(con.type==='rod'){
+      const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+      con.len=Math.hypot(wax-wbx,way-wby);
+      // Keep any welded end's rest angle consistent with the edited geometry.
+      if(con.weldA) setRodWeld(con,'A',true);
+      if(con.weldB) setRodWeld(con,'B',true);
+    } else {
+      // Keep any locked ("prismatic") end's rest angle consistent too.
+      if(con.prismaticA) setSlotLock(con,'A',true);
+      if(con.prismaticB) setSlotLock(con,'B',true);
     }
-    else if(ad.which==='dir'){ const f=slotFrame(con); const dx=wx-f.anchor[0], dy=wy-f.anchor[1]; const L=Math.hypot(dx,dy)||1;
-      const axis=[dx/L,dy/L]; lastSnap=null;
-      if(con.line.id!=null){ const B=bodies[bodyIndex(con.line.id)]; con.line.dir=R(-B.th,axis[0],axis[1]); }
-      else con.line.dir=axis; }
   }
   else if(con.type==='knife'){
     const A=bodies[bodyIndex(con.a.id)];
@@ -358,22 +351,23 @@ cv.addEventListener('pointerdown',e=>{
     return;
   }
   if(tool==='slot'){
-    // FIRST click = slider point on A (the pin that rides the rail)
-    if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
-      pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
-    // SECOND click = rail direction (from slider toward the click) + host body/world
-    const dx=wx-pending.wp[0], dy=wy-pending.wp[1]; const L=Math.hypot(dx,dy);
-    if(L<0.15) return;                                  // need a clear direction
-    const axis=[dx/L,dy/L];
-    const bi=pickBodyExcept(wx,wy,pending.id);
-    const Bbody = bi>=0 ? bodies[bi] : null;             // null → rail fixed in the world
-    const Abody=bodies[bodyIndex(pending.id)];
-    const line = Bbody
-      ? { id:Bbody.id, off:offOf(Bbody,pending.wp), dir:R(-Bbody.th,axis[0],axis[1]) }
-      : { id:null, off:[pending.wp[0],pending.wp[1]], dir:axis };
-    constraints.push({type:'slot', a:{id:pending.id,off:pending.off}, line, lockRot:false,
-                      restAng: Bbody? Abody.th-Bbody.th : Abody.th, sel:false});
-    pending=null; saveState();
+    // Two clicks, exactly like rod: each end snaps to a body if one is
+    // under/near the click, else attaches to the background. The rail
+    // direction is implied by the two points' positions at creation.
+    if(!pending){ const t=anchorTarget(wx,wy);
+      pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+      return; }
+    const t=anchorTarget(wx,wy);
+    const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
+    const Aep={id:pending.id, off:pending.off}; pending=null;
+    if(Aep.id==null && Bep.id==null) return;      // needs at least one real body
+    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rail a body to itself
+    // A slot touching the background defaults to both ends prismatic — a
+    // fixed rail — since that's the confinement use case; tapping either end
+    // afterward frees it back into a plain (visual-only) pin.
+    const bg = Aep.id==null || Bep.id==null;
+    constraints.push(makeSlotCon(Aep, Bep, bg, bg));
+    saveState();
     return;
   }
 });
@@ -425,10 +419,14 @@ function endPointer(e){
   if(pinchCooldown){ cancelSingle(); return; }
 
   if(anchorDrag){
-    // A tap (no drag) on a rod's own control point toggles that end between a
-    // freely-rotating pin and a rotation-locked weld, instead of relocating it.
-    if(!movedFar && anchorDrag.con && anchorDrag.con.type==='rod' && (anchorDrag.which==='A'||anchorDrag.which==='B')){
-      toggleRodWeld(anchorDrag.con, anchorDrag.which); saveState();
+    // A tap (no drag) on a rod's or slot's own control point toggles that end
+    // between a freely-rotating pin and a rotation-locked weld/prismatic
+    // state, instead of relocating it.
+    const conType = anchorDrag.con && anchorDrag.con.type;
+    if(!movedFar && (conType==='rod'||conType==='slot') && (anchorDrag.which==='A'||anchorDrag.which==='B')){
+      if(conType==='rod') toggleRodWeld(anchorDrag.con, anchorDrag.which);
+      else toggleSlotLock(anchorDrag.con, anchorDrag.which);
+      saveState();
     }
     anchorDrag=null; lastSnap=null; downScreen=null; return;
   }
