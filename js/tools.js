@@ -32,7 +32,7 @@ TOOLS.forEach((t,i)=>{
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
 });
-function setTool(id){ tool=id; pending=null; hover=null; hoverHandle=null;
+function setTool(id){ tool=id; pending=null; bodyPreview=null; hover=null; hoverHandle=null;
   document.querySelectorAll('.tool').forEach(e=>e.classList.toggle('on',e.dataset.id===id));
   cv.style.cursor = id==='select'?'default': id==='delete'?'not-allowed':'crosshair';
   document.getElementById('modehint').textContent = TOOLS.find(t=>t.id===id).tip;
@@ -53,34 +53,49 @@ function pickBodyExcept(wx,wy,exceptId){
     if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
   return -1;
 }
-function pickConstraint(wx,wy){
+// per-constraint hit test, factored out of pickConstraint so the pointerdown
+// dispatch can prioritise a *specific* (already-selected) constraint over
+// whatever else happens to be topmost at the same point (§13.5).
+function constraintHit(con,wx,wy){
   const tol=10/cam.scale;
-  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i];
-    if(con.type==='rod'){
-      const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
-      if(distSeg(wx,wy,ax,ay,bx,by)<=tol) return i;
-      continue;
-    }
-    if(con.type==='slot'){
-      // The rail is an infinite line (drawn viewport-spanning) -- hit-test
-      // perpendicular distance to it, not a bounded segment.
-      const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
-      const railAngle=slotRailAngle(con);
-      const nx=-Math.sin(railAngle), ny=Math.cos(railAngle);
-      const midx=(ax+bx)/2, midy=(ay+by)/2;
-      if(Math.abs(nx*(wx-midx)+ny*(wy-midy))<=tol) return i;
-      continue;
-    }
-    const A=bodies[bodyIndex(con.a.id)]; if(!A)continue; const [ax,ay]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
-    if(con.type==='pin'){ if((wx-ax)**2+(wy-ay)**2<=tol*tol) return i; }
-    else if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B)continue;
-      if(distSeg(wx,wy,A.x,A.y,B.x,B.y)<=tol) return i; }
-    else if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
-      const p1=[ax-hh[0]/hl*0.5,ay-hh[1]/hl*0.5], p2=[ax+hh[0]/hl*0.5,ay+hh[1]/hl*0.5];
-      if(distSeg(wx,wy,p1[0],p1[1],p2[0],p2[1])<=tol) return i; }
+  if(con.type==='rod'){
+    const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
+    return distSeg(wx,wy,ax,ay,bx,by)<=tol;
   }
+  if(con.type==='slot'){
+    // The rail is an infinite line (drawn viewport-spanning) -- hit-test
+    // perpendicular distance to it, not a bounded segment.
+    const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
+    const railAngle=slotRailAngle(con);
+    const nx=-Math.sin(railAngle), ny=Math.cos(railAngle);
+    const midx=(ax+bx)/2, midy=(ay+by)/2;
+    return Math.abs(nx*(wx-midx)+ny*(wy-midy))<=tol;
+  }
+  const A=bodies[bodyIndex(con.a.id)]; if(!A) return false;
+  const [ax,ay]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
+  if(con.type==='pin'){ return (wx-ax)**2+(wy-ay)**2<=tol*tol; }
+  if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B) return false;
+    return distSeg(wx,wy,A.x,A.y,B.x,B.y)<=tol; }
+  if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
+    const p1=[ax-hh[0]/hl*0.5,ay-hh[1]/hl*0.5], p2=[ax+hh[0]/hl*0.5,ay+hh[1]/hl*0.5];
+    return distSeg(wx,wy,p1[0],p1[1],p2[0],p2[1])<=tol; }
+  return false;
+}
+function pickConstraint(wx,wy){
+  for(let i=constraints.length-1;i>=0;i--){ if(constraintHit(constraints[i],wx,wy)) return i; }
   return -1;
 }
+// per-gas / per-cable hit tests, mirroring pickGas/pickCable (inspector.js
+// §14.1) -- used the same way, to test one specific already-selected object.
+function gasHit(g,wx,wy){ const tol=12/cam.scale; const f=gasFrame(g);
+  return distSeg(wx,wy,f.hx,f.hy,f.pax,f.pay)<=tol; }
+function cableHit(cb,wx,wy){ const tol=10/cam.scale; const f=cableFrame(cb); if(!f) return false;
+  return distSeg(wx,wy,f.T[0],f.T[1],f.Qx,f.Qy)<=tol; }
+// perimeter (rim) hit test on a specific body -- the drag handle for radius
+// resizing (§13.5/§13.6). A separate tolerance ring around the rim, distinct
+// from the filled-disk `pickBody` test used for moving the body.
+function bodyRimHit(b,wx,wy){ const tol=10/cam.scale;
+  return Math.abs(Math.hypot(wx-b.x,wy-b.y)-b.r)<=tol; }
 function distSeg(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay; const L2=dx*dx+dy*dy||1e-9;
   let t=((px-ax)*dx+(py-ay)*dy)/L2; t=Math.max(0,Math.min(1,t));
   return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
@@ -194,13 +209,57 @@ function applyHandle(ad, wx, wy){
       lastSnap=null; con.dir=R(-A.th, dx/L, dy/L); }
   }
 }
+// scale a stored {id, off} endpoint that rides `bodyId`'s local frame by
+// `ratio`, leaving everything else (background-anchored endpoints, other
+// bodies' endpoints) untouched -- shared by applyBodyResize below.
+function scaleOffOnBody(ep, bodyId, ratio){
+  if(ep && ep.id===bodyId && ep.off) ep.off=[ep.off[0]*ratio, ep.off[1]*ratio];
+}
+// Resize the selected body by dragging its rim (§13.5/§13.6): every control
+// point anchored on it -- pin/rod/slot/knife offsets, gas cylinder/head
+// offsets, a cable tether offset -- scales by the same ratio as the radius,
+// so it stays at the same *proportional* position on the body rather than
+// snapping to a fixed absolute offset. (A cable's own spool anchor needs no
+// such scaling: it's already a pure angle around the rim, so it tracks the
+// new radius for free -- see cableFrame, constraints.js §06.3.) A belt's
+// wrap radius is a copy of the body's radius taken at creation time, so it
+// is rescaled too, with its restPhase recaptured against the *current*
+// angles so the resize itself never reads as a spurious constraint jump
+// (mirrors captureRestAngle's role for rod/slot locks, constraints.js §06.1).
+// Once the offsets are updated, projectPositions rearticulates every other
+// joint on the body to the new geometry -- the same "pose" rearticulation a
+// plain body drag performs (§13.6) -- since resizing is an edit-mode-only
+// operation (gated at the call site, §13.5) there is no running-sim/grab
+// counterpart to branch on.
+function applyBodyResize(rd, wx, wy){
+  const b=rd.b;
+  const newR=Math.max(0.08, Math.hypot(wx-b.x,wy-b.y));
+  const ratio=newR/b.r;
+  if(!isFinite(ratio) || ratio<=0) return;
+  for(const con of constraints){
+    scaleOffOnBody(con.a, b.id, ratio);
+    if(con.b) scaleOffOnBody(con.b, b.id, ratio);
+    if(con.type==='belt'){
+      let touched=false;
+      if(con.a.id===b.id){ con.rA*=ratio; touched=true; }
+      if(con.b.id===b.id){ con.rB*=ratio; touched=true; }
+      if(touched){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+        con.restPhase=con.rA*A.th - con.sense*con.rB*B.th; }
+    }
+  }
+  for(const g of gases){ scaleOffOnBody(g.a, b.id, ratio); if(g.head) scaleOffOnBody(g.head, b.id, ratio); }
+  for(const cb of cables){ scaleOffOnBody(cb.tether, b.id, ratio); }
+  b.r=newR; refreshMass(b);
+  projectPositions(8);
+  saveState();
+}
 
 // ---- §13.4 · pointer state (multi-touch, pinch) ----
 // active pointers keyed by id, for one-finger pan and two-finger pinch-zoom
 const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
-let anchorDrag=null, lastSnap=null;
-function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; }
+let anchorDrag=null, lastSnap=null, resizeDrag=null;
+function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; }
 
 // `hover` highlights whatever body/interaction sits under the cursor when it
 // isn't already selected; `hoverHandle` highlights a control point of the
@@ -216,12 +275,15 @@ function updateHover(wx,wy){
   if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
   const h=pickHandle(wx,wy);
   if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which}; return; }
+  // ...as does the selected body's rim, the resize handle
+  if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
   // otherwise highlight whatever is under the cursor, unless it's the selection
   const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
   const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
   const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
   const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
 }
+
 function startPinch(){
   const pts=[...pointers.values()];
   const mx=(pts[0].x+pts[1].x)/2, my=(pts[0].y+pts[1].y)/2;
@@ -230,8 +292,17 @@ function startPinch(){
 
 // ---- §13.5 · pointerdown (per-tool dispatch) ----
 // This is where each tool builds its constraint. The branches, in order, handle:
-// pinch guard, pan, body, select (+handles/grab), delete, gas, belt/cvt,
-// knife, cable, pin, rod, slot. Search  tool==='<name>'  to reach one.
+// pinch guard, explicit pan, select (+handles/resize/grab -- the only case
+// that can claim a one-finger drag instead of panning), body, delete, gas,
+// belt/cvt, knife, cable, pin, rod, slot.
+//
+// Every non-select tool, and every select-tool click that doesn't land on
+// the current selection's own draggable region (a handle, its rim, or its
+// body), arms `panning` as a fallback: pinch/drag/scroll pan and zoom
+// regardless of the active tool, and a tool's own click action (placing a
+// pending anchor, picking a new selection, ...) always fires immediately on
+// pointerdown -- a subsequent drag just pans the view on top of it, it never
+// also creates or moves anything. Search  tool==='<name>'  to reach one.
 cv.addEventListener('pointerdown',e=>{
   cv.setPointerCapture(e.pointerId);
   const rect=cv.getBoundingClientRect();
@@ -247,26 +318,63 @@ cv.addEventListener('pointerdown',e=>{
 
   if(e.button===1 || (e.button===0 && e.altKey)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
 
-  if(tool==='body'){ bodyPreview={cx:wx,cy:wy,r:0}; return; }
-
   if(tool==='select'){
     if(!sim.running){
       // cable handle check first: allows winding control in edit mode, but only
       // once the cable is already the selection -- a click on an unselected
       // cable's handle just selects it, matching how constraint handles behave.
       const ch=pickCableHandle(wx,wy);
-      if(ch){ if(ch.cb.sel){ anchorDrag=ch; applyCableHandle(ch,wx,wy); } else selectCable(ch.cbi); return; }
+      if(ch){ if(ch.cb.sel){ anchorDrag=ch; applyCableHandle(ch,wx,wy); return; } selectCable(ch.cbi); return; }
       const h=pickHandle(wx,wy);
-      if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); } else selectConstraint(h.ci); return; } }
+      if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); return; } selectConstraint(h.ci); return; }
+      // the selected body's rim -- drag to resize (§13.6 applyBodyResize)
+      if(selBody && bodyRimHit(selBody,wx,wy)){ resizeDrag={b:selBody}; return; }
+    }
+    // the selected body's interior -- prioritised over whatever else happens
+    // to be on top at this point, so an occluded selection stays acted-on
+    // rather than silently swapped for the topmost body
+    if(selBody && (wx-selBody.x)**2+(wy-selBody.y)**2<=selBody.r*selBody.r){
+      const bi=bodies.indexOf(selBody);
+      if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; } else { drag={bi, off:localOff(bi,wx,wy)}; }
+      return;
+    }
+    // the selected constraint/gas/cable, hit anywhere along it (not just a
+    // handle) -- keeps it selected instead of losing it to an occluding body
+    if(selConstraint && constraintHit(selConstraint,wx,wy)){
+      panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    if(selGas && gasHit(selGas,wx,wy)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    if(selCable && cableHit(selCable,wx,wy)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    // nothing of the current selection was hit -- a fresh topmost pick, which
+    // changes the selection (a body's pick also arms its drag/grab in the
+    // same gesture: it becomes selected here, before any pointermove, so a
+    // drag starting on it still satisfies "starts on the selected thing")
     const bi=pickBody(wx,wy);
     if(bi>=0){ selectBody(bi);
       if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
       else { drag={bi, off:localOff(bi,wx,wy)}; }
       return; }
-    const cci=pickConstraint(wx,wy); if(cci>=0){ selectConstraint(cci); return; }
-    const gsi=pickGas(wx,wy); if(gsi>=0){ selectGas(gsi); return; }
-    const cbi=pickCable(wx,wy); if(cbi>=0){ selectCable(cbi); return; }
+    const cci=pickConstraint(wx,wy);
+    if(cci>=0){ selectConstraint(cci); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const gsi=pickGas(wx,wy);
+    if(gsi>=0){ selectGas(gsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const cbi=pickCable(wx,wy);
+    if(cbi>=0){ selectCable(cbi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y,candidate:true};   // one-finger background pan; a tap deselects
+    return;
+  }
+
+  // every other tool: arm the background pan up front, then run the tool's
+  // own click logic -- a drag from here always just pans (§13.6/§13.7).
+  panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y};
+
+  if(tool==='body'){
+    // two clicks, like every other creation tool: first click drops the
+    // centre and previews the radius live as the pointer hovers afterward
+    // (drawPreview, render.js §11.7); second click commits it.
+    if(!bodyPreview){ bodyPreview={cx:wx,cy:wy,r:0}; return; }
+    const r=bodyPreview.r<0.12?0.4:bodyPreview.r;
+    const b=makeBody(bodyPreview.cx,bodyPreview.cy,r,false); bodies.push(b); bodyPreview=null;
+    selectBody(bodies.length-1); saveState();
     return;
   }
   if(tool==='delete'){
@@ -416,10 +524,12 @@ cv.addEventListener('pointermove',e=>{
   if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
   if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
 
-  if(anchorDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; }
+  if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; }
   else updateHover(mouseWorld[0],mouseWorld[1]);
+  if(tool==='select') cv.style.cursor = (hoverHandle && hoverHandle.kind==='resize') ? 'ew-resize' : 'default';
 
   if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
+  if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
   if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
   if(bodyPreview){ bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); return; }
   if(drag && !sim.running){
@@ -449,19 +559,20 @@ function endPointer(e){
   if(anchorDrag){
     // A tap (no drag) on a rod's or slot's own control point toggles that end
     // between a freely-rotating pin and a rotation-locked weld/prismatic
-    // state, instead of relocating it.
+    // state, instead of relocating it. That flips a property the inspector
+    // panel shows as a checkbox (weld/prismatic), so refresh it too -- item 2:
+    // editing an interaction from its control points must stay in sync with
+    // the panel, the same as editing it from the panel's own checkboxes.
     const conType = anchorDrag.con && anchorDrag.con.type;
     if(!movedFar && (conType==='rod'||conType==='slot') && (anchorDrag.which==='A'||anchorDrag.which==='B')){
       if(conType==='rod') toggleRodWeld(anchorDrag.con, anchorDrag.which);
       else toggleSlotLock(anchorDrag.con, anchorDrag.which);
-      saveState();
+      renderInspector(); saveState();
     }
     anchorDrag=null; lastSnap=null; downScreen=null; return;
   }
+  if(resizeDrag){ resizeDrag=null; downScreen=null; return; }
   if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
-  else if(bodyPreview){ const r=bodyPreview.r<0.12?0.4:bodyPreview.r;
-    const b=makeBody(bodyPreview.cx,bodyPreview.cy,r,false); bodies.push(b); bodyPreview=null;
-    selectBody(bodies.length-1); saveState(); }
   drag=null; grab=null; downScreen=null;
 }
 cv.addEventListener('pointerup',endPointer);

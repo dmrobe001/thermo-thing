@@ -13,13 +13,11 @@ function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i];
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
 function selectGas(i){ clearSelection(); gases[i].sel=true; selGas=gases[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
-function pickGas(wx,wy){ const tol=12/cam.scale;
-  for(let i=gases.length-1;i>=0;i--){ const f=gasFrame(gases[i]);
-    if(distSeg(wx,wy,f.hx,f.hy,f.pax,f.pay)<=tol) return i; }
+function pickGas(wx,wy){
+  for(let i=gases.length-1;i>=0;i--){ if(gasHit(gases[i],wx,wy)) return i; }
   return -1; }
-function pickCable(wx,wy){ const tol=10/cam.scale;
-  for(let i=cables.length-1;i>=0;i--){ const f=cableFrame(cables[i]); if(!f)continue;
-    if(distSeg(wx,wy,f.T[0],f.T[1],f.Qx,f.Qy)<=tol) return i; }
+function pickCable(wx,wy){
+  for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
   return -1; }
 
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
@@ -32,8 +30,8 @@ function renderInspector(){
       <h3>Body ${b.id}</h3><p class="sub">rigid disk</p>
       <div class="card"><div class="cardhead">properties</div>
         <div class="field"><span class="lab">mass</span><span class="val" id="f_mass">${b.mass.toFixed(3)}</span></div>
-        <div class="field"><span class="lab">radius</span><span class="val">${b.r.toFixed(3)}</span></div>
-        <div class="field"><span class="lab">inertia</span><span class="val">${b.I.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">radius</span><span class="val" id="f_r">${b.r.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
       </div>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">x , y</span><span class="val" id="f_pos"></span></div>
@@ -162,7 +160,11 @@ function updateInspectorLive(){
   if(selBody){ const b=selBody;
     const pos=document.getElementById('f_pos'); if(pos){ pos.textContent=`${b.x.toFixed(2)}, ${b.y.toFixed(2)}`;
       document.getElementById('f_th').textContent=b.th.toFixed(2);
-      document.getElementById('f_spd').textContent=Math.hypot(b.vx,b.vy).toFixed(2); } }
+      document.getElementById('f_spd').textContent=Math.hypot(b.vx,b.vy).toFixed(2);
+      // radius/mass/inertia change live while dragging the rim to resize (§13.6)
+      document.getElementById('f_mass').textContent=b.mass.toFixed(3);
+      document.getElementById('f_r').textContent=b.r.toFixed(3);
+      document.getElementById('f_I').textContent=b.I.toFixed(3); } }
   if(selConstraint){ const c=selConstraint; const r=reactionOf(c); const el=document.getElementById('f_rf');
     if(el){ if(c.type==='belt') el.textContent=(r?Math.abs(r.val):0).toFixed(2);
       else if(r&&r.fx!==undefined){ el.textContent=Math.hypot(r.fx,r.fy).toFixed(2);
