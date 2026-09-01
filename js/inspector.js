@@ -29,16 +29,36 @@ function renderInspector(){
     p.innerHTML=`
       <h3>Body ${b.id}</h3><p class="sub">rigid disk</p>
       <div class="card"><div class="cardhead">properties</div>
+        <div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>
         <div class="field"><span class="lab">mass</span><span class="val" id="f_mass">${b.mass.toFixed(3)}</span></div>
-        <div class="field"><span class="lab">radius</span><span class="val" id="f_r">${b.r.toFixed(3)}</span></div>
         <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
       </div>
       <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">x , y</span><span class="val" id="f_pos"></span></div>
-        <div class="field"><span class="lab">theta</span><span class="val" id="f_th"></span></div>
-        <div class="field"><span class="lab">speed</span><span class="val" id="f_spd"></span></div>
+        <div class="field"><span class="lab">x</span><input class="numin" type="number" step="0.1" id="f_x" value="${b.x.toFixed(3)}"></div>
+        <div class="field"><span class="lab">y</span><input class="numin" type="number" step="0.1" id="f_y" value="${b.y.toFixed(3)}"></div>
+        <div class="field"><span class="lab">theta</span><input class="numin" type="number" step="0.05" id="f_th" value="${b.th.toFixed(3)}"></div>
+        <div class="field"><span class="lab">vx</span><input class="numin" type="number" step="0.1" id="f_vx" value="${b.vx.toFixed(3)}"></div>
+        <div class="field"><span class="lab">vy</span><input class="numin" type="number" step="0.1" id="f_vy" value="${b.vy.toFixed(3)}"></div>
+        <div class="field"><span class="lab">w</span><input class="numin" type="number" step="0.1" id="f_w" value="${b.w.toFixed(3)}"></div>
       </div>
       <button class="del" id="f_del">Delete body</button>`;
+    document.getElementById('f_r').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>0.08) resizeBody(b,v);
+      renderInspector(); saveState(); };
+    const commitPose=()=>{ const x=parseFloat(document.getElementById('f_x').value),
+        y=parseFloat(document.getElementById('f_y').value), th=parseFloat(document.getElementById('f_th').value);
+      if(isFinite(x)&&isFinite(y)&&isFinite(th)){ b.x=x; b.y=y; b.th=th; projectPositions(8); }
+      renderInspector(); saveState(); };
+    document.getElementById('f_x').onchange=commitPose;
+    document.getElementById('f_y').onchange=commitPose;
+    document.getElementById('f_th').onchange=commitPose;
+    const commitVel=()=>{ const vx=parseFloat(document.getElementById('f_vx').value),
+        vy=parseFloat(document.getElementById('f_vy').value), w=parseFloat(document.getElementById('f_w').value);
+      if(isFinite(vx)&&isFinite(vy)&&isFinite(w)){ b.vx=vx; b.vy=vy; b.w=w; }
+      renderInspector(); saveState(); };
+    document.getElementById('f_vx').onchange=commitVel;
+    document.getElementById('f_vy').onchange=commitVel;
+    document.getElementById('f_w').onchange=commitVel;
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
@@ -156,14 +176,17 @@ function renderInspector(){
   }
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----
+// refresh an input's value from live sim state, but never while the user has
+// it focused -- clobbering mid-edit would fight their keystrokes
+function setLive(id,v){ const el=document.getElementById(id); if(el && document.activeElement!==el) el.value=v; }
 function updateInspectorLive(){
   if(selBody){ const b=selBody;
-    const pos=document.getElementById('f_pos'); if(pos){ pos.textContent=`${b.x.toFixed(2)}, ${b.y.toFixed(2)}`;
-      document.getElementById('f_th').textContent=b.th.toFixed(2);
-      document.getElementById('f_spd').textContent=Math.hypot(b.vx,b.vy).toFixed(2);
+    if(document.getElementById('f_x')){
+      setLive('f_x',b.x.toFixed(3)); setLive('f_y',b.y.toFixed(3)); setLive('f_th',b.th.toFixed(3));
+      setLive('f_vx',b.vx.toFixed(3)); setLive('f_vy',b.vy.toFixed(3)); setLive('f_w',b.w.toFixed(3));
       // radius/mass/inertia change live while dragging the rim to resize (§13.6)
+      setLive('f_r',b.r.toFixed(3));
       document.getElementById('f_mass').textContent=b.mass.toFixed(3);
-      document.getElementById('f_r').textContent=b.r.toFixed(3);
       document.getElementById('f_I').textContent=b.I.toFixed(3); } }
   if(selConstraint){ const c=selConstraint; const r=reactionOf(c); const el=document.getElementById('f_rf');
     if(el){ if(c.type==='belt') el.textContent=(r?Math.abs(r.val):0).toFixed(2);

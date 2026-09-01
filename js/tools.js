@@ -228,12 +228,11 @@ function scaleOffOnBody(ep, bodyId, ratio){
 // (mirrors captureRestAngle's role for rod/slot locks, constraints.js §06.1).
 // Once the offsets are updated, projectPositions rearticulates every other
 // joint on the body to the new geometry -- the same "pose" rearticulation a
-// plain body drag performs (§13.6) -- since resizing is an edit-mode-only
-// operation (gated at the call site, §13.5) there is no running-sim/grab
-// counterpart to branch on.
-function applyBodyResize(rd, wx, wy){
-  const b=rd.b;
-  const newR=Math.max(0.08, Math.hypot(wx-b.x,wy-b.y));
+// plain body drag performs (§13.6). Factored out of the rim-drag handler so
+// the inspector panel's radius field (§14.2) can drive the exact same update
+// path from a typed value instead of a pointer distance.
+function resizeBody(b, newR){
+  newR=Math.max(0.08, newR);
   const ratio=newR/b.r;
   if(!isFinite(ratio) || ratio<=0) return;
   for(const con of constraints){
@@ -251,6 +250,9 @@ function applyBodyResize(rd, wx, wy){
   for(const cb of cables){ scaleOffOnBody(cb.tether, b.id, ratio); }
   b.r=newR; refreshMass(b);
   projectPositions(8);
+}
+function applyBodyResize(rd, wx, wy){
+  resizeBody(rd.b, Math.hypot(wx-rd.b.x,wy-rd.b.y));
   saveState();
 }
 
