@@ -12,19 +12,106 @@
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
 //    §08.5  gas thermodynamics (first law: dU = deltaQ - P dV)
-//    §08.6  energy-conservation rescale (exact, chain-length-independent)
+//    §08.6  energy-conservation rescale (exact, chain-length-independent,
+//           momentum-conserving on any island not anchored to the world)
 //  The stage numbers below (1..5) are the original inline markers; the §08.x
-//  tokens above are the greppable handles.
+//  tokens above are the greppable handles. §08.0 is a setup pass with no
+//  original inline number of its own.
 // ============================================================================
+// ---- §08.0 · momentum-conserving islands ----
+// Partition the world into islands: maximal groups of bodies transitively
+// coupled by a constraint, cable, spring, rotational spring or gas. §08.6
+// scopes its energy-conservation rescale to one island at a time (instead of
+// one scalar over the whole world) so an unrelated mechanism elsewhere in
+// the scene can't leak energy into this one, and -- for an island with
+// nothing anchoring it to the world -- conserves its linear and angular
+// momentum exactly rather than folding them into the same scalar that also
+// has to fix energy (see the long comment at §08.6 for why that matters).
+//
+// Plain array-based union-find (path-halving, no union-by-rank -- islands
+// are small) over the N body indices plus one extra virtual node, WORLD,
+// standing for "the background, or anything static". Every coupling element
+// with a background-fixed endpoint (an {id:null} endpoint -- epWorld's
+// world-anchor convention, constraints.js §06.1) or that touches a static
+// body gets unioned to WORLD; an island whose root lands on WORLD is
+// anchored and has no momentum invariant (the background can source/sink
+// it), same as today's global rescale assumed of everything.
+function ufFind(p,i){ while(p[i]!==i){ p[i]=p[p[i]]; i=p[i]; } return i; }
+function ufUnion(p,a,b){ const ra=ufFind(p,a), rb=ufFind(p,b); if(ra!==rb) p[ra]=rb; }
+// Every two-endpoint coupling type shares the {id,...} endpoint shape
+// (constraints' a/b, cables' spool/tether, springs'/rotSprings' a/b, gases'
+// a/head) -- this table drives the union pass generically instead of
+// special-casing each element type. A missing endpoint field (e.g. the
+// single-ended 'knife' constraint) reads the same as a background-fixed one.
+// Wrapped in getters, not a plain array of the globals themselves: state.js
+// §-level code reassigns bodies/constraints/springs/rotSprings/gases/cables
+// wholesale (e.g. `constraints=constraints.filter(...)`, `bodies=[]` on load)
+// rather than mutating them in place, so a plain array captured once at
+// script-load time would keep pointing at whatever was live at that instant.
+const COUPLING_TABLES = [
+  ()=>[constraints,'a','b'], ()=>[cables,'spool','tether'],
+  ()=>[springs,'a','b'], ()=>[rotSprings,'a','b'], ()=>[gases,'a','head'],
+];
+function computeIslands(){
+  const N=bodies.length, WORLD=N;
+  const p=new Array(N+1); for(let i=0;i<=N;i++) p[i]=i;
+  for(let i=0;i<N;i++) if(bodies[i].static) ufUnion(p,i,WORLD);
+  for(const get of COUPLING_TABLES){ const [arr,fa,fb]=get();
+    for(const el of arr){
+      const ea=el[fa], eb=el[fb];
+      const idxs=[]; let anyBg=false;
+      if(ea && ea.id!=null) idxs.push(bodyIndex(ea.id)); else anyBg=true;
+      if(eb && eb.id!=null) idxs.push(bodyIndex(eb.id)); else anyBg=true;
+      for(let i=1;i<idxs.length;i++) ufUnion(p,idxs[0],idxs[i]);
+      if(anyBg) for(const idx of idxs) ufUnion(p,idx,WORLD);
+    }
+  }
+  const worldRoot=ufFind(p,WORLD);
+  const byRoot=new Map();
+  const islandOf=i=>{ const r=ufFind(p,i); let isl=byRoot.get(r);
+    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[],gases:[]}; byRoot.set(r,isl); }
+    return isl; };
+  for(let i=0;i<N;i++) if(!bodies[i].static) islandOf(i).bodyIdx.push(i);
+  // Bucket each force element's PE/heat bookkeeping into its (now-final)
+  // island for §08.6's per-island energy target, keyed off whichever
+  // endpoint is a real body (an element always has at least one).
+  for(const sp of springs){ islandOf(bodyIndex((sp.a.id!=null?sp.a:sp.b).id)).springs.push(sp); }
+  for(const rs of rotSprings){ islandOf(bodyIndex((rs.a.id!=null?rs.a:rs.b).id)).rotSprings.push(rs); }
+  for(const g of gases){ islandOf(bodyIndex(g.a.id)).gases.push(g); } // g.a is always a body
+  return [...byRoot.values()];
+}
+// Mass, centre of mass, linear momentum and angular momentum (about that
+// COM) of a set of body indices, read live from their current x/y/vx/vy/w --
+// used both to snapshot an island's pre-substep momentum (§08.1 below) and
+// to read its post-solve momentum back at §08.6. Ieff (parallel-axis total
+// moment of inertia about the COM) is what §08.6 divides L by to get the
+// island's effective single spin rate.
+function islandKinematics(idxs){
+  let M=0,cx=0,cy=0;
+  for(const i of idxs){ const b=bodies[i]; M+=b.mass; cx+=b.mass*b.x; cy+=b.mass*b.y; }
+  cx/=M; cy/=M;
+  let px=0,py=0,L=0,Ieff=0;
+  for(const i of idxs){ const b=bodies[i];
+    px+=b.mass*b.vx; py+=b.mass*b.vy;
+    const rx=b.x-cx, ry=b.y-cy;
+    L += b.I*b.w + b.mass*(rx*b.vy-ry*b.vx);
+    Ieff += b.I + b.mass*(rx*rx+ry*ry);
+  }
+  return {M,cx,cy,px,py,L,Ieff};
+}
 // ---- §08.1 · applied forces -> candidate velocities ----
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
   const N=bodies.length;
-  // Energy-conservation target: the mechanical+gas total this substep must
-  // return to, absorbing whatever the Baumgarte-stabilized solve below gets
-  // only approximately right (see §08.6). Skipped while the user is actively
-  // dragging a body -- that spring is meant to inject/remove energy visibly.
-  const preE = energy().tot;
+  // Snapshot each island's pre-substep energy budget (§08.6's target) and
+  // momentum (§08.6's momentum-conservation target for a free island)
+  // before any force this substep has been applied.
+  const islands = computeIslands();
+  for(const isl of islands){
+    isl.preE = energy(isl).tot;
+    const k0 = islandKinematics(isl.bodyIdx);
+    isl.P0=[k0.px,k0.py]; isl.L0=k0.L; isl.M=k0.M;
+  }
   const grabbing = !!(grab && bodies[grab.bi] && !bodies[grab.bi].static);
   // 1) accumulate applied forces, then integrate into candidate velocities v*
   const FX=new Array(N).fill(0), FY=new Array(N).fill(0), TAU=new Array(N).fill(0);
@@ -237,7 +324,6 @@ function substep(h){
   // 5) thermodynamics: dU = deltaQ - P dV, with deltaQ = kappa(T_res - T) dt when connected.
   //    (R = 1 in abstract units; c_v = 1/(gamma-1).) Work leaves the gas as the
   //    same P·DeltaV the piston force just did on the mechanism -> energy is consistent.
-  let totalQ=0;
   for(const g of gases){
     const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
     const Q=(g.connected? g.kappa*(g.Tres-g.T):0)*h;
@@ -245,7 +331,7 @@ function substep(h){
     g.T += dU/(g.n*(1/(g.gamma-1)));
     if(g.T<1e-4) g.T=1e-4;
     g._Q=Q/h;
-    totalQ+=Q;
+    g._Qstep=Q; // this substep's raw reservoir heat, summed per-island below
   }
 
   // ---- §08.6 · energy-conservation rescale ----
@@ -258,30 +344,90 @@ function substep(h){
   // close the gap exactly: absent a live drag (which legitimately injects/
   // removes energy) the mechanical+gas total entering this substep (preE),
   // plus whatever heat a connected reservoir legitimately added (totalQ), is
-  // treated as an invariant. Any discrepancy after the constraint solve,
-  // integration, and thermodynamics above is folded back by a single uniform
-  // rescale of every body's velocity -- the same idea as a velocity-
-  // rescaling thermostat in molecular dynamics. This is exact regardless of
-  // chain length, unlike Baumgarte, and needs no new per-mechanism tuning.
+  // treated as an invariant -- per island (§08.0), not once over the whole
+  // world, so an unrelated mechanism elsewhere in the scene can't leak
+  // energy into (or out of) this one through a shared scalar.
+  //
+  // An *anchored* island (touches a static body or a background-fixed
+  // endpoint, §08.0) has the background as an unlimited momentum sink/
+  // source, so folding its whole discrepancy into one uniform speed rescale
+  // is fine -- same idea as a velocity-rescaling thermostat in molecular
+  // dynamics, and exact regardless of chain length.
+  //
+  // A *free* island (nothing anchoring it) has a second exact invariant a
+  // bare rescale can't see: its internal forces are all equal-and-opposite
+  // (Newton's third law), so its total linear and angular momentum are
+  // conserved by the real physics. Gravity is the only external force that
+  // can touch them -- it changes momentum by the known amount M*g*h and
+  // contributes zero net torque about the island's own centre of mass
+  // (uniform gravity can't spin a system about its own COM) -- so both are
+  // exactly computable targets, not just "whatever they happened to be".
+  // A single global scalar can't tell "legitimate spring/rotSpring
+  // oscillation" apart from "residual momentum leak" (mainly invM*mass
+  // round-off): it amplifies both together, and since translation/rotation
+  // have no restoring force to check them, any leak random-walks into
+  // visible drift over many substeps -- the "flying ice cube" failure mode
+  // of global velocity-rescaling thermostats in MD. So a free island's
+  // correction is two exact-then-approximate steps instead of one scalar:
+  // an additive fix that pins its rigid motion (COM translation + rotation
+  // about the COM) to the momentum/angular-momentum target, then the same
+  // multiplicative energy rescale as the anchored case, but applied only to
+  // what's left over -- the internal/relative ("shape") velocity field,
+  // which by construction carries zero net momentum and angular momentum,
+  // so scaling it can never reintroduce the drift the first step removed.
   if(!grabbing){
-    const post=energy();
-    // totalQ is the raw reservoir heat Q (not net dU): the P·dV term inside
-    // dU=Q-P·dV is internal work already transferred into the mechanism's
-    // KE/PE by §08.1/§08.3/§08.4 and reflected in post.pe/post.ke, so adding
-    // it again here would double-count it. Only the externally-sourced Q
-    // belongs in the invariant alongside preE (which already includes the
-    // gas's own pre-substep internal energy). post.SPE (spring potential
-    // energy, hud.js §12.1) is subtracted the same way post.pe is: it's a
-    // legitimate KE<->PE channel the spring force itself already moved
-    // energy through in §08.1/§08.4, not a discrepancy to fold back.
-    const keTarget=preE+totalQ-post.pe-post.U-post.SPE;
-    if(keTarget>0 && post.ke>1e-12){
-      const s=Math.sqrt(keTarget/post.ke);
-      for(const b of bodies){ if(b.static)continue; b.vx*=s; b.vy*=s; b.w*=s; }
+    for(const isl of islands){
+      let totalQ=0; for(const g of isl.gases) totalQ+=g._Qstep;
+      const post=energy(isl);
+      // totalQ is the raw reservoir heat Q (not net dU): the P·dV term inside
+      // dU=Q-P·dV is internal work already transferred into the mechanism's
+      // KE/PE by §08.1/§08.3/§08.4 and reflected in post.pe/post.ke, so adding
+      // it again here would double-count it. Only the externally-sourced Q
+      // belongs in the invariant alongside preE (which already includes the
+      // gas's own pre-substep internal energy). post.SPE (spring potential
+      // energy, hud.js §12.1) is subtracted the same way post.pe is: it's a
+      // legitimate KE<->PE channel the spring force itself already moved
+      // energy through in §08.1/§08.4, not a discrepancy to fold back.
+      const keTarget=isl.preE+totalQ-post.pe-post.U-post.SPE;
+      if(isl.anchored){
+        // keTarget<=0 (all mechanical energy would have to come from an
+        // impossible negative KE) or the island is momentarily at rest: leave
+        // velocities as-is rather than divide by ~0 or inject energy from
+        // nothing -- rare, and self-corrects next substep once ke>0 again.
+        if(keTarget>0 && post.ke>1e-12){
+          const s=Math.sqrt(keTarget/post.ke);
+          for(const i of isl.bodyIdx){ const b=bodies[i]; b.vx*=s; b.vy*=s; b.w*=s; }
+        }
+        continue;
+      }
+      // Free island: additive rigid-motion fix to the exact momentum target,
+      // then a multiplicative rescale of only the leftover internal field.
+      const now=islandKinematics(isl.bodyIdx);
+      const Ieff=now.Ieff;
+      const Ptx=isl.P0[0], Pty=isl.P0[1]+(sim.gravity? -sim.g*isl.M*h : 0);
+      const Ltarget=isl.L0;
+      const Vt=[Ptx/isl.M, Pty/isl.M], wt=Ieff>1e-9?Ltarget/Ieff:0;
+      const Vnow=[now.px/isl.M, now.py/isl.M], wnow=Ieff>1e-9?now.L/Ieff:0;
+      const keRigidTarget=0.5*isl.M*(Vt[0]*Vt[0]+Vt[1]*Vt[1])+0.5*Ieff*wt*wt;
+      let keInt=0; const internal=[];
+      for(const i of isl.bodyIdx){ const b=bodies[i];
+        const rx=b.x-now.cx, ry=b.y-now.cy;
+        // Internal ("shape") velocity: current velocity minus the rigid
+        // field implied by the island's *actual* current momentum (Vnow/
+        // wnow) -- zero-net by construction, so it's pure relative motion,
+        // never the momentum error itself, whatever s ends up being below.
+        const ivx=b.vx-(Vnow[0]-wnow*ry), ivy=b.vy-(Vnow[1]+wnow*rx), iw=b.w-wnow;
+        internal.push([ivx,ivy,iw,rx,ry]);
+        keInt+=0.5*b.mass*(ivx*ivx+ivy*ivy)+0.5*b.I*iw*iw;
+      }
+      // s=1 (desiredInt<=0 or no internal motion to scale) reproduces the
+      // exact momentum-target rigid field plus the untouched internal field
+      // -- the free-island analogue of the anchored branch's "leave as-is".
+      const desiredInt=keTarget-keRigidTarget;
+      const s=(desiredInt>0 && keInt>1e-12)?Math.sqrt(desiredInt/keInt):1;
+      isl.bodyIdx.forEach((i,k)=>{ const b=bodies[i]; const [ivx,ivy,iw,rx,ry]=internal[k];
+        b.vx=Vt[0]-wt*ry+s*ivx; b.vy=Vt[1]+wt*rx+s*ivy; b.w=wt+s*iw;
+      });
     }
-    // keTarget<=0 (all mechanical energy would have to come from an
-    // impossible negative KE) or the system is momentarily at rest: leave
-    // velocities as-is rather than divide by ~0 or inject energy from
-    // nothing -- rare, and self-corrects next substep once ke>0 again.
   }
 }
