@@ -45,6 +45,8 @@ All mutable world state lives in `js/state.js` (§04):
 - `constraints` -- array of typed joint objects; each carries `type`, endpoint refs (`a`, `b`), type-specific parameters, and transient solver outputs (`_lam`, `_rows`).
 - `gases` -- array of gas-piston force elements.
 - `cables` -- array of unilateral tetherball cable elements.
+- `springs` -- array of linear (Hookean) spring force elements, `{type:'spring', a, b, restLen, k, sel}` (`a`/`b` are rod-style `{id,off}` endpoints).
+- `rotSprings` -- array of rotational (torsional) spring force elements, `{type:'rotspring', a:{id}, b:{id}, restAngle, k, sel}`.
 - `sim` -- simulation parameters (`h`, `beta`, `reg`, `running`, `gravity`, `g`, ...).
 - `cam` -- camera state (`x`, `y`, `scale`).
 
@@ -56,15 +58,15 @@ Give new code a home in an existing section (and register it in that section's s
 
 | File | Section | What it does |
 |---|---|---|
-| `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `gases`, `cables`; `sim`; `cam` |
+| `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `gases`, `cables`, `springs`, `rotSprings`; `sim`; `cam` |
 | `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshInertia`, `setBodyMass`, `w2s`/`s2w` |
-| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `twoPointFrame`, `gasFrame`, `cableFrame`, `rowsFor` |
+| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `twoPointFrame`, `gasFrame`, `cableFrame`, `rowsFor`, `makeSpringCon`, `makeRotSpringCon`, `rotSpringSpiralGeom` |
 | `js/solver.js` | §07 | `solveLinear` -- dense Gauss-Jordan on the Schur complement |
-| `js/physics.js` | §08 | `substep` -- forces -> constraint solve -> position integration -> thermodynamics |
+| `js/physics.js` | §08 | `substep` -- forces (incl. springs) -> constraint solve -> position integration -> thermodynamics |
 | `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` |
 | `js/loop.js` | §10 | `frame` -- fixed-step accumulator, calls `substep` -> `render` -> `updateHUD` |
-| `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawConstraint`, `drawGas`, `drawReaction`, ... |
-| `js/hud.js` | §12 | `energy`, `updateHUD`, `drawSpark` |
+| `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawConstraint`, `drawGas`, `drawSpring`, `drawRotSpring`, `drawReaction`, ... |
+| `js/hud.js` | §12 | `energy` (incl. spring PE), `updateHUD`, `drawSpark` |
 | `js/tools.js` | §13 | `TOOLS`, `setTool`, `pickBody`, `snapAnchor`, `conHandles`, pointer handlers |
 | `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector`, `updateInspectorLive` |
 | `js/examples.js` | §15 | `loadExample` -- assembles prebuilt machines from library primitives |

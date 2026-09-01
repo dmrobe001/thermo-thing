@@ -17,6 +17,8 @@ let bodies = [];        // {x,y,th, vx,vy,w, mass, I, invM, invI, r, static, sel
 let constraints = [];   // typed; see makers below
 let gases = [];         // gas-piston force elements (see gasFrame / substep step 5)
 let cables = [];        // radial-ratchet cable elements (unilateral)
+let springs = [];       // linear (Hookean) spring force elements, see constraints.js §06.6
+let rotSprings = [];    // rotational (torsional) spring force elements, see constraints.js §06.6
 let uid = 1;
 
 // ---- §04.3 · sim parameters & camera ----

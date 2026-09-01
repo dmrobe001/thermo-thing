@@ -13,6 +13,10 @@
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
+//    §06.6  spring / rotSpring frames (Hookean force elements, §08.1) -- these
+//           are force elements, not constraint rows: they never appear in
+//           rowsFor or the solve of §07/§08.3, only in the applied-force pass
+//           of §08.1, mirroring gasFrame's role for the gas piston.
 // ============================================================================
 
 // ---- §06.1 · bodyIndex ----
@@ -460,4 +464,108 @@ function rowsFor(con){
     return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true }];
   }
   return [];
+}
+
+// ---- §06.6 · spring / rotSpring frames ----
+// Build a linear spring between two endpoints (same {id,off} shape as rod --
+// either end may be background-anchored). Unlike a rod there is no weld: a
+// spring only ever pulls/pushes along its own line, so twoPointFrame's phi
+// (used by endpointAngleLockRow) is simply unused here. Rest length defaults
+// to the current length, so a freshly-placed spring starts at equilibrium.
+const SPRING_DEFAULT_K = 30;
+function makeSpringCon(a,b){
+  const [wax,way]=epWorld(a), [wbx,wby]=epWorld(b);
+  return { type:'spring', a, b, restLen:Math.hypot(wax-wbx,way-wby), k:SPRING_DEFAULT_K, sel:false };
+}
+// World position of the draggable rest-length control point (constraints.js
+// §06.6 / render.js §11.5): the midpoint of the live spring, offset
+// perpendicular by a small screen-space gap (so the rest-length line reads as
+// a separate parallel indicator, not an overlay on the spring itself), then
+// out along the spring's own direction by half the rest length -- i.e. one
+// end of the rest-length line, whose other end mirrors it through the centre.
+const SPRING_LINE_OFFSET_PX = 14;
+function springRestHandlePos(con){
+  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+  const dx=wbx-wax, dy=wby-way, L=Math.hypot(dx,dy)||1e-9;
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const off=SPRING_LINE_OFFSET_PX/cam.scale;
+  const cx=(wax+wbx)/2+nx*off, cy=(way+wby)/2+ny*off;
+  return [cx+ux*con.restLen/2, cy+uy*con.restLen/2];
+}
+
+// Build a rotational (torsional) spring between two bodies -- 'a' and 'b' are
+// bare {id} refs (no offset: like belt/cvt, the whole body's frame angle is
+// the feature, not a point on it). Either may be background-anchored
+// (id===null), which reads as a fixed theta=0 reference -- mirroring the
+// null-id convention rod/slot/gas use for a world-anchored end. The rest
+// angle captures whatever the live relative angle is at creation, so a
+// freshly-placed rotational spring starts unstressed (mirrors rod weld's
+// captureRestAngle, §06.1).
+const ROTSPRING_DEFAULT_K = 8;
+function rotSpringRelAngle(rs){
+  const thA = rs.a.id!=null ? bodies[bodyIndex(rs.a.id)].th : 0;
+  const thB = rs.b.id!=null ? bodies[bodyIndex(rs.b.id)].th : 0;
+  return thA-thB;
+}
+function makeRotSpringCon(aId,bId){
+  const rs = { type:'rotspring', a:{id:aId}, b:{id:bId}, restAngle:0, k:ROTSPRING_DEFAULT_K, sel:false };
+  rs.restAngle = rotSpringRelAngle(rs);
+  return rs;
+}
+// The two theta=0 reference marks drawn on-canvas (render.js §11.5): with two
+// real bodies, each mark rides its own body's local theta=0 point on its rim.
+// With one end on the background, both marks sit on the *same* (real) body's
+// rim -- one riding the body's own theta=0 (spins with it), the other held at
+// the fixed world +x direction from that body's centre (the "ground's
+// theta=0") -- so the pair visibly splays apart as the body twists away from
+// its rest angle relative to the fixed frame.
+function rotSpringControlPoints(con){
+  const hasA=con.a.id!=null, hasB=con.b.id!=null;
+  if(hasA && hasB){
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const [ax,ay]=worldPt(A,[A.r,0]), [bx,by]=worldPt(B,[B.r,0]);
+    return {pA:[ax,ay], pB:[bx,by]};
+  }
+  const body = hasA ? bodies[bodyIndex(con.a.id)] : bodies[bodyIndex(con.b.id)];
+  const [ox,oy]=worldPt(body,[body.r,0]);
+  const groundPt=[body.x+body.r, body.y];
+  return hasA ? {pA:[ox,oy], pB:groundPt} : {pA:groundPt, pB:[ox,oy]};
+}
+// Belt vs. spiral: a belt reads as a connection between two separate rims, so
+// it only makes sense while the two bodies' disks are not one fully inside
+// the other (the standard "circle A contains circle B" test, distance between
+// centres plus the smaller radius at most the larger radius). Full overlap,
+// or either end on the background (no second rim to run a belt to at all),
+// falls back to the spiral instead.
+function rotSpringVisualMode(con){
+  if(con.a.id==null || con.b.id==null) return 'spiral';
+  const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+  const d=Math.hypot(A.x-B.x,A.y-B.y);
+  const rMax=Math.max(A.r,B.r), rMin=Math.min(A.r,B.r);
+  return (d+rMin<=rMax+1e-9) ? 'spiral' : 'belt';
+}
+// Geometry for the spiral render: centred on the larger body (or the sole
+// real body, for a background-attached spring), sweeping from its own
+// perimeter down to either the smaller body's perimeter or (background case)
+// the centre. The sweep angle is a fixed decorative two turns plus the live
+// deviation from rest, so a spring visibly winds up or loosens as the bodies
+// twist relative to each other -- capped well short of the many-turn range so
+// a fast spin doesn't wind the drawing into an unreadable knot.
+function rotSpringSpiralGeom(con){
+  const hasA=con.a.id!=null, hasB=con.b.id!=null;
+  let outer, outerR, innerR;
+  if(hasA && hasB){
+    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+    const outerIsA = A.r>=B.r;
+    outer = outerIsA?A:B; outerR=outer.r; innerR=(outerIsA?B:A).r;
+  } else {
+    outer = hasA ? bodies[bodyIndex(con.a.id)] : bodies[bodyIndex(con.b.id)];
+    outerR = outer.r; innerR = 0;
+  }
+  const dev = rotSpringRelAngle(con) - con.restAngle;
+  const base = Math.PI*4;
+  let sweep = base+dev;
+  const mag = Math.max(Math.PI*1, Math.min(Math.PI*12, Math.abs(sweep)));
+  sweep = mag*(sweep<0?-1:1);
+  return {cx:outer.x, cy:outer.y, outerR, innerR, angle0:outer.th, sweep};
 }

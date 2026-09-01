@@ -22,6 +22,8 @@ const TOOLS=[
   {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
   {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
   {id:'gas',key:'6',tip:'Gas piston (6)',svg:'<rect x="3" y="8" width="11" height="8" rx="1"/><path d="M14 10.5v3M14 12h7M18 9.5v5"/>'},
+  {id:'spring',key:'8',tip:'Linear spring (8)',svg:'<circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="6" r="2.4"/><path d="M7 16.5l2-3 3 6 3-6 2 3"/>'},
+  {id:'rotspring',key:'9',tip:'Rotational spring (9)',svg:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 11a1 1 0 1 0 1 1"/>'},
   {id:'delete',key:'7',tip:'Delete (7)',svg:'<path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/>'},
 ];
 let tool='select';
@@ -91,6 +93,28 @@ function gasHit(g,wx,wy){ const tol=12/cam.scale; const f=gasFrame(g);
   return distSeg(wx,wy,f.hx,f.hy,f.pax,f.pay)<=tol; }
 function cableHit(cb,wx,wy){ const tol=10/cam.scale; const f=cableFrame(cb); if(!f) return false;
   return distSeg(wx,wy,f.T[0],f.T[1],f.Qx,f.Qy)<=tol; }
+// spring / rotSpring hit tests, same role as gasHit/cableHit above -- springs
+// live in their own arrays (constraints.js §06.6), not `constraints`, so they
+// get their own pick path (pickSpring/pickRotSpring, inspector.js §14.1)
+// rather than going through pickConstraint.
+function springHit(sp,wx,wy){ const tol=10/cam.scale;
+  const [ax,ay]=epWorld(sp.a), [bx,by]=epWorld(sp.b);
+  return distSeg(wx,wy,ax,ay,bx,by)<=tol; }
+function rotSpringHit(rs,wx,wy){ const tol=10/cam.scale;
+  const hasA=rs.a.id!=null, hasB=rs.b.id!=null;
+  const A=hasA?bodies[bodyIndex(rs.a.id)]:null, B=hasB?bodies[bodyIndex(rs.b.id)]:null;
+  if((hasA&&!A)||(hasB&&!B)) return false;
+  if(rotSpringVisualMode(rs)==='belt'){
+    for(const [p,q] of beltTangents(A.x,A.y,A.r, B.x,B.y,B.r, 1)){ if(distSeg(wx,wy,p[0],p[1],q[0],q[1])<=tol) return true; }
+    return Math.abs(Math.hypot(wx-A.x,wy-A.y)-A.r)<=tol || Math.abs(Math.hypot(wx-B.x,wy-B.y)-B.r)<=tol;
+  }
+  // spiral mode: cheap radius-band test rather than tracing the true spiral
+  // path -- good enough to pick a decorative element, no reaction/instrument
+  // value rides on exact spiral-arc hit precision the way a rod's line does.
+  const geo=rotSpringSpiralGeom(rs);
+  const d=Math.hypot(wx-geo.cx,wy-geo.cy);
+  return d>=Math.min(geo.outerR,geo.innerR)-tol && d<=Math.max(geo.outerR,geo.innerR)+tol;
+}
 // perimeter (rim) hit test on a specific body -- the drag handle for radius
 // resizing (§13.5/§13.6). A separate tolerance ring around the rim, distinct
 // from the filled-disk `pickBody` test used for moving the body.
@@ -127,6 +151,16 @@ function conHandles(con){
   if(con.type==='rod'||con.type==='slot'){
     const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
     return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}];
+  }
+  if(con.type==='spring'){
+    // Endpoints behave like rod's (draggable to re-anchor); the rest-length
+    // control point (constraints.js §06.6 springRestHandlePos) only exists
+    // while selected, matching drawSpringRestLine's own sel-gated render
+    // (render.js §11.4b).
+    const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
+    const handles=[{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}];
+    if(con.sel){ const [rx,ry]=springRestHandlePos(con); handles.push({which:'restLen',x:rx,y:ry}); }
+    return handles;
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
   if(con.type==='pin'){ const [x,y]=worldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
@@ -176,14 +210,22 @@ function applyCableHandle(ad,wx,wy){
 }
 function pickHandle(wx,wy){
   const tol=11/cam.scale;
-  // the selected constraint's own control points take priority over any
-  // other constraint's handle occupying the same point -- mirrors
-  // pickCableHandle above, for the same reason.
-  if(selConstraint){
-    for(const h of conHandles(selConstraint)){
-      if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:selConstraint,which:h.which,ci:constraints.indexOf(selConstraint)}; } }
-  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i]; if(con===selConstraint) continue;
-    for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,ci:i}; } }
+  // the selected constraint's (or spring's -- constraints.js §06.6 -- they
+  // share conHandles/applyHandle, just live in a separate array) own control
+  // points take priority over any other one's handle occupying the same
+  // point -- mirrors pickCableHandle above, for the same reason. `arr`
+  // records which array `ci` indexes into, so the caller can select the
+  // right one back (selectConstraint vs selectSpring).
+  const selObj = selConstraint || selSpring;
+  const arrOf = o => selConstraint===o ? 'constraints' : selSpring===o ? 'springs' : null;
+  if(selObj){
+    for(const h of conHandles(selObj)){
+      if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:selObj,which:h.which,
+        ci:(selConstraint===selObj?constraints:springs).indexOf(selObj), arr:arrOf(selObj)}; } }
+  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i]; if(con===selObj) continue;
+    for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,ci:i,arr:'constraints'}; } }
+  for(let i=springs.length-1;i>=0;i--){ const sp=springs[i]; if(sp===selObj) continue;
+    for(const h of conHandles(sp)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:sp,which:h.which,ci:i,arr:'springs'}; } }
   return null;
 }
 // move an anchor while editing; snaps and (for rods) can re-bind to another body
@@ -219,6 +261,30 @@ function applyHandle(ad, wx, wy){
     if(ad.which==='anchor'){ const s=snapAnchor(wx,wy,[A.id]); lastSnap=s; const P=s?s.wp:[wx,wy]; con.a.off=offOf(A,P); }
     else if(ad.which==='dir'){ const [px,py]=worldPt(A,con.a.off); const dx=wx-px,dy=wy-py; const L=Math.hypot(dx,dy)||1;
       lastSnap=null; con.dir=R(-A.th, dx/L, dy/L); }
+  }
+  else if(con.type==='spring'){
+    if(ad.which==='restLen'){
+      // Project the drag onto the spring's own A->B direction from its
+      // centre -- unlike rod's endpoint drag (which redefines the enforced
+      // length), restLen is free user data, so only this dedicated handle
+      // touches it, never the endpoint drag below.
+      const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+      const dx=wbx-wax, dy=wby-way, L=Math.hypot(dx,dy)||1e-9;
+      const ux=dx/L, uy=dy/L, cx=(wax+wbx)/2, cy=(way+wby)/2;
+      const proj=(wx-cx)*ux+(wy-cy)*uy;
+      lastSnap=null;
+      con.restLen=Math.max(0.05, Math.abs(proj)*2);
+    } else {
+      // Endpoint drag: snap/re-bind exactly like rod's, but never touch
+      // restLen -- a spring's rest length is a free parameter, not the
+      // literal current distance the way a rod's `len` is.
+      const s=snapAnchor(wx,wy); lastSnap=s;
+      const ep = ad.which==='A'? con.a : con.b;
+      if(s){ ep.id=s.body.id; ep.off=offOf(s.body,s.wp); }
+      else { const bi=pickBody(wx,wy);
+        if(bi>=0){ ep.id=bodies[bi].id; ep.off=offOf(bodies[bi],[wx,wy]); }
+        else { ep.id=null; ep.off=[wx,wy]; } }
+    }
   }
 }
 // scale a stored {id, off} endpoint that rides `bodyId`'s local frame by
@@ -260,6 +326,11 @@ function resizeBody(b, newR){
   }
   for(const g of gases){ scaleOffOnBody(g.a, b.id, ratio); if(g.head) scaleOffOnBody(g.head, b.id, ratio); }
   for(const cb of cables){ scaleOffOnBody(cb.tether, b.id, ratio); }
+  // Springs (constraints.js §06.6): scale endpoint offsets like rod does,
+  // leaving restLen untouched -- same precedent as rod's `len`, which the
+  // loop above also never rescales. rotSprings carry no offsets (whole-body
+  // frame angle, not a point on the rim), so there's nothing to scale there.
+  for(const sp of springs){ scaleOffOnBody(sp.a, b.id, ratio); scaleOffOnBody(sp.b, b.id, ratio); }
   // mass now edits independently of radius (inspector.js §14.2 setBodyMass), so a
   // resize can no longer just reset it to pi*r^2 -- scale it by area (ratio^2) to
   // preserve whatever density the body currently has, mass-editing or not.
@@ -305,6 +376,8 @@ function updateHover(wx,wy){
     const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
+    const spi=pickSpring(wx,wy); if(spi>=0){ if(!springs[spi].sel) hover=springs[spi]; return; }
+    const rsi=pickRotSpring(wx,wy); if(rsi>=0){ if(!rotSprings[rsi].sel) hover=rotSprings[rsi]; return; }
     const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
     return;
   }
@@ -313,15 +386,17 @@ function updateHover(wx,wy){
     const cci=pickConstraint(wx,wy); if(cci>=0){ hover=constraints[cci]; return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ hover=gases[gsi]; return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ hover=cables[cbi]; return; }
+    const spi=pickSpring(wx,wy); if(spi>=0){ hover=springs[spi]; return; }
+    const rsi=pickRotSpring(wx,wy); if(rsi>=0){ hover=rotSprings[rsi]; return; }
     const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
     return;
   }
-  if(tool==='pin'||tool==='rod'||tool==='slot'||tool==='gas'||tool==='cable'){
+  if(tool==='pin'||tool==='rod'||tool==='slot'||tool==='gas'||tool==='cable'||tool==='spring'){
     // these tools attach to a snapped anchor (body centre/edge) or a bare body
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
     return;
   }
-  if(tool==='belt'||tool==='cvt'||tool==='knife'){
+  if(tool==='belt'||tool==='cvt'||tool==='knife'||tool==='rotspring'){
     const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
     return;
   }
@@ -339,7 +414,7 @@ function startPinch(){
 // This is where each tool builds its constraint. The branches, in order, handle:
 // pinch guard, explicit pan, select (+handles/resize/grab -- the only case
 // that can claim a one-finger drag instead of panning), body, delete, gas,
-// belt/cvt, knife, cable, pin, rod, slot.
+// belt/cvt, knife, cable, pin, rod, slot, spring, rotspring.
 //
 // Every non-select tool, and every select-tool click that doesn't land on
 // a draggable control point (a handle, the selected body's resize rim) or
@@ -373,7 +448,8 @@ cv.addEventListener('pointerdown',e=>{
       const ch=pickCableHandle(wx,wy);
       if(ch){ if(ch.cb.sel){ anchorDrag=ch; applyCableHandle(ch,wx,wy); return; } selectCable(ch.cbi); return; }
       const h=pickHandle(wx,wy);
-      if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); return; } selectConstraint(h.ci); return; }
+      if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); return; }
+        if(h.arr==='springs') selectSpring(h.ci); else selectConstraint(h.ci); return; }
       // the selected body's rim -- drag to resize (§13.6 applyBodyResize)
       if(selBody && bodyRimHit(selBody,wx,wy)){ resizeDrag={b:selBody}; return; }
     }
@@ -394,6 +470,10 @@ cv.addEventListener('pointerdown',e=>{
     if(gsi>=0){ selectGas(gsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const cbi=pickCable(wx,wy);
     if(cbi>=0){ selectCable(cbi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const spi=pickSpring(wx,wy);
+    if(spi>=0){ selectSpring(spi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const rsi=pickRotSpring(wx,wy);
+    if(rsi>=0){ selectRotSpring(rsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ selectBody(bi);
       if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
@@ -433,9 +513,13 @@ function runToolClick(wx,wy){
     const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
     const gsi=pickGas(wx,wy); if(gsi>=0){ gases.splice(gsi,1); clearSelection(); saveState(); return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); return; }
+    const spi=pickSpring(wx,wy); if(spi>=0){ springs.splice(spi,1); clearSelection(); saveState(); return; }
+    const rsi=pickRotSpring(wx,wy); if(rsi>=0){ rotSprings.splice(rsi,1); clearSelection(); saveState(); return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ const id=bodies[bi].id;
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
+      rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       bodies.splice(bi,1); clearSelection(); saveState(); }
     return;
   }
@@ -554,6 +638,45 @@ function runToolClick(wx,wy){
     // afterward frees it back into a plain (visual-only) pin.
     const bg = Aep.id==null || Bep.id==null;
     constraints.push(makeSlotCon(Aep, Bep, bg, bg));
+    saveState();
+    return;
+  }
+  if(tool==='spring'){
+    // Two clicks, exactly like rod: each end snaps to a body if one is
+    // under/near the click, else attaches to the background. Rest length
+    // defaults to the length at creation (makeSpringCon, constraints.js
+    // §06.6) -- no weld concept here, a spring only ever pulls/pushes along
+    // its own line.
+    if(!pending){ const t=anchorTarget(wx,wy);
+      pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+      return; }
+    const t=anchorTarget(wx,wy);
+    const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
+    const Aep={id:pending.id, off:pending.off};
+    if(Aep.id==null && Bep.id==null) return;      // a spring needs at least one real body -- keep pending, wait for a better second click
+    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't spring a body to itself -- ditto
+    pending=null;
+    springs.push(makeSpringCon(Aep, Bep));
+    saveState();
+    return;
+  }
+  if(tool==='rotspring'){
+    // Two bodies, like belt/cvt -- no offset, the whole body frame's theta is
+    // the feature -- but unlike belt/cvt an empty-space click is a valid
+    // pick too (id:null, the background reads as a fixed theta=0 reference,
+    // constraints.js §06.6). The rest angle captures whatever relative angle
+    // is live at creation, so a freshly-placed rotational spring starts
+    // unstressed.
+    if(!pending){ const bi=pickBody(wx,wy);
+      pending = bi>=0 ? {id:bodies[bi].id, wp:[bodies[bi].x,bodies[bi].y]} : {id:null, wp:[wx,wy]};
+      return; }
+    const bi2 = pending.id!=null ? pickBodyExcept(wx,wy,pending.id) : pickBody(wx,wy);
+    if(bi2<0) return;   // second pick must land on a real body -- keep pending, wait
+    const Bid=bodies[bi2].id;
+    if(pending.id!=null && Bid===pending.id) return;   // can't spring a body to itself
+    const Aid=pending.id;
+    pending=null;
+    rotSprings.push(makeRotSpringCon(Aid, Bid));
     saveState();
     return;
   }
