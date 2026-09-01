@@ -255,7 +255,7 @@ function drawConstraint(con){
 // Screen angle runs opposite world angle (w2s flips y), so the dash offset --
 // measured as arc length along the canvas path -- carries a matching sign flip.
 function drawRim(x,y,r,col,ang=0){ const [sx,sy]=w2s(x,y); const rr=r*cam.scale;
-  ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.lineDashOffset=-ang*rr;
+  ctx.strokeStyle=col;ctx.lineWidth=3;ctx.setLineDash([8,6]);ctx.lineDashOffset=-ang*rr;
   ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);ctx.stroke();
   ctx.setLineDash([]);ctx.lineDashOffset=0; }
 function beltTangents(ax,ay,ra, bx,by,rb, sense){
