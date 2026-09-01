@@ -71,9 +71,9 @@ function drawBody(b){
   } else {
     ctx.fillStyle='#cdd5e0'; ctx.fill();
   }
-  ctx.lineWidth = b.sel?2.5:1.4;
-  ctx.strokeStyle = b.sel? 'var(--accent)':'#7c8798';
-  ctx.strokeStyle = b.sel? '#5aa9f0':'#7c8798';
+  const hoverOn = hover===b;
+  ctx.lineWidth = b.sel?2.5: hoverOn?2:1.4;
+  ctx.strokeStyle = b.sel? '#5aa9f0': hoverOn? '#8fc4f7':'#7c8798';
   ctx.stroke();
   // orientation tick + centre dot (shows spin)
   const [tx,ty]=w2s(b.x+Math.cos(b.th)*b.r, b.y+Math.sin(b.th)*b.r);
@@ -111,7 +111,8 @@ function drawCable(cb){
   const f=cableFrame(cb); if(!f)return;
   const lamMag = cb._lam&&cb._lam.length ? Math.hypot(...cb._lam) : 0;
   const taut = lamMag>1e-5;
-  const col = cb.sel? '#5aa9f0' : (taut? '#e0c060' : '#8a94a6');
+  const hoverOn = hover===cb;
+  const col = cb.sel? '#5aa9f0' : hoverOn? '#8fc4f7' : (taut? '#e0c060' : '#8a94a6');
   const [tx,ty]=w2s(f.T[0],f.T[1]);
   ctx.strokeStyle=col; ctx.lineWidth= taut?2.5:1.8;
   // Straight segment: tether T -> separation point Q
@@ -131,15 +132,17 @@ function drawCable(cb){
     ctx.stroke();
   }
   jointDot(f.T[0],f.T[1],col);
-  // anchor handle -- always visible when selected
+  // anchor handle -- always visible when selected; brighter + larger when hovered
   if(cb.sel){
+    const handleHover = hoverHandle && hoverHandle.kind==='cable' && hoverHandle.cb===cb;
+    const rad = handleHover?6.5:5;
     const [ax2,ay2]=w2s(f.Ax,f.Ay);
-    ctx.fillStyle='#13161c'; ctx.beginPath(); ctx.arc(ax2,ay2,5,0,Math.PI*2); ctx.fill();
-    ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ax2,ay2,5,0,Math.PI*2); ctx.stroke();
+    ctx.fillStyle='#13161c'; ctx.beginPath(); ctx.arc(ax2,ay2,rad,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle=handleHover?'#8fd0ff':col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ax2,ay2,rad,0,Math.PI*2); ctx.stroke();
   }
 }
 function drawGas(g){
-  const f=gasFrame(g); const sel=g.sel;
+  const f=gasFrame(g); const sel=g.sel; const hoverOn=hover===g;
   const nrm=[-f.dW[1],f.dW[0]]; const hw=g.bore*0.5;
   const H1=[f.hx+nrm[0]*hw, f.hy+nrm[1]*hw], H2=[f.hx-nrm[0]*hw, f.hy-nrm[1]*hw];
   const P1=[f.pax+nrm[0]*hw, f.pay+nrm[1]*hw], P2=[f.pax-nrm[0]*hw, f.pay-nrm[1]*hw];
@@ -153,7 +156,7 @@ function drawGas(g){
   ctx.fillStyle=`rgba(${Math.round(210+warm*40)},${Math.round(150-warm*70)},${Math.round(90-warm*50)},${a})`;
   ctx.fill();
   // cylinder walls + closed end
-  const col=sel?'#5aa9f0':'#8a94a6'; ctx.strokeStyle=col; ctx.lineWidth=2;
+  const col=sel?'#5aa9f0':hoverOn?'#8fc4f7':'#8a94a6'; ctx.strokeStyle=col; ctx.lineWidth=2;
   const ext=[f.dW[0]*0.25, f.dW[1]*0.25];
   const walls=[[H1,[P1[0]+ext[0],P1[1]+ext[1]]],[H2,[P2[0]+ext[0],P2[1]+ext[1]]]];
   for(const [q1,q2] of walls){ const [a1,a2]=w2s(q1[0],q1[1]), [b1,b2]=w2s(q2[0],q2[1]);
@@ -179,7 +182,8 @@ function drawGasForce(g){
 function drawConstraint(con){
   const viol = !sim.running && conMaxC(con) > 2e-3;
   if(viol) violCount++;
-  const sel = con.sel; const col = viol ? '#ec5b52' : (sel? '#5aa9f0':'#8a94a6');
+  const sel = con.sel; const hoverOn = !sel && hover===con;
+  const col = viol ? '#ec5b52' : (sel? '#5aa9f0': hoverOn? '#8fc4f7':'#8a94a6');
   if(con.type==='rod'){
     const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
@@ -301,10 +305,13 @@ function drawPreview(){
 function drawHandles(){
   if(sim.running) return;
   for(const con of constraints){ if(!con.sel) continue;
-    for(const h of conHandles(con)){ const [sx,sy]=w2s(h.x,h.y);
-      ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,6,0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle='#5aa9f0';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,6,0,Math.PI*2);ctx.stroke();
-      ctx.fillStyle='#5aa9f0';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill(); } }
+    for(const h of conHandles(con)){
+      const isHover = hoverHandle && hoverHandle.kind==='con' && hoverHandle.con===con && hoverHandle.which===h.which;
+      const rad = isHover?7.5:6;
+      const [sx,sy]=w2s(h.x,h.y);
+      ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.fill();
+      ctx.strokeStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.stroke();
+      ctx.fillStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill(); } }
 }
 function drawSnap(){
   if(!anchorDrag || !lastSnap) return;

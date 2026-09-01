@@ -32,7 +32,7 @@ TOOLS.forEach((t,i)=>{
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
 });
-function setTool(id){ tool=id; pending=null;
+function setTool(id){ tool=id; pending=null; hover=null; hoverHandle=null;
   document.querySelectorAll('.tool').forEach(e=>e.classList.toggle('on',e.dataset.id===id));
   cv.style.cursor = id==='select'?'default': id==='delete'?'not-allowed':'crosshair';
   document.getElementById('modehint').textContent = TOOLS.find(t=>t.id===id).tip;
@@ -201,6 +201,27 @@ const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
 let anchorDrag=null, lastSnap=null;
 function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; }
+
+// `hover` highlights whatever body/interaction sits under the cursor when it
+// isn't already selected; `hoverHandle` highlights a control point of the
+// *selected* interaction when the cursor is over it. Both are recomputed on
+// every pointermove (§13.6) and cleared whenever the pointer is busy doing
+// something else (dragging, panning, pinching, ...).
+let hover=null, hoverHandle=null;
+function updateHover(wx,wy){
+  hover=null; hoverHandle=null;
+  if(sim.running || tool!=='select') return;
+  // a control point of the already-selected interaction takes priority
+  const ch=pickCableHandle(wx,wy);
+  if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
+  const h=pickHandle(wx,wy);
+  if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which}; return; }
+  // otherwise highlight whatever is under the cursor, unless it's the selection
+  const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
+  const cci=pickConstraint(wx,wy); if(cci>=0){ if(!constraints[cci].sel) hover=constraints[cci]; return; }
+  const gsi=pickGas(wx,wy); if(gsi>=0){ if(!gases[gsi].sel) hover=gases[gsi]; return; }
+  const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
+}
 function startPinch(){
   const pts=[...pointers.values()];
   const mx=(pts[0].x+pts[1].x)/2, my=(pts[0].y+pts[1].y)/2;
@@ -230,9 +251,13 @@ cv.addEventListener('pointerdown',e=>{
 
   if(tool==='select'){
     if(!sim.running){
-      // cable handle check first: allows winding control in edit mode
-      const ch=pickCableHandle(wx,wy); if(ch){ selectCable(ch.cbi); anchorDrag=ch; applyCableHandle(ch,wx,wy); return; }
-      const h=pickHandle(wx,wy); if(h){ selectConstraint(h.ci); anchorDrag=h; applyHandle(h,wx,wy); return; } }
+      // cable handle check first: allows winding control in edit mode, but only
+      // once the cable is already the selection -- a click on an unselected
+      // cable's handle just selects it, matching how constraint handles behave.
+      const ch=pickCableHandle(wx,wy);
+      if(ch){ if(ch.cb.sel){ anchorDrag=ch; applyCableHandle(ch,wx,wy); } else selectCable(ch.cbi); return; }
+      const h=pickHandle(wx,wy);
+      if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); } else selectConstraint(h.ci); return; } }
     const bi=pickBody(wx,wy);
     if(bi>=0){ selectBody(bi);
       if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
@@ -391,6 +416,9 @@ cv.addEventListener('pointermove',e=>{
   if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
   if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
 
+  if(anchorDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; }
+  else updateHover(mouseWorld[0],mouseWorld[1]);
+
   if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
   if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
   if(bodyPreview){ bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); return; }
@@ -438,6 +466,7 @@ function endPointer(e){
 }
 cv.addEventListener('pointerup',endPointer);
 cv.addEventListener('pointercancel',endPointer);
+cv.addEventListener('pointerleave',()=>{ hover=null; hoverHandle=null; });
 cv.addEventListener('wheel',e=>{ e.preventDefault();
   const rect=cv.getBoundingClientRect(); const mx=e.clientX-rect.left,my=e.clientY-rect.top;
   const before=s2w(mx,my); cam.scale*=Math.exp(-e.deltaY*0.0012);
