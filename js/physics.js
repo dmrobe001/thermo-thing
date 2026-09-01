@@ -6,7 +6,8 @@
 //  positions integrate, then the gas state advances by the first law, then an
 //  energy-conservation rescale closes the gap the earlier stages only
 //  approximate.
-//    §08.1  applied forces -> candidate velocities (gravity, drag spring, gas)
+//    §08.1  applied forces -> candidate velocities (gravity, drag spring, gas,
+//           user-placed linear/rotational springs)
 //    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
@@ -52,6 +53,30 @@ function substep(h){
     if(!A.static){ FX[ia]+=Fx; FY[ia]+=Fy; TAU[ia]+= f.prx*Fy - f.pry*Fx; }
     if(f.B && !f.B.static){ FX[f.ib]-=Fx; FY[f.ib]-=Fy; TAU[f.ib]+= f.hrx*(-Fy) - f.hry*(-Fx); }
   }
+  // linear spring force elements: Hookean, F = k*(restLen-L) along the line
+  // joining the two endpoints -- same two-endpoint frame as rod (twoPointFrame,
+  // §06.1), reused as-is since a spring needs only L and the unit direction,
+  // never phi (there is no weld/angle-lock row for a force element).
+  for(const sp of springs){
+    const f=twoPointFrame(sp);
+    const {hasA,hasB,ia,ib,rax,ray,rbx,rby,ux,uy,L}=f;
+    const Fmag=sp.k*(sp.restLen-L);
+    const Fx=Fmag*ux, Fy=Fmag*uy;
+    if(hasA && !bodies[ia].static){ FX[ia]+=Fx; FY[ia]+=Fy; TAU[ia]+= rax*Fy - ray*Fx; }
+    if(hasB && !bodies[ib].static){ FX[ib]-=Fx; FY[ib]-=Fy; TAU[ib]+= rbx*(-Fy) - rby*(-Fx); }
+  }
+  // rotational spring force elements: torsional, tau = k*(restAngle-thRel)
+  // between the two bodies' frame angles (background reads as a fixed
+  // theta=0, mirroring rotSpringRelAngle, §06.6) -- a pure couple, no point
+  // of application, so no torque-arm term the way rod/gas need one.
+  for(const rs of rotSprings){
+    const hasA=rs.a.id!=null, hasB=rs.b.id!=null;
+    const ia=hasA?bodyIndex(rs.a.id):-1, ib=hasB?bodyIndex(rs.b.id):-1;
+    const tau=rs.k*(rs.restAngle-rotSpringRelAngle(rs));
+    if(hasA && !bodies[ia].static) TAU[ia]+=tau;
+    if(hasB && !bodies[ib].static) TAU[ib]-=tau;
+  }
+
   for(let i=0;i<N;i++){ const b=bodies[i]; if(b.static){ b.vx=0;b.vy=0;b.w=0; continue; }
     b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i]; }
 
@@ -245,8 +270,11 @@ function substep(h){
     // KE/PE by §08.1/§08.3/§08.4 and reflected in post.pe/post.ke, so adding
     // it again here would double-count it. Only the externally-sourced Q
     // belongs in the invariant alongside preE (which already includes the
-    // gas's own pre-substep internal energy).
-    const keTarget=preE+totalQ-post.pe-post.U;
+    // gas's own pre-substep internal energy). post.SPE (spring potential
+    // energy, hud.js §12.1) is subtracted the same way post.pe is: it's a
+    // legitimate KE<->PE channel the spring force itself already moved
+    // energy through in §08.1/§08.4, not a discrepancy to fold back.
+    const keTarget=preE+totalQ-post.pe-post.U-post.SPE;
     if(keTarget>0 && post.ke>1e-12){
       const s=Math.sqrt(keTarget/post.ke);
       for(const b of bodies){ if(b.static)continue; b.vx*=s; b.vy*=s; b.w*=s; }

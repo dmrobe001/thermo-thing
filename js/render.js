@@ -6,6 +6,7 @@
 //    §11.2  background        (drawGrid, drawAxes)
 //    §11.3  bodies            (drawBody, jointDot)
 //    §11.4  gas & cable       (drawCable, drawGas, drawGasForce)
+//    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
 //    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
@@ -30,6 +31,8 @@ function render(){
   for(const b of [...bodies].sort((p,q)=>q.r-p.r)) drawBody(b);
   for(const g of gases) drawGas(g);
   for(const cb of cables) drawCable(cb);
+  for(const sp of springs) drawSpring(sp);
+  for(const rs of rotSprings) drawRotSpring(rs);
   for(const con of constraints) drawConstraint(con);
   drawHandles();
   if(sim.showForces && sim.running){ for(const con of constraints) drawReaction(con); for(const g of gases) drawGasForce(g); }
@@ -181,6 +184,105 @@ function drawGasForce(g){
   ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(ang-0.4),ey-8*Math.sin(ang-0.4));
   ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(ang+0.4),ey-8*Math.sin(ang+0.4));ctx.stroke();
 }
+// ---- §11.4b · springs (drawSpring, drawRotSpring, drawSpiral) ----
+// Force elements, not constraints (constraints.js §06.6) -- drawn in their own
+// pass alongside gas/cable, before drawConstraint's rigid-joint pass.
+// Zigzag/coil line for a linear spring's body, between two world points, with
+// short straight leads at each end (the standard spring glyph). Amplitude and
+// lead length are fixed in screen pixels (like the tol/off constants
+// elsewhere in this file) so the coil reads the same at any zoom; the number
+// of zigzags scales with on-screen length so it neither vanishes nor
+// over-packs as the spring stretches.
+function drawCoil(wax,way,wbx,wby){
+  const dx=wbx-wax, dy=wby-way, L=Math.hypot(dx,dy)||1e-9;
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const leadW=10/cam.scale, ampW=7/cam.scale;
+  const bodyLen=Math.max(0, L-2*leadW);
+  const coils=Math.max(3, Math.round(L*cam.scale/26));
+  const n=coils*2;
+  const p1x=wax+ux*leadW, p1y=way+uy*leadW;
+  const p2x=wbx-ux*leadW, p2y=wby-uy*leadW;
+  ctx.beginPath();
+  const [s0x,s0y]=w2s(wax,way); ctx.moveTo(s0x,s0y);
+  const [s1x,s1y]=w2s(p1x,p1y); ctx.lineTo(s1x,s1y);
+  for(let i=0;i<=n;i++){
+    const t=i/n;
+    const amp = (i===0||i===n) ? 0 : (i%2 ? ampW : -ampW);
+    const px=p1x+ux*bodyLen*t+nx*amp, py=p1y+uy*bodyLen*t+ny*amp;
+    const [sx,sy]=w2s(px,py); ctx.lineTo(sx,sy);
+  }
+  const [s2x,s2y]=w2s(p2x,p2y); ctx.lineTo(s2x,s2y);
+  const [s3x,s3y]=w2s(wbx,wby); ctx.lineTo(s3x,s3y);
+  ctx.stroke();
+}
+// The rest-length indicator, shown only while the spring is selected: a
+// dimension-style capped line parallel to the spring, centred on it
+// (springRestHandlePos/constraints.js §06.6 places the draggable end of this
+// same line -- drawn here, picked/dragged via conHandles/applyHandle,
+// tools.js §13.3).
+function drawSpringRestLine(con,col){
+  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+  const dx=wbx-wax, dy=wby-way, L=Math.hypot(dx,dy)||1e-9;
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const off=SPRING_LINE_OFFSET_PX/cam.scale;
+  const cx=(wax+wbx)/2+nx*off, cy=(way+wby)/2+ny*off;
+  const hx=ux*con.restLen/2, hy=uy*con.restLen/2;
+  const p1=[cx-hx,cy-hy], p2=[cx+hx,cy+hy];
+  const cap=6/cam.scale;
+  ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
+  const [s1x,s1y]=w2s(p1[0],p1[1]), [s2x,s2y]=w2s(p2[0],p2[1]);
+  ctx.beginPath();ctx.moveTo(s1x,s1y);ctx.lineTo(s2x,s2y);ctx.stroke();
+  ctx.setLineDash([]);
+  for(const p of [p1,p2]){
+    const a=[p[0]-nx*cap,p[1]-ny*cap], b=[p[0]+nx*cap,p[1]+ny*cap];
+    const [ax,ay]=w2s(a[0],a[1]), [bx,by]=w2s(b[0],b[1]);
+    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+  }
+}
+function drawSpring(sp){
+  const sel=sp.sel, hoverOn=!sel && hover===sp;
+  const col = sel?'#5aa9f0':hoverOn?'#8fc4f7':'#8a94a6';
+  const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
+  ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:2;
+  drawCoil(wax,way,wbx,wby);
+  drawEndMarker(wax,way,false,sp.a.id==null,col);
+  drawEndMarker(wbx,wby,false,sp.b.id==null,col);
+  if(sel) drawSpringRestLine(sp,col);
+}
+// An Archimedean-style spiral: radius sweeps linearly from outerR to innerR
+// over `sweep` (signed) radians starting at angle0 -- the rotational spring's
+// "wound coil" rendering (constraints.js §06.6 rotSpringSpiralGeom picks
+// when this applies vs. the belt rendering below).
+function drawSpiral(geo,col){
+  const {cx,cy,outerR,innerR,angle0,sweep}=geo;
+  const n=Math.max(24, Math.round(Math.abs(sweep)/Math.PI*16));
+  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath();
+  for(let i=0;i<=n;i++){
+    const t=i/n; const r=outerR+(innerR-outerR)*t; const a=angle0+sweep*t;
+    const [sx,sy]=w2s(cx+r*Math.cos(a), cy+r*Math.sin(a));
+    i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy);
+  }
+  ctx.stroke();
+}
+function drawRotSpring(rs){
+  const hasA=rs.a.id!=null, hasB=rs.b.id!=null;
+  const A=hasA?bodies[bodyIndex(rs.a.id)]:null, B=hasB?bodies[bodyIndex(rs.b.id)]:null;
+  if((hasA&&!A)||(hasB&&!B)) return;
+  const sel=rs.sel, hoverOn=!sel && hover===rs;
+  const col = sel?'#5aa9f0':hoverOn?'#8fc4f7':'#8a94a6';
+  if(rotSpringVisualMode(rs)==='belt'){
+    drawRim(A.x,A.y,A.r,col,A.th); drawRim(B.x,B.y,B.r,col,B.th);
+    ctx.strokeStyle=col; ctx.lineWidth=2.5;
+    for(const [p,q] of beltTangents(A.x,A.y,A.r, B.x,B.y,B.r, 1)){
+      const [x1,y1]=w2s(p[0],p[1]), [x2,y2]=w2s(q[0],q[1]);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+    }
+  } else {
+    drawSpiral(rotSpringSpiralGeom(rs), col);
+  }
+  const {pA,pB}=rotSpringControlPoints(rs);
+  jointDot(pA[0],pA[1],col); jointDot(pB[0],pB[1],col);
+}
 // ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
 // Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
 function drawConstraint(con){
@@ -308,14 +410,19 @@ function drawPreview(){
 }
 function drawHandles(){
   if(sim.running) return;
-  for(const con of constraints){ if(!con.sel) continue;
-    for(const h of conHandles(con)){
-      const isHover = hoverHandle && hoverHandle.kind==='con' && hoverHandle.con===con && hoverHandle.which===h.which;
-      const rad = isHover?7.5:6;
-      const [sx,sy]=w2s(h.x,h.y);
-      ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.fill();
-      ctx.strokeStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.stroke();
-      ctx.fillStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill(); } }
+  const drawOne=(con,h)=>{
+    const isHover = hoverHandle && hoverHandle.kind==='con' && hoverHandle.con===con && hoverHandle.which===h.which;
+    const rad = isHover?7.5:6;
+    const [sx,sy]=w2s(h.x,h.y);
+    ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.stroke();
+    ctx.fillStyle=isHover?'#8fd0ff':'#5aa9f0';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill();
+  };
+  for(const con of constraints){ if(!con.sel) continue; for(const h of conHandles(con)) drawOne(con,h); }
+  // Springs (constraints.js §06.6) carry their own handles (endpoints, plus
+  // the rest-length control point once selected) via the same conHandles/
+  // pickHandle/applyHandle machinery -- they just live in a separate array.
+  for(const sp of springs){ if(!sp.sel) continue; for(const h of conHandles(sp)) drawOne(sp,h); }
 }
 function drawSnap(){
   // an active handle drag's live snap takes priority; otherwise show a

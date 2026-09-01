@@ -6,22 +6,32 @@
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
 // ---- §14.1 · selection state ----
-let selBody=null, selConstraint=null, selGas=null, selCable=null;
+let selBody=null, selConstraint=null, selGas=null, selCable=null, selSpring=null, selRotSpring=null;
 function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); gases.forEach(g=>g.sel=false); cables.forEach(c=>c.sel=false);
-  selBody=null; selConstraint=null; selGas=null; selCable=null; renderInspector(); }
+  springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false);
+  selBody=null; selConstraint=null; selGas=null; selCable=null; selSpring=null; selRotSpring=null; renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
 function selectGas(i){ clearSelection(); gases[i].sel=true; selGas=gases[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
+function selectSpring(i){ clearSelection(); springs[i].sel=true; selSpring=springs[i]; renderInspector(); }
+function selectRotSpring(i){ clearSelection(); rotSprings[i].sel=true; selRotSpring=rotSprings[i]; renderInspector(); }
 function pickGas(wx,wy){
   for(let i=gases.length-1;i>=0;i--){ if(gasHit(gases[i],wx,wy)) return i; }
   return -1; }
 function pickCable(wx,wy){
   for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
   return -1; }
+function pickSpring(wx,wy){
+  for(let i=springs.length-1;i>=0;i--){ if(springHit(springs[i],wx,wy)) return i; }
+  return -1; }
+function pickRotSpring(wx,wy){
+  for(let i=rotSprings.length-1;i>=0;i--){ if(rotSpringHit(rotSprings[i],wx,wy)) return i; }
+  return -1; }
 
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
-// One branch per selection: body, constraint, gas, cable, or the empty bench.
+// One branch per selection: body, constraint, gas, cable, spring, rotational
+// spring, or the empty bench.
 function renderInspector(){
   const p=document.getElementById('panelBody');
   if(selBody){
@@ -64,6 +74,8 @@ function renderInspector(){
     document.getElementById('f_w').onchange=commitVel;
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
+      rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
@@ -175,6 +187,44 @@ function renderInspector(){
       if(isFinite(v)&&v>0.01) cb.Ltot=v;
       renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
+  } else if(selSpring){
+    const sp=selSpring;
+    p.innerHTML=`
+      <h3>Linear spring</h3><p class="sub">force element · F = k(restLen-L)</p>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field force"><span class="lab">|force|</span><span class="val" id="sp_F">--</span></div>
+        <div class="field"><span class="lab">length</span><span class="val" id="sp_L">--</span></div>
+        <div class="field"><span class="lab">rest length</span><input class="numin" type="number" step="0.05" min="0.05" id="sp_rest" value="${sp.restLen.toFixed(3)}"></div>
+        <div class="field"><span class="lab">spring constant k</span><input class="numin" type="number" step="0.5" min="0" id="sp_k" value="${sp.k.toFixed(2)}"></div>
+        <p class="muted" style="margin:8px 0 0">Hookean force element, not a rigid constraint -- it stores and releases energy rather than being solved exactly. Drag the dashed control point (visible while selected) to set rest length, or type it here.</p>
+      </div>
+      <button class="del" id="sp_del">Delete spring</button>`;
+    document.getElementById('sp_rest').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>0.05) sp.restLen=v;
+      renderInspector(); saveState(); };
+    document.getElementById('sp_k').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>=0) sp.k=v;
+      renderInspector(); saveState(); };
+    document.getElementById('sp_del').onclick=()=>{ springs=springs.filter(x=>x!==sp); clearSelection(); saveState(); };
+  } else if(selRotSpring){
+    const rs=selRotSpring;
+    p.innerHTML=`
+      <h3>Rotational spring</h3><p class="sub">force element · tau = k(restAngle-relAngle)</p>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field force"><span class="lab">|torque|</span><span class="val" id="rs_T">--</span></div>
+        <div class="field"><span class="lab">relative angle</span><span class="val" id="rs_ang">--</span></div>
+        <div class="field"><span class="lab">rest angle</span><input class="numin" type="number" step="0.05" id="rs_rest" value="${rs.restAngle.toFixed(3)}"></div>
+        <div class="field"><span class="lab">spring constant k</span><input class="numin" type="number" step="0.5" min="0" id="rs_k" value="${rs.k.toFixed(2)}"></div>
+        <p class="muted" style="margin:8px 0 0">Torsional force element between the two bodies' frame angles (the background reads as a fixed theta=0). Not a rigid constraint.</p>
+      </div>
+      <button class="del" id="rs_del">Delete rotational spring</button>`;
+    document.getElementById('rs_rest').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)) rs.restAngle=v;
+      renderInspector(); saveState(); };
+    document.getElementById('rs_k').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>=0) rs.k=v;
+      renderInspector(); saveState(); };
+    document.getElementById('rs_del').onclick=()=>{ rotSprings=rotSprings.filter(x=>x!==rs); clearSelection(); saveState(); };
   } else {
     p.innerHTML=`
       <h3>Bench</h3><p class="sub">nothing selected</p>
@@ -193,7 +243,7 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-7, b/k/v/c tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
   }
@@ -230,4 +280,17 @@ function updateInspectorLive(){
       document.getElementById('cb_Lcur').textContent=cableCurrentLength(cb,f).toFixed(3);
       document.getElementById('cb_L').textContent=(f?f.paidLength:(cb._Lallow!=null?cb._Lallow:0)).toFixed(3);
       document.getElementById('cb_W').textContent=(f?f.windAngle/(2*Math.PI):0).toFixed(2); } }
+  if(selSpring){ const sp=selSpring;
+    const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
+    const L=Math.hypot(wax-wbx,way-wby);
+    const eF=document.getElementById('sp_F');
+    if(eF){ eF.textContent=Math.abs(sp.k*(sp.restLen-L)).toFixed(3);
+      document.getElementById('sp_L').textContent=L.toFixed(3);
+      setLive('sp_rest',sp.restLen.toFixed(3)); setLive('sp_k',sp.k.toFixed(2)); } }
+  if(selRotSpring){ const rs=selRotSpring;
+    const rel=rotSpringRelAngle(rs);
+    const eT=document.getElementById('rs_T');
+    if(eT){ eT.textContent=Math.abs(rs.k*(rs.restAngle-rel)).toFixed(3);
+      document.getElementById('rs_ang').textContent=rel.toFixed(3);
+      setLive('rs_rest',rs.restAngle.toFixed(3)); setLive('rs_k',rs.k.toFixed(2)); } }
 }
