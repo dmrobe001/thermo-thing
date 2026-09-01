@@ -526,7 +526,7 @@ cv.addEventListener('pointermove',e=>{
 
   if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; }
   else updateHover(mouseWorld[0],mouseWorld[1]);
-  if(tool==='select') cv.style.cursor = (hoverHandle && hoverHandle.kind==='resize') ? 'ew-resize' : 'default';
+  if(tool==='select') cv.style.cursor = resizeDrag ? 'grabbing' : (hoverHandle && hoverHandle.kind==='resize') ? 'grab' : 'default';
 
   if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
   if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
