@@ -342,8 +342,8 @@ function startPinch(){
 // belt/cvt, knife, cable, pin, rod, slot.
 //
 // Every non-select tool, and every select-tool click that doesn't land on
-// the current selection's own draggable region (a handle, its rim, or its
-// body), arms `panning` as a fallback: pinch/drag/scroll pan and zoom
+// a draggable control point (a handle, the selected body's resize rim) or
+// pick a body to grab, arms `panning` as a fallback: pinch/drag/scroll pan and zoom
 // regardless of the active tool. A non-select tool's own click action
 // (placing a pending anchor, deleting whatever is under the cursor, ...) is
 // deferred until pointerup (`clickArmed`, consumed by endPointer / runToolClick
@@ -377,27 +377,17 @@ cv.addEventListener('pointerdown',e=>{
       // the selected body's rim -- drag to resize (§13.6 applyBodyResize)
       if(selBody && bodyRimHit(selBody,wx,wy)){ resizeDrag={b:selBody}; return; }
     }
-    // the selected body's interior -- prioritised over whatever else happens
-    // to be on top at this point, so an occluded selection stays acted-on
-    // rather than silently swapped for the topmost body
-    if(selBody && (wx-selBody.x)**2+(wy-selBody.y)**2<=selBody.r*selBody.r){
-      const bi=bodies.indexOf(selBody);
-      if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; } else { drag={bi, off:localOff(bi,wx,wy)}; }
-      return;
-    }
-    // the selected constraint/gas/cable, hit anywhere along it (not just a
-    // handle) -- keeps it selected instead of losing it to an occluding body
-    if(selConstraint && constraintHit(selConstraint,wx,wy)){
-      panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
-    if(selGas && gasHit(selGas,wx,wy)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
-    if(selCable && cableHit(selCable,wx,wy)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
-    // nothing of the current selection was hit -- a fresh topmost pick, which
-    // changes the selection (a body's pick also arms its drag/grab in the
-    // same gesture: it becomes selected here, before any pointermove, so a
-    // drag starting on it still satisfies "starts on the selected thing").
-    // Interactions take priority over bodies here too (matching updateHover
-    // and the delete-tool order, §13.4) so a constraint/gas/cable coincident
-    // with a body is what gets selected, not the body occluding it.
+    // Beyond a control point (handled above), act on whatever is actually
+    // topmost at this point -- matching updateHover and the delete-tool
+    // order (interactions over bodies, §13.4). A held selection no longer
+    // gets special priority here: it used to win outright over anything
+    // occluding it, which meant a rod drawn in front of a selected body
+    // couldn't be clicked-through to at all. Only a real control point
+    // (a handle, or the resize rim above) is allowed to pre-empt this pick;
+    // a plain interior/segment hit always goes to what's visually on top,
+    // even when that isn't the current selection. Hitting the current
+    // selection itself just re-arms its drag/pan (selectX on an already-
+    // selected thing is a no-op past the redundant render).
     const cci=pickConstraint(wx,wy);
     if(cci>=0){ selectConstraint(cci); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const gsi=pickGas(wx,wy);
