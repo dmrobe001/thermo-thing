@@ -35,11 +35,14 @@ function pickRotSpring(wx,wy){
 function renderInspector(){
   const p=document.getElementById('panelBody');
   if(selBody){
-    const b=selBody;
+    const b=selBody; const isRect=b.shape==='rect';
     p.innerHTML=`
-      <h3>Body ${b.id}</h3><p class="sub">rigid disk</p>
+      <h3>Body ${b.id}</h3><p class="sub">${isRect?'rigid rectangle':'rigid disk'}</p>
       <div class="card"><div class="cardhead">properties</div>
-        <div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>
+        ${isRect
+          ? `<div class="field"><span class="lab">width</span><input class="numin" type="number" step="0.05" min="0.16" id="f_rw" value="${(b.hw*2).toFixed(3)}"></div>
+             <div class="field"><span class="lab">height</span><input class="numin" type="number" step="0.05" min="0.16" id="f_rh" value="${(b.hh*2).toFixed(3)}"></div>`
+          : `<div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>`}
         <div class="field"><span class="lab">mass</span><input class="numin" type="number" step="0.05" min="0.001" id="f_mass" value="${b.mass.toFixed(3)}"></div>
         <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
       </div>
@@ -52,9 +55,17 @@ function renderInspector(){
         <div class="field"><span class="lab">w</span><input class="numin" type="number" step="0.1" id="f_w" value="${b.w.toFixed(3)}"></div>
       </div>
       <button class="del" id="f_del">Delete body</button>`;
-    document.getElementById('f_r').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>0.08) resizeBody(b,v);
-      renderInspector(); saveState(); };
+    if(isRect){
+      const commitSize=()=>{ const w=parseFloat(document.getElementById('f_rw').value), h=parseFloat(document.getElementById('f_rh').value);
+        if(isFinite(w)&&w>0.16&&isFinite(h)&&h>0.16) resizeRectAxes(b,w/2,h/2);
+        renderInspector(); saveState(); };
+      document.getElementById('f_rw').onchange=commitSize;
+      document.getElementById('f_rh').onchange=commitSize;
+    } else {
+      document.getElementById('f_r').onchange=ev=>{ const v=parseFloat(ev.target.value);
+        if(isFinite(v)&&v>0.08) resizeBody(b,v);
+        renderInspector(); saveState(); };
+    }
     document.getElementById('f_mass').onchange=ev=>{ const v=parseFloat(ev.target.value);
       if(isFinite(v)&&v>0.001) setBodyMass(b,v);
       renderInspector(); saveState(); };
@@ -243,7 +254,7 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c/q tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
   }
@@ -257,9 +268,12 @@ function updateInspectorLive(){
     if(document.getElementById('f_x')){
       setLive('f_x',b.x.toFixed(3)); setLive('f_y',b.y.toFixed(3)); setLive('f_th',b.th.toFixed(3));
       setLive('f_vx',b.vx.toFixed(3)); setLive('f_vy',b.vy.toFixed(3)); setLive('f_w',b.w.toFixed(3));
-      // radius/mass change live while dragging the rim to resize (§13.6); mass
-      // also scales with it there, but is independently editable (setBodyMass)
-      setLive('f_r',b.r.toFixed(3)); setLive('f_mass',b.mass.toFixed(3));
+      // radius (or width/height)/mass change live while dragging the rim/a
+      // corner to resize (§13.6); mass also scales with it there, but is
+      // independently editable (setBodyMass)
+      if(b.shape==='rect'){ setLive('f_rw',(b.hw*2).toFixed(3)); setLive('f_rh',(b.hh*2).toFixed(3)); }
+      else setLive('f_r',b.r.toFixed(3));
+      setLive('f_mass',b.mass.toFixed(3));
       document.getElementById('f_I').textContent=b.I.toFixed(3); } }
   if(selConstraint){ const c=selConstraint; const r=reactionOf(c); const el=document.getElementById('f_rf');
     if(el){ if(c.type==='belt') el.textContent=(r?Math.abs(r.val):0).toFixed(2);

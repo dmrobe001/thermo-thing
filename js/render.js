@@ -28,7 +28,7 @@ function render(){
   // paint before smaller ones so a small body nested against/inside a big
   // one is never hidden by it (a sort copy -- `bodies` itself stays in
   // creation order, which pick/hit-testing still relies on).
-  for(const b of [...bodies].sort((p,q)=>q.r-p.r)) drawBody(b);
+  for(const b of [...bodies].sort((p,q)=>bodyExtentR(q)-bodyExtentR(p))) drawBody(b);
   for(const g of gases) drawGas(g);
   for(const cb of cables) drawCable(cb);
   for(const sp of springs) drawSpring(sp);
@@ -66,7 +66,40 @@ function drawAxes(){
 
 // ---- §11.3 · bodies (drawBody, jointDot) ----
 function drawBody(b){
-  const [sx,sy]=w2s(b.x,b.y); const rr=b.r*cam.scale;
+  const [sx,sy]=w2s(b.x,b.y);
+  if(b.shape==='rect'){
+    // Corners in screen space, via worldPt (world-frame rotation, same math
+    // every other rim-point in the file already uses) rather than ctx.rotate
+    // -- keeps the sign convention identical to worldPt/w2s everywhere else
+    // instead of re-deriving how canvas rotation interacts with w2s's y-flip.
+    const corners=[[-b.hw,-b.hh],[b.hw,-b.hh],[b.hw,b.hh],[-b.hw,b.hh]]
+      .map(o=>{ const [wx,wy]=worldPt(b,o); return w2s(wx,wy); });
+    const path=()=>{ ctx.beginPath(); corners.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); };
+    path();
+    if(b.static){
+      ctx.fillStyle='#2b323f'; ctx.fill();
+      ctx.save(); path(); ctx.clip();
+      const xs=corners.map(p=>p[0]), ys=corners.map(p=>p[1]);
+      const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys), span=(x1-x0)+(y1-y0);
+      ctx.strokeStyle='rgba(255,255,255,.10)';ctx.lineWidth=1;
+      for(let i=-span;i<span;i+=6){ctx.beginPath();ctx.moveTo(x0+i,y0);ctx.lineTo(x0+i+span,y0+span);ctx.stroke();}
+      ctx.restore();
+    } else {
+      ctx.fillStyle='#cdd5e0'; ctx.fill();
+    }
+    const hoverOn = hover===b;
+    const resizeOn = hoverHandle && hoverHandle.kind==='resize' && hoverHandle.b===b;
+    ctx.lineWidth = resizeOn?3.5 : b.sel?2.5: hoverOn?2:1.4;
+    ctx.strokeStyle = resizeOn?'#8fd0ff' : b.sel? '#5aa9f0': hoverOn? '#8fc4f7':'#7c8798';
+    path(); ctx.stroke();
+    const [tx,ty]=w2s(b.x+Math.cos(b.th)*b.hw, b.y+Math.sin(b.th)*b.hw);
+    ctx.strokeStyle = b.static?'rgba(255,255,255,.25)':'#5d6878';
+    ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tx,ty);ctx.stroke();
+    ctx.fillStyle=b.static?'rgba(255,255,255,.3)':'#5d6878';
+    ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill();
+    return;
+  }
+  const rr=b.r*cam.scale;
   ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);
   if(b.static){
     ctx.fillStyle='#2b323f'; ctx.fill();
@@ -401,11 +434,19 @@ function drawPending(){
   ctx.setLineDash([]);
   ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(mouseScreen[0],mouseScreen[1]);ctx.stroke();
 }
-let bodyPreview=null;  // {cx,cy,r} while dragging out a new body
+// {shape:'circle',cx,cy,r} while dragging out a new disk (body tool), or
+// {shape:'rect',x0,y0,x1,y1} while dragging out a new rectangle (rectbody
+// tool) from its first-clicked corner to the live cursor position.
+let bodyPreview=null;
 function drawPreview(){
-  const [sx,sy]=w2s(bodyPreview.cx,bodyPreview.cy);
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);
-  ctx.beginPath();ctx.arc(sx,sy,Math.max(bodyPreview.r*cam.scale,3),0,Math.PI*2);ctx.stroke();
+  if(bodyPreview.shape==='rect'){
+    const [sx0,sy0]=w2s(bodyPreview.x0,bodyPreview.y0), [sx1,sy1]=w2s(bodyPreview.x1,bodyPreview.y1);
+    ctx.strokeRect(Math.min(sx0,sx1),Math.min(sy0,sy1),Math.abs(sx1-sx0),Math.abs(sy1-sy0));
+  } else {
+    const [sx,sy]=w2s(bodyPreview.cx,bodyPreview.cy);
+    ctx.beginPath();ctx.arc(sx,sy,Math.max(bodyPreview.r*cam.scale,3),0,Math.PI*2);ctx.stroke();
+  }
   ctx.setLineDash([]);
 }
 function drawHandles(){

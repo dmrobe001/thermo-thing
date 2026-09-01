@@ -14,6 +14,7 @@
 const TOOLS=[
   {id:'select',key:'1',tip:'Select / move (1)',svg:'<path d="M5 3l7 16 2-6 6-2z"/>'},
   {id:'body',key:'2',tip:'Add body (2)',svg:'<circle cx="12" cy="12" r="7"/><path d="M12 8v8M8 12h8"/>'},
+  {id:'rectbody',key:'q',tip:'Add rectangle (q)',svg:'<rect x="4" y="6" width="16" height="12" rx="1"/><path d="M12 8v8M6 12h12"/>'},
   {id:'pin',key:'3',tip:'Pin / hinge (3)',svg:'<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/>'},
   {id:'rod',key:'4',tip:'Rigid rod (4)',svg:'<circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M7.5 16.5l9-9"/>'},
   {id:'slot',key:'5',tip:'Slot / prismatic (5)',svg:'<path d="M3 9h18M3 15h18"/><rect x="9" y="9" width="6" height="6" rx="1"/>'},
@@ -29,7 +30,7 @@ const TOOLS=[
 let tool='select';
 const rail=document.getElementById('rail');
 TOOLS.forEach((t,i)=>{
-  if(i===1||i===2||i===9){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
+  if(i===1||i===3||i===10){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
   const el=document.createElement('button');el.className='tool';el.dataset.id=t.id;
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
@@ -44,15 +45,14 @@ function setTool(id){ tool=id; pending=null; bodyPreview=null; hover=null; hover
 let mouseScreen=[0,0], mouseWorld=[0,0], drag=null, panning=null;
 
 function pickBody(wx,wy){
-  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i];
-    if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
+  for(let i=bodies.length-1;i>=0;i--){ if(bodyContains(bodies[i],wx,wy)) return i; }
   return -1;
 }
 // topmost body under the cursor that isn't `exceptId` -- lets the 2nd pin
 // pick reach a body occluded by the one already selected
 function pickBodyExcept(wx,wy,exceptId){
   for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i]; if(b.id===exceptId) continue;
-    if((wx-b.x)**2+(wy-b.y)**2 <= b.r*b.r) return i; }
+    if(bodyContains(b,wx,wy)) return i; }
   return -1;
 }
 // per-constraint hit test, factored out of pickConstraint so the pointerdown
@@ -115,11 +115,29 @@ function rotSpringHit(rs,wx,wy){ const tol=10/cam.scale;
   const d=Math.hypot(wx-geo.cx,wy-geo.cy);
   return d>=Math.min(geo.outerR,geo.innerR)-tol && d<=Math.max(geo.outerR,geo.innerR)+tol;
 }
-// perimeter (rim) hit test on a specific body -- the drag handle for radius
-// resizing (§13.5/§13.6). A separate tolerance ring around the rim, distinct
-// from the filled-disk `pickBody` test used for moving the body.
-function bodyRimHit(b,wx,wy){ const tol=10/cam.scale;
-  return Math.abs(Math.hypot(wx-b.x,wy-b.y)-b.r)<=tol; }
+// perimeter (rim) hit test on a specific body -- the drag handle for
+// resizing (§13.5/§13.6). A separate tolerance ring around the rim/corners,
+// distinct from the filled-outline `pickBody` test used for moving the body.
+// A circle resizes from anywhere on its rim; a rectangle resizes from one of
+// its four corners specifically (bodyCornerHit), matching the two-opposite-
+// corners mental model the rectbody placement tool uses.
+function bodyRimHit(b,wx,wy){
+  if(b.shape==='rect') return !!bodyCornerHit(b,wx,wy);
+  const tol=10/cam.scale;
+  return Math.abs(Math.hypot(wx-b.x,wy-b.y)-b.r)<=tol;
+}
+// Which corner (as a [+-1,+-1] local sign pair) of a rectangle body is under
+// the cursor, or null. Used both by bodyRimHit above and to remember *which*
+// corner a resize drag is anchored to (tools.js §13.5/§13.6).
+function bodyCornerHit(b,wx,wy){
+  if(b.shape!=='rect') return null;
+  const tol=12/cam.scale;
+  for(const s of [[-1,-1],[1,-1],[1,1],[-1,1]]){
+    const [cx,cy]=worldPt(b,[s[0]*b.hw, s[1]*b.hh]);
+    if(Math.hypot(wx-cx,wy-cy)<=tol) return s;
+  }
+  return null;
+}
 function distSeg(px,py,ax,ay,bx,by){ const dx=bx-ax,dy=by-ay; const L2=dx*dx+dy*dy||1e-9;
   let t=((px-ax)*dx+(py-ay)*dy)/L2; t=Math.max(0,Math.min(1,t));
   return Math.hypot(px-(ax+t*dx),py-(ay+t*dy)); }
@@ -134,8 +152,8 @@ function snapAnchor(wx,wy,allow){
   for(const b of bodies){ if(allow && !allow.includes(b.id)) continue;
     const d=Math.hypot(wx-b.x,wy-b.y);
     if(d<bestD){ best={body:b,wp:[b.x,b.y],kind:'centre'}; bestD=d; }
-    if(d>1e-6){ const de=Math.abs(d-b.r);
-      if(de<bestD){ const ux=(wx-b.x)/d, uy=(wy-b.y)/d; best={body:b,wp:[b.x+ux*b.r,b.y+uy*b.r],kind:'edge'}; bestD=de; } }
+    const de=bodyEdgeDist(b,wx,wy);
+    if(de<bestD){ best={body:b,wp:bodyEdgePoint(b,wx,wy),kind:'edge'}; bestD=de; }
   }
   return best;
 }
@@ -337,8 +355,49 @@ function resizeBody(b, newR){
   b.mass*=ratio*ratio; b.r=newR; refreshInertia(b);
   projectPositions(8);
 }
+// Two-axis counterpart of scaleOffOnBody above, for a rectangle body whose
+// width and height can change independently.
+function scaleOffOnBodyXY(ep, bodyId, rx, ry){
+  if(ep && ep.id===bodyId && ep.off) ep.off=[ep.off[0]*rx, ep.off[1]*ry];
+}
+// Shared tail of a rectangle resize: rescale every anchor riding this body
+// (per-axis, mirroring resizeBody's uniform-ratio pass), rescale mass to
+// preserve density (area ratio = ratioX*ratioY, the rect analogue of
+// resizeBody's ratio^2), then commit the new half-dimensions and centre.
+// Belt wrap radii need no rect-specific handling here the way resizeBody
+// handles them for a circle: a belt's endpoints are restricted to circle
+// bodies at creation (tools.js §13.5), so a rectangle can never be one.
+function applyRectResize(b, newHw, newHh, newX, newY){
+  newHw=Math.max(0.08,newHw); newHh=Math.max(0.08,newHh);
+  const ratioX=newHw/b.hw, ratioY=newHh/b.hh;
+  if(!isFinite(ratioX) || !isFinite(ratioY) || ratioX<=0 || ratioY<=0) return;
+  for(const con of constraints){ scaleOffOnBodyXY(con.a,b.id,ratioX,ratioY); if(con.b) scaleOffOnBodyXY(con.b,b.id,ratioX,ratioY); }
+  for(const g of gases){ scaleOffOnBodyXY(g.a,b.id,ratioX,ratioY); if(g.head) scaleOffOnBodyXY(g.head,b.id,ratioX,ratioY); }
+  for(const cb of cables){ scaleOffOnBodyXY(cb.tether,b.id,ratioX,ratioY); }
+  for(const sp of springs){ scaleOffOnBodyXY(sp.a,b.id,ratioX,ratioY); scaleOffOnBodyXY(sp.b,b.id,ratioX,ratioY); }
+  b.mass*=ratioX*ratioY; b.hw=newHw; b.hh=newHh; b.x=newX; b.y=newY;
+  refreshInertia(b);
+  projectPositions(8);
+}
+// Resize by dragging one corner (tools.js §13.5/§13.6 resizeDrag), keeping
+// the diagonally-opposite corner fixed in world space -- the same "two
+// opposite corners" model the rectbody placement tool uses, just with one
+// corner now anchored instead of both being fresh clicks. `corner` is the
+// [+-1,+-1] local sign pair bodyCornerHit identified when the drag started.
+function resizeRectCorner(b, corner, wx, wy){
+  const [ox,oy]=worldPt(b, [-corner[0]*b.hw, -corner[1]*b.hh]);   // opposite corner, world, pre-resize
+  const [dx,dy]=R(-b.th, wx-ox, wy-oy);
+  const [cx,cy]=R(b.th, dx/2, dy/2);
+  applyRectResize(b, Math.abs(dx)/2, Math.abs(dy)/2, ox+cx, oy+cy);
+}
+// Resize by typed width/height (inspector.js §14.2), centre held fixed --
+// the rect analogue of resizeBody's radius field.
+function resizeRectAxes(b, newHw, newHh){
+  applyRectResize(b, newHw, newHh, b.x, b.y);
+}
 function applyBodyResize(rd, wx, wy){
-  resizeBody(rd.b, Math.hypot(wx-rd.b.x,wy-rd.b.y));
+  if(rd.b.shape==='rect') resizeRectCorner(rd.b, rd.corner, wx, wy);
+  else resizeBody(rd.b, Math.hypot(wx-rd.b.x,wy-rd.b.y));
   saveState();
 }
 
@@ -396,12 +455,20 @@ function updateHover(wx,wy){
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
     return;
   }
-  if(tool==='belt'||tool==='cvt'||tool==='knife'||tool==='rotspring'){
+  if(tool==='belt'||tool==='cvt'){
+    // both are rim-based (a wrap radius / rolling contact) and restricted to
+    // circle bodies at creation (§13.5) -- don't highlight a rectangle as if
+    // it were a valid pick for either.
+    const bi=pickBody(wx,wy); if(bi>=0 && bodies[bi].shape!=='rect') hover=bodies[bi];
+    return;
+  }
+  if(tool==='knife'||tool==='rotspring'){
     const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
     return;
   }
-  // 'body' tool has no existing element to highlight -- its own live preview
-  // (bodyPreview, render.js §11.7) already shows where the new body will go
+  // 'body'/'rectbody' tools have no existing element to highlight -- their
+  // own live preview (bodyPreview, render.js §11.7) already shows where the
+  // new body will go
 }
 
 function startPinch(){
@@ -450,8 +517,12 @@ cv.addEventListener('pointerdown',e=>{
       const h=pickHandle(wx,wy);
       if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); return; }
         if(h.arr==='springs') selectSpring(h.ci); else selectConstraint(h.ci); return; }
-      // the selected body's rim -- drag to resize (§13.6 applyBodyResize)
-      if(selBody && bodyRimHit(selBody,wx,wy)){ resizeDrag={b:selBody}; return; }
+      // the selected body's rim (or, for a rectangle, a corner) -- drag to
+      // resize (§13.6 applyBodyResize)
+      if(selBody && bodyRimHit(selBody,wx,wy)){
+        resizeDrag = selBody.shape==='rect' ? {b:selBody, corner:bodyCornerHit(selBody,wx,wy)} : {b:selBody};
+        return;
+      }
     }
     // Beyond a control point (handled above), act on whatever is actually
     // topmost at this point -- matching updateHover and the delete-tool
@@ -500,9 +571,23 @@ function runToolClick(wx,wy){
     // two clicks, like every other creation tool: first click drops the
     // centre and previews the radius live as the pointer hovers afterward
     // (drawPreview, render.js §11.7); second click commits it.
-    if(!bodyPreview){ bodyPreview={cx:wx,cy:wy,r:0}; return; }
+    if(!bodyPreview){ bodyPreview={shape:'circle',cx:wx,cy:wy,r:0}; return; }
     const r=bodyPreview.r<0.12?0.4:bodyPreview.r;
     const b=makeBody(bodyPreview.cx,bodyPreview.cy,r,false); bodies.push(b); bodyPreview=null;
+    selectBody(bodies.length-1); saveState();
+    return;
+  }
+  if(tool==='rectbody'){
+    // Two clicks naming opposite corners: first click plants one corner and
+    // previews the box live to the cursor (drawPreview, render.js §11.7);
+    // second click commits it. Always axis-aligned (th=0) -- like the circle
+    // body tool, there's no third click to set an orientation.
+    if(!bodyPreview){ bodyPreview={shape:'rect',x0:wx,y0:wy,x1:wx,y1:wy}; return; }
+    let hw=Math.abs(bodyPreview.x1-bodyPreview.x0)/2, hh=Math.abs(bodyPreview.y1-bodyPreview.y0)/2;
+    if(hw<0.06 && hh<0.06){ hw=0.4; hh=0.3; }               // a tap with no drag: a default-sized box
+    hw=Math.max(0.08,hw); hh=Math.max(0.08,hh);
+    const cx=(bodyPreview.x0+bodyPreview.x1)/2, cy=(bodyPreview.y0+bodyPreview.y1)/2;
+    const b=makeRectBody(cx,cy,hw,hh,false); bodies.push(b); bodyPreview=null;
     selectBody(bodies.length-1); saveState();
     return;
   }
@@ -541,9 +626,12 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='belt' || tool==='cvt'){
-    // two bodies: A first, then B (occluded B reachable via except-pick)
-    if(!pending){ const bi=pickBody(wx,wy); if(bi<0)return; pending={id:bodies[bi].id, wp:[wx,wy]}; return; }
-    const bi2=pickBodyExcept(wx,wy,pending.id); if(bi2<0)return;
+    // two bodies: A first, then B (occluded B reachable via except-pick).
+    // Both are rim-based (a wrap radius for belt, a rolling contact for
+    // cvt) and only make sense between circular bodies -- a rectangle isn't
+    // a valid pick for either end.
+    if(!pending){ const bi=pickBody(wx,wy); if(bi<0||bodies[bi].shape==='rect')return; pending={id:bodies[bi].id, wp:[wx,wy]}; return; }
+    const bi2=pickBodyExcept(wx,wy,pending.id); if(bi2<0||bodies[bi2].shape==='rect')return;
     const A=bodies[bodyIndex(pending.id)], B=bodies[bi2];
     if(tool==='belt'){
       constraints.push({type:'belt', a:{id:A.id}, b:{id:B.id}, rA:A.r, rB:B.r, sense:1,
@@ -570,9 +658,12 @@ function runToolClick(wx,wy){
       pending = t ? {cable:true, tid:t.body.id, toff:offOf(t.body,t.wp), wp:t.wp}
                   : {cable:true, tid:null, toff:[wx,wy], wp:[wx,wy]};
       return; }
-    // SECOND click = spool body
+    // SECOND click = spool body -- a cable winds around a rim, so (like
+    // belt/cvt above) the spool must be circular; the tether end above is
+    // unrestricted since it's just an attachment point, not a wound rim.
     const bi=pickBody(wx,wy); if(bi<0) return;
-    const S=bodies[bi]; if(pending.tid!=null && S.id===pending.tid) return;
+    const S=bodies[bi]; if(S.shape==='rect') return;
+    if(pending.tid!=null && S.id===pending.tid) return;
     const T = pending.tid!=null ? (()=>{ const tb=bodies[bodyIndex(pending.tid)]; const [x,y]=worldPt(tb,pending.toff); return [x,y]; })()
                                 : [pending.toff[0],pending.toff[1]];
     const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy); if(d<1e-6) return;
@@ -708,7 +799,11 @@ cv.addEventListener('pointermove',e=>{
   if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
   if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
   if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
-  if(bodyPreview){ bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); return; }
+  if(bodyPreview){
+    if(bodyPreview.shape==='rect'){ bodyPreview.x1=mouseWorld[0]; bodyPreview.y1=mouseWorld[1]; }
+    else { bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); }
+    return;
+  }
   if(drag && !sim.running){
     const G=bodies[drag.bi];
     if(G.static){
