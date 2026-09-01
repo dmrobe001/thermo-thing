@@ -7,7 +7,7 @@
 //    §11.3  bodies            (drawBody, jointDot)
 //    §11.4  gas & cable       (drawCable, drawGas, drawGasForce)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
-//    §11.6  reaction vectors  (drawReaction — the λ arrows)
+//    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
 //    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
 // ============================================================================
 // ---- §11.1 · render (scene orchestrator) ----
@@ -21,8 +21,8 @@ function render(){
   if(sim.showGrid) drawGrid();
   drawAxes();
   violCount=0;
-  // Bodies paint first so every constraint/force-element visualization —
-  // joint dots, tether points, rods, rims — draws in front of them instead
+  // Bodies paint first so every constraint/force-element visualization --
+  // joint dots, tether points, rods, rims -- draws in front of them instead
   // of being occluded by a body's opaque fill.
   for(const b of bodies) drawBody(b);
   for(const g of gases) drawGas(g);
@@ -88,8 +88,8 @@ function jointDot(x,y,col){ const [sx,sy]=w2s(x,y);
   ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.stroke(); }
 
 // One endpoint of a rod or slot: a ground hatch if it's background-anchored,
-// plus a square (locked — rotation-locked to the other endpoint's line, i.e.
-// rod's "weld" or slot's "prismatic") or a round joint dot (pinned — free to
+// plus a square (locked -- rotation-locked to the other endpoint's line, i.e.
+// rod's "weld" or slot's "prismatic") or a round joint dot (pinned -- free to
 // rotate).
 function drawEndMarker(x,y,locked,isBackground,col){
   const [sx,sy]=w2s(x,y);
@@ -114,10 +114,10 @@ function drawCable(cb){
   const col = cb.sel? '#5aa9f0' : (taut? '#e0c060' : '#8a94a6');
   const [tx,ty]=w2s(f.T[0],f.T[1]);
   ctx.strokeStyle=col; ctx.lineWidth= taut?2.5:1.8;
-  // Straight segment: tether T → separation point Q
+  // Straight segment: tether T -> separation point Q
   ctx.beginPath(); ctx.moveTo(tx,ty);
   const [qx,qy]=w2s(f.Qx,f.Qy); ctx.lineTo(qx,qy); ctx.stroke();
-  // Wound arc: separation point Q → anchor A (if any winding present)
+  // Wound arc: separation point Q -> anchor A (if any winding present)
   const sweep=Math.abs(f.windAngle);
   if(sweep > 1e-4){
     const sign = f.windAngle >= 0 ? 1 : -1;
@@ -125,13 +125,13 @@ function drawCable(cb){
     const nSeg = Math.max(24, Math.round(sweepDraw/Math.PI*12));
     ctx.lineWidth=1.8; ctx.beginPath();
     for(let i=0;i<=nSeg;i++){
-      const a = f.anchorAngle + sign*(sweep - sweepDraw*i/nSeg);   // Q→(capped toward A)
+      const a = f.anchorAngle + sign*(sweep - sweepDraw*i/nSeg);   // Q->(capped toward A)
       const [sx,sy]=w2s(f.S.x+f.rs*Math.cos(a), f.S.y+f.rs*Math.sin(a));
       i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); }
     ctx.stroke();
   }
   jointDot(f.T[0],f.T[1],col);
-  // anchor handle — always visible when selected
+  // anchor handle -- always visible when selected
   if(cb.sel){
     const [ax2,ay2]=w2s(f.Ax,f.Ay);
     ctx.fillStyle='#13161c'; ctx.beginPath(); ctx.arc(ax2,ay2,5,0,Math.PI*2); ctx.fill();
@@ -192,7 +192,7 @@ function drawConstraint(con){
   if(con.type==='slot'){
     // The rail itself: two parallel lines (a track motif) spanning the
     // viewport, through the midpoint of the two endpoints, in the current
-    // rail direction (§06.1 slotRailAngle — tracked via whichever end is
+    // rail direction (§06.1 slotRailAngle -- tracked via whichever end is
     // locked, or just the live segment direction if neither is).
     const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     const railAngle=slotRailAngle(con);
@@ -244,8 +244,8 @@ function drawConstraint(con){
 }
 // Dotted circle whose dash phase is tied to `ang` (the owning body's rotation),
 // so the pattern visibly spins with the body rather than staying screen-fixed.
-// Screen angle runs opposite world angle (w2s flips y), so the dash offset —
-// measured as arc length along the canvas path — carries a matching sign flip.
+// Screen angle runs opposite world angle (w2s flips y), so the dash offset --
+// measured as arc length along the canvas path -- carries a matching sign flip.
 function drawRim(x,y,r,col,ang=0){ const [sx,sy]=w2s(x,y); const rr=r*cam.scale;
   ctx.strokeStyle=col;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);ctx.lineDashOffset=-ang*rr;
   ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);ctx.stroke();
@@ -261,7 +261,7 @@ function beltTangents(ax,ay,ra, bx,by,rb, sense){
   return segs;
 }
 
-// ---- §11.6 · reaction vectors (the λ arrows) ----
+// ---- §11.6 · reaction vectors (the lambda arrows) ----
 function drawReaction(con){
   const r=reactionOf(con); if(!r || r.fx===undefined)return;
   const mag=Math.hypot(r.fx,r.fy); if(mag<1e-6)return;

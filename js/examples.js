@@ -8,9 +8,9 @@ function loadExample(kind){
   bodies=[];constraints=[];gases=[];cables=[];uid=1;clearSelection();eHist.length=0;
   sim.gravity=true; const gc=document.getElementById('tgGrav'); if(gc) gc.checked=true;
   const dy=(x,y,r=0.38)=>{ const b=makeBody(x,y,r,false); bodies.push(b); return b; };
-  // A plain (unwelded) rod between two bodies — free to rotate at both ends.
+  // A plain (unwelded) rod between two bodies -- free to rotate at both ends.
   const rod=(A,B)=>constraints.push(makeRodCon({id:A.id,off:[0,0]},{id:B.id,off:[0,0]},false,false));
-  // A rod pinned to a fixed background point — the free-swinging pivot a
+  // A rod pinned to a fixed background point -- the free-swinging pivot a
   // pendulum needs (both ends unwelded, unlike the tool's rigid-strut default).
   const rodBG=(wx,wy,B)=>constraints.push(makeRodCon({id:null,off:[wx,wy]},{id:B.id,off:[0,0]},false,false));
   if(kind==='pendulum'){ const b=dy(2.6,4.4); rodBG(0,4.4,b); }
@@ -21,12 +21,12 @@ function loadExample(kind){
     rodBG(-1.6,2.4,pin); rod(pin,P);
     // Position-only rail: P (pin, free to rotate) confined to the horizontal
     // line through a background point that's prismatic. A single locked end
-    // pins φ=atan2(...) directly (§06.5), which is singular if P ever passes
-    // through the anchor — keep it well outside P's travel range.
+    // pins phi=atan2(...) directly (§06.5), which is singular if P ever passes
+    // through the anchor -- keep it well outside P's travel range.
     constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x-10,P.y]}, false, true)); }
   else if(kind==='gasspring'){ const P=dy(0,2.8,0.4);
     // Rigid prismatic: both ends locked, so the rail also confines position
-    // (not just rotation) — P is held on the vertical line through the
+    // (not just rotation) -- P is held on the vertical line through the
     // background point and can't rotate either.
     constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x,P.y-1]}, true, true));
     gases.push({kind:'gas', a:{id:P.id,off:[0,0]}, head:{id:null, off:[0,0.5], dir:[0,1]},
@@ -38,11 +38,11 @@ function loadExample(kind){
     const A=dy(0,2.6,0.95);
     // A short background-welded rod into A's own centre: the weld on the
     // background end locks the rod's direction, so its free (pinned) far end
-    // — which sits exactly at A's centre — is itself fixed in space, letting
+    // -- which sits exactly at A's centre -- is itself fixed in space, letting
     // A spin freely about that fixed axis. Replaces the old ground-pin tool.
     constraints.push(makeRodCon({id:null,off:[A.x-0.5,A.y]},{id:A.id,off:[0,0]},true,false));
     const B=dy(1.17,2.6,0.22);
-    // Position-only rail for the CVT follower B (pin, free to spin) — same
+    // Position-only rail for the CVT follower B (pin, free to spin) -- same
     // single-locked-background pattern as the crank example above.
     constraints.push(makeSlotCon({id:B.id,off:[0,0]}, {id:null,off:[A.x-10,A.y]}, false, true));
     constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }

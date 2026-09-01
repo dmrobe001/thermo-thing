@@ -4,13 +4,13 @@ A 2D, top-down environment in which a player builds arbitrary machinery by placi
 
 ## Purpose
 
-The distinguishing goal is **legible energy flow**: the system exists to make the honest dynamics of mechanisms — and especially of thermodynamic machines — visible and instrumentable, rather than to render impressive-looking motion. The motivating target is a physically accurate finite-time heat engine that draws from reservoirs with real heat capacity and conductance, does work against a real load, and can be tuned toward its maximum-power operating point. Everything in this project is chosen so that a machine of that kind can be assembled from primitives and simulated with complete physical honesty, subject to a small, clearly stated set of idealizing assumptions.
+The distinguishing goal is **legible energy flow**: the system exists to make the honest dynamics of mechanisms -- and especially of thermodynamic machines -- visible and instrumentable, rather than to render impressive-looking motion. The motivating target is a physically accurate finite-time heat engine that draws from reservoirs with real heat capacity and conductance, does work against a real load, and can be tuned toward its maximum-power operating point. Everything in this project is chosen so that a machine of that kind can be assembled from primitives and simulated with complete physical honesty, subject to a small, clearly stated set of idealizing assumptions.
 
 The central architectural commitment is that a constraint is a first-class, composable object the player manipulates directly, and that the simulator solves the resulting system *exactly* (to linear-solve and integration tolerance) rather than approximating constraints with stiff penalty forces. A second commitment follows from the first: because the same solver that enforces constraints also produces the reaction forces carried by them, the constraint library doubles as an instrumentation layer.
 
 ## World model and assumptions
 
-The world is planar. Every rigid body carries three configuration coordinates `(x, y, θ)` and their time derivatives `(ẋ, ẏ, θ̇)`. There is no third spatial dimension and no out-of-plane motion.
+The world is planar. Every rigid body carries three configuration coordinates `(x, y, theta)` and their time derivatives `(x_dot, y_dot, theta_dot)`. There is no third spatial dimension and no out-of-plane motion.
 
 The following idealizations are load-bearing and should be treated as invariants of the design, not defaults to be relaxed later:
 
@@ -26,7 +26,7 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
-**Key controls:** Space — play/pause · R — reset · wheel — zoom · middle-drag or Alt-drag — pan · keys 1–7, b/k/v/c — select tools.
+**Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or Alt-drag -- pan · keys 1-7, b/k/v/c -- select tools.
 
 ## Project layout
 

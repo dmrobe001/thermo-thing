@@ -8,7 +8,7 @@
 //    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
-//    §08.5  gas thermodynamics (first law: dU = δQ − P dV)
+//    §08.5  gas thermodynamics (first law: dU = deltaQ - P dV)
 //  The stage numbers below (1..5) are the original inline markers; the §08.x
 //  tokens above are the greppable handles.
 // ============================================================================
@@ -47,15 +47,15 @@ function substep(h){
   //    in cb._spoolAngle, unwrapped each step so it accumulates continuously.
   //    The separation point (Q) and wound arc are derived from that each step.
   //    Unilateral: active only when taut and pulling. cb._spoolAngle only
-  //    commits a new value on an active step — while slack the wound-length
+  //    commits a new value on an active step -- while slack the wound-length
   //    bookkeeping freezes at its last taut value, since a limp cable's wrap
   //    is otherwise indeterminate (design note §C.4).
   const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
   for(const cb of cables){ cb._rows=[];
     // Migrate old saves: if no localAngle, reconstruct spoolAngle from old wrap/side
-    // FIRST, then place the anchor (localAngle) consistent with that spoolAngle —
+    // FIRST, then place the anchor (localAngle) consistent with that spoolAngle --
     // anchorAngle = tetherAngle - spoolAngle. Deriving localAngle independently as
-    // "closest point to tether" (spoolAngle≈0) while separately keeping a nonzero
+    // "closest point to tether" (spoolAngle~=0) while separately keeping a nonzero
     // reconstructed spoolAngle would put the anchor and the wound-arc bookkeeping
     // at odds: cableFrame recomputes spoolAngle from the actual anchor position, so
     // an anchor placed at the closest point would immediately re-derive spoolAngle
@@ -71,7 +71,7 @@ function substep(h){
         const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; }
       else T0=[cb.tether.off[0],cb.tether.off[1]];
       const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
-      // Reconstruct spoolAngle from old wrap/side (old side=+1 means CCW → new spoolAngle < 0).
+      // Reconstruct spoolAngle from old wrap/side (old side=+1 means CCW -> new spoolAngle < 0).
       if(cb.side !== undefined){
         const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
         const beta0 = d0 > S0.r ? Math.acos(Math.max(-1,Math.min(1,S0.r/d0))) : 0;
@@ -85,7 +85,7 @@ function substep(h){
     // Migrate saves that have localAngle but predate spoolAngle tracking. The
     // anchor (localAngle) here is already authoritative, so derive spoolAngle from
     // it directly (spoolAngle = tetherAngle - anchorAngle) rather than trusting the
-    // old wrap/side estimate outright — that estimate only recovers which multiple
+    // old wrap/side estimate outright -- that estimate only recovers which multiple
     // of a full turn the true value sits at (via unwrap), it doesn't override the
     // stored anchor's principal angle.
     if(cb._spoolAngle === undefined){
@@ -99,7 +99,7 @@ function substep(h){
         const anchorAngle0=S0.th+cb.localAngle;
         let raw=tetherAngle0-anchorAngle0;                 // principal value from the actual stored anchor
         if(cb.side !== undefined){
-          // Old side=+1 CCW → new spoolAngle < 0; use the old wrap/side estimate only
+          // Old side=+1 CCW -> new spoolAngle < 0; use the old wrap/side estimate only
           // to pick which full-turn multiple of `raw` is the true continuous value.
           const d0=Math.hypot(T0[0]-S0.x, T0[1]-S0.y);
           const beta0 = d0 > S0.r ? Math.acos(Math.max(-1,Math.min(1,S0.r/d0))) : 0;
@@ -116,21 +116,21 @@ function substep(h){
 
     // Candidate frame: recomputed live every step from the frozen reference
     // cb._spoolAngle (see persistence below), never chained from a moving
-    // reference — so a slack cable's raw departure geometry never drifts.
+    // reference -- so a slack cable's raw departure geometry never drifts.
     const f=cableFrame(cb, cb._spoolAngle);
     if(!f){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; continue; }
 
     // At full wind (Lallow<=0, no free length left) this used to switch to a
     // rigid 2-DOF hinge pinning the tether straight to the material anchor
     // A. That pin point is wrong whenever the accumulated wrap isn't a whole
-    // number of turns from the anchor (the general case) — Q, the true
-    // current departure point, sits elsewhere on the rim — so the hinge
+    // number of turns from the anchor (the general case) -- Q, the true
+    // current departure point, sits elsewhere on the rim -- so the hinge
     // yanked the body across the spool toward A in one step, an
     // energy-adding discontinuity a player would see as an unphysical jump.
     // There's no need for a special case at all: the tangent-branch row's
-    // Jacobian (§06.3) is finite and well-defined in the ℓ→0 limit — it's
+    // Jacobian (§06.3) is finite and well-defined in the ell->0 limit -- it's
     // the tangent-line direction at Q, which continuously becomes the
-    // tangent direction *at the tether itself* as Q→T — so the same one-row
+    // tangent direction *at the tether itself* as Q->T -- so the same one-row
     // taut constraint pins the tether to the rim and only blocks the
     // wind-further direction, exactly as the design note's end-stop
     // (CABLE.md §C.4 step 6) intends, with no discontinuity to cross.
@@ -142,7 +142,7 @@ function substep(h){
     // cable's wrap is indeterminate, so only a taut/end-stop-active step commits
     // the new spoolAngle. A slack tether still moves freely and is still drawn
     // from live geometry (render.js/inspector.js reread cb.spoolAngle fresh each
-    // frame) — only the persisted reference used for next step's continuity holds.
+    // frame) -- only the persisted reference used for next step's continuity holds.
     if(active){ cb._spoolAngle = f.spoolAngle; cb.spoolAngle = f.spoolAngle; }
   }
 
@@ -194,9 +194,9 @@ function substep(h){
   for(const b of bodies){ if(b.static)continue; b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w; }
 
   // ---- §08.5 · gas thermodynamics (first law) ----
-  // 5) thermodynamics: dU = δQ − P dV, with δQ = κ(T_res − T) dt when connected.
-  //    (R = 1 in abstract units; c_v = 1/(γ−1).) Work leaves the gas as the
-  //    same P·ΔV the piston force just did on the mechanism → energy is consistent.
+  // 5) thermodynamics: dU = deltaQ - P dV, with deltaQ = kappa(T_res - T) dt when connected.
+  //    (R = 1 in abstract units; c_v = 1/(gamma-1).) Work leaves the gas as the
+  //    same P·DeltaV the piston force just did on the mechanism -> energy is consistent.
   for(const g of gases){
     const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
     const Q=(g.connected? g.kappa*(g.Tres-g.T):0)*h;

@@ -2,8 +2,8 @@
 //  §09 · POSITION PROJECTION & REACTIONS
 //  Two post-solve services that read the same rows §06 produces.
 //    §09.1  projectPositions  (Gauss-Newton drift correction, holonomic rows only)
-//    §09.2  conMaxC           (worst position error on a constraint — HUD/violations)
-//    §09.3  reactionOf        (multiplier λ/h -> the reaction force/torque a joint carries)
+//    §09.2  conMaxC           (worst position error on a constraint -- HUD/violations)
+//    §09.3  reactionOf        (multiplier lambda/h -> the reaction force/torque a joint carries)
 //  §09.3 is the instrumentation payoff (spec §7): the constraint that enforces a
 //  joint also hands back the force it carries, for free, from the same solve.
 // ============================================================================
@@ -11,7 +11,7 @@
 // Snaps the assembly to the nearest consistent configuration, mass-weighted so
 // heavy/static bodies move least. `extra` holds transient constraints (e.g. a
 // drag goal). Used at Play and while articulating a dragged body. Nonholonomic
-// rows (nh:true) are skipped — they have no position invariant to project onto.
+// rows (nh:true) are skipped -- they have no position invariant to project onto.
 function projectPositions(iters, extra){
   const cons = (extra && extra.length) ? constraints.concat(extra) : constraints;
   for(let it=0; it<iters; it++){

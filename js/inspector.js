@@ -37,7 +37,7 @@ function renderInspector(){
       </div>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">x , y</span><span class="val" id="f_pos"></span></div>
-        <div class="field"><span class="lab">θ</span><span class="val" id="f_th"></span></div>
+        <div class="field"><span class="lab">theta</span><span class="val" id="f_th"></span></div>
         <div class="field"><span class="lab">speed</span><span class="val" id="f_spd"></span></div>
       </div>
       <button class="del" id="f_del">Delete body</button>`;
@@ -56,21 +56,21 @@ function renderInspector(){
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
         <div class="field"><span class="lab">ratio</span><span class="val">${(c.rB/c.rA).toFixed(2)}</span></div>`;
-    if(isCvt) extra=`<div class="field"><span class="lab">ratio (d−rA) ⁄ rA</span><span class="val" id="f_ratio">—</span></div>`;
+    if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
-               : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier λ ⁄ h — run the sim to read it.'
+               : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
                : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
-               : 'Reaction is the Lagrange multiplier λ ⁄ h — the force this joint carries. Run the sim to read it.';
+               : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
     p.innerHTML=`
       <h3>${title}</h3><p class="sub">${c.type} constraint</p>
       <div class="card"><div class="cardhead">reaction</div>
-        <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">—</span></div>
-        ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">—</span></div>':''}
+        <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">--</span></div>
+        ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>':''}
         ${c.type==='rod'?`<div class="field"><span class="lab">length</span><span class="val">${c.len.toFixed(3)}</span></div>`:''}
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
@@ -90,17 +90,17 @@ function renderInspector(){
   } else if(selGas){
     const g=selGas;
     p.innerHTML=`
-      <h3>Gas piston</h3><p class="sub">force element · P = nRT ⁄ V</p>
+      <h3>Gas piston</h3><p class="sub">force element · P = nRT / V</p>
       <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">pressure P</span><span class="val" id="g_P">—</span></div>
-        <div class="field"><span class="lab">volume V</span><span class="val" id="g_V">—</span></div>
-        <div class="field"><span class="lab">temp T</span><span class="val" id="g_T">—</span></div>
-        <div class="field"><span class="lab">heat Q̇</span><span class="val" id="g_Q">—</span></div>
+        <div class="field"><span class="lab">pressure P</span><span class="val" id="g_P">--</span></div>
+        <div class="field"><span class="lab">volume V</span><span class="val" id="g_V">--</span></div>
+        <div class="field"><span class="lab">temp T</span><span class="val" id="g_T">--</span></div>
+        <div class="field"><span class="lab">heat Q_dot</span><span class="val" id="g_Q">--</span></div>
       </div>
       <div class="card"><div class="cardhead">gas</div>
         <div class="field"><span class="lab">amount n</span><span class="val" id="g_nL">${g.n.toFixed(1)}</span></div>
         <input type="range" id="g_n" min="0.5" max="10" step="0.1" value="${g.n}" style="width:100%">
-        <div class="field"><span class="lab">γ (index)</span><span class="val" id="g_gL">${g.gamma.toFixed(2)}</span></div>
+        <div class="field"><span class="lab">gamma (index)</span><span class="val" id="g_gL">${g.gamma.toFixed(2)}</span></div>
         <input type="range" id="g_g" min="1.05" max="1.7" step="0.01" value="${g.gamma}" style="width:100%">
         <div class="field"><span class="lab">bore A</span><span class="val" id="g_bL">${g.bore.toFixed(2)}</span></div>
         <input type="range" id="g_b" min="0.3" max="3" step="0.05" value="${g.bore}" style="width:100%">
@@ -109,9 +109,9 @@ function renderInspector(){
         <label class="chk"><input type="checkbox" id="g_conn" ${g.connected?'checked':''}> connected</label>
         <div class="field"><span class="lab">T_res</span><span class="val" id="g_TrL">${g.Tres.toFixed(2)}</span></div>
         <input type="range" id="g_Tr" min="0.2" max="3" step="0.05" value="${g.Tres}" style="width:100%">
-        <div class="field"><span class="lab">conductance κ</span><span class="val" id="g_kL">${g.kappa.toFixed(1)}</span></div>
+        <div class="field"><span class="lab">conductance kappa</span><span class="val" id="g_kL">${g.kappa.toFixed(1)}</span></div>
         <input type="range" id="g_k" min="0" max="30" step="0.5" value="${g.kappa}" style="width:100%">
-        <p class="muted" style="margin:8px 0 0">κ = 0 is adiabatic (a gas spring). Connect a warm/cold reservoir to move heat across the boundary at finite rate.</p>
+        <p class="muted" style="margin:8px 0 0">kappa = 0 is adiabatic (a gas spring). Connect a warm/cold reservoir to move heat across the boundary at finite rate.</p>
       </div>
       <button class="del" id="g_del">Delete gas</button>`;
     const bind=(id,lab,key,fix)=>{ const el=document.getElementById(id);
@@ -125,11 +125,11 @@ function renderInspector(){
     p.innerHTML=`
       <h3>Cable</h3><p class="sub">tetherball · tension only</p>
       <div class="card"><div class="cardhead">state</div>
-        <div class="field force"><span class="lab">tension</span><span class="val" id="cb_T">—</span></div>
+        <div class="field force"><span class="lab">tension</span><span class="val" id="cb_T">--</span></div>
         <div class="field"><span class="lab">total length</span><span class="val" id="cb_Ltot">${cb.Ltot.toFixed(3)}</span></div>
-        <div class="field"><span class="lab">current length</span><span class="val" id="cb_Lcur">—</span></div>
-        <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">—</span></div>
-        <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">—</span></div>
+        <div class="field"><span class="lab">current length</span><span class="val" id="cb_Lcur">--</span></div>
+        <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">--</span></div>
+        <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">--</span></div>
         <p class="muted" style="margin:8px 0 0">Fixed total length. Drag the anchor handle to wind/unwind. The spool angle encodes which side the cable winds around and accumulates without bound.</p>
       </div>
       <button class="del" id="cb_del">Delete cable</button>`;
@@ -152,7 +152,7 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1–7, b/k/v/c tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-7, b/k/v/c tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
   }

@@ -2,7 +2,7 @@
 //  §16 · TRANSPORT & BOOT
 //  Run control, the reset snapshot, DOM control wiring, keyboard shortcuts, and
 //  the startup sequence that kicks off the §10 loop.
-//    §16.1  snapshots        (saveState / restoreState — the reset baseline)
+//    §16.1  snapshots        (saveState / restoreState -- the reset baseline)
 //    §16.2  transport        (play / step / reset + setRunning)
 //    §16.3  toggles          (forces / grid / gravity / gravity value)
 //    §16.4  keyboard shortcuts
@@ -18,7 +18,7 @@ function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodi
   // against (constraints.js). Bodies just snapped back to the saved rest
   // pose, so a reference accumulated across possibly many turns of prior
   // rotation is stale and, left in place, would unwrap the restored geometry's
-  // angle onto the wrong winding — a huge, permanent Baumgarte bias (same
+  // angle onto the wrong winding -- a huge, permanent Baumgarte bias (same
   // failure this fixes at the horizontal crossing, but constant instead of
   // one-step). Clearing it makes the next twoPointFrame call re-seed from the
   // restored geometry's raw atan2, matching how restAngA/B were themselves
