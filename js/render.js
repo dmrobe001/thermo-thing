@@ -482,7 +482,8 @@ function drawPending(){
 }
 // {shape:'circle',cx,cy,r} while dragging out a new disk (body tool), or
 // {shape:'rect',x0,y0,x1,y1} while dragging out a new rectangle (rectbody
-// tool) from its first-clicked corner to the live cursor position.
+// tool, or the gas tool's piston-bounding box -- tools.js §13.5) from its
+// first-clicked corner to the live cursor position.
 let bodyPreview=null;
 function drawPreview(){
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);
