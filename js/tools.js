@@ -477,7 +477,7 @@ function updateHover(wx,wy){
     const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
     return;
   }
-  if(tool==='pin'||tool==='rod'||tool==='slot'||tool==='gas'||tool==='cable'||tool==='spring'){
+  if(tool==='pin'||tool==='rod'||tool==='slot'||tool==='cable'||tool==='spring'){
     // these tools attach to a snapped anchor (body centre/edge) or a bare body
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
     return;
@@ -502,9 +502,9 @@ function updateHover(wx,wy){
     const gsi=pickGas(wx,wy); if(gsi>=0) hover=gases[gsi];
     return;
   }
-  // 'body'/'rectbody' tools have no existing element to highlight -- their
-  // own live preview (bodyPreview, render.js §11.7) already shows where the
-  // new body will go
+  // 'body'/'rectbody'/'gas' tools have no existing element to highlight --
+  // their own live preview (bodyPreview, render.js §11.7) already shows
+  // where the new body (or piston) will go
 }
 
 function startPinch(){
@@ -657,38 +657,37 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='gas'){
-    // Two clicks, like a rectangular body placement's opposite corners
-    // (spec: "their volume set by the same corner selections as a
-    // rectangular body placement"): first the closed (head) corner, then the
-    // far corner. The far corner may land on a body -- that body becomes the
-    // movable wall (a real piston), auto-linked to the head with a hidden
-    // mutually-prismatic joint (spec's piston update, "not visualized") -- or
-    // on empty space/the head's own body, giving a fixed-length vessel with
-    // no movable wall at all. Either way the new gas starts in equilibrium
-    // with the background (spec: "by default gasses should have T and P
-    // equal to background").
-    if(!pending){ const t=anchorTarget(wx,wy);
-      pending = t ? {gas:true, headId:t.body.id, headWp:t.wp, wp:t.wp}
-                  : {gas:true, headId:null, headWp:[wx,wy], wp:[wx,wy]};
-      return; }
-    const headId=pending.headId, headWp=pending.headWp; pending=null;
-    const t=anchorTarget(wx,wy);
-    const farBody = (t && t.body.id!==headId) ? t.body : null;
-    const farWp = farBody ? t.wp : [wx,wy];
-    const dx=farWp[0]-headWp[0], dy=farWp[1]-headWp[1]; const L=Math.hypot(dx,dy);
-    if(L<0.2) return;
-    const axis=[dx/L,dy/L];
-    const head = headId!=null
-      ? (()=>{ const B=bodies[bodyIndex(headId)]; return {id:B.id, off:offOf(B,headWp), dir:R(-B.th,axis[0],axis[1])}; })()
-      : {id:null, off:[headWp[0],headWp[1]], dir:axis};
-    const bore=0.6, V=bore*L, T=sim.bg.T, gamma=sim.bg.gamma, n=Math.max(sim.bg.P*V/T, 1e-6);
-    const g={kind:'gas', id:uid++, head, piston:null, bore, n, T, gamma, sel:false};
-    if(farBody){
-      g.piston={id:farBody.id, off:offOf(farBody,farWp)};
-      const link=makeSlotCon({id:farBody.id,off:g.piston.off},{id:head.id,off:head.off},true,true);
-      link.hidden=true; link.gasLink=g.id;
-      constraints.push(link);
-    } else { g.len=L; }
+    // Two clicks naming opposite corners, exactly like the rectangle body
+    // tool (bodyPreview, render.js §11.7 drawPreview): first click plants one
+    // corner and previews the box live to the cursor; second click commits
+    // it. The box always makes an upward-facing piston -- axis +y, the head
+    // (closed end) at the bottom corner, the movable wall (piston) at the
+    // top -- and both ends are brand-new rectangular bodies that follow
+    // normal physics like any other body (gravity, rod/spring endpoints,
+    // heat/flow interactions), auto-linked by the same hidden mutually-
+    // prismatic joint (constraints.js §06.2/§06.5, "the piston is two
+    // bodies") so the gas trapped between them has somewhere to live. The
+    // gas starts in equilibrium with the background (spec: "by default
+    // gasses should have T and P equal to background").
+    if(!bodyPreview){ bodyPreview={shape:'rect', x0:wx,y0:wy,x1:wx,y1:wy}; return; }
+    let bore=Math.abs(bodyPreview.x1-bodyPreview.x0), boxH=Math.abs(bodyPreview.y1-bodyPreview.y0);
+    if(bore<0.12 && boxH<0.12){ bore=0.6; boxH=0.8; }      // a tap with no drag: a default-sized piston
+    bore=Math.max(0.16,bore); boxH=Math.max(0.16,boxH);
+    const cx=(bodyPreview.x0+bodyPreview.x1)/2;
+    const yLo=Math.min(bodyPreview.y0,bodyPreview.y1), yHi=Math.max(bodyPreview.y0,bodyPreview.y1);
+    bodyPreview=null;
+    const plateHH=Math.min(0.06, boxH*0.12);               // each plate's own half-thickness
+    const headBody=makeRectBody(cx, yLo+plateHH, bore/2, plateHH, false);
+    const pistonBody=makeRectBody(cx, yHi-plateHH, bore/2, plateHH, false);
+    bodies.push(headBody, pistonBody);
+    const L=Math.max(boxH-4*plateHH, 0.1);
+    const head={id:headBody.id, off:[0,plateHH], dir:[0,1]};
+    const piston={id:pistonBody.id, off:[0,-plateHH]};
+    const T=sim.bg.T, gamma=sim.bg.gamma, n=Math.max(sim.bg.P*bore*L/T, 1e-6);
+    const g={kind:'gas', id:uid++, head, piston, bore, n, T, gamma, sel:false};
+    const link=makeSlotCon({id:pistonBody.id,off:piston.off},{id:headBody.id,off:head.off},true,true);
+    link.hidden=true; link.gasLink=g.id;
+    constraints.push(link);
     gases.push(g);
     saveState();
     return;
