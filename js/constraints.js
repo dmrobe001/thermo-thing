@@ -523,12 +523,12 @@ function rotSpringControlPoints(con){
   const hasA=con.a.id!=null, hasB=con.b.id!=null;
   if(hasA && hasB){
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-    const [ax,ay]=worldPt(A,[A.r,0]), [bx,by]=worldPt(B,[B.r,0]);
+    const [ax,ay]=worldPt(A,bodyRimLocal(A)), [bx,by]=worldPt(B,bodyRimLocal(B));
     return {pA:[ax,ay], pB:[bx,by]};
   }
   const body = hasA ? bodies[bodyIndex(con.a.id)] : bodies[bodyIndex(con.b.id)];
-  const [ox,oy]=worldPt(body,[body.r,0]);
-  const groundPt=[body.x+body.r, body.y];
+  const [ox,oy]=worldPt(body,bodyRimLocal(body));
+  const groundPt=[body.x+bodyExtentR(body), body.y];
   return hasA ? {pA:[ox,oy], pB:groundPt} : {pA:groundPt, pB:[ox,oy]};
 }
 // Belt vs. spiral: a belt reads as a connection between two separate rims, so
@@ -540,6 +540,11 @@ function rotSpringControlPoints(con){
 function rotSpringVisualMode(con){
   if(con.a.id==null || con.b.id==null) return 'spiral';
   const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
+  // The belt rendering is two tangent lines between two round rims -- only
+  // meaningful when both ends are actually circles; a rectangle (or either
+  // body missing) falls back to the spiral, same as the background-anchored
+  // case above.
+  if(A.shape==='rect' || B.shape==='rect') return 'spiral';
   const d=Math.hypot(A.x-B.x,A.y-B.y);
   const rMax=Math.max(A.r,B.r), rMin=Math.min(A.r,B.r);
   return (d+rMin<=rMax+1e-9) ? 'spiral' : 'belt';
@@ -556,11 +561,12 @@ function rotSpringSpiralGeom(con){
   let outer, outerR, innerR;
   if(hasA && hasB){
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-    const outerIsA = A.r>=B.r;
-    outer = outerIsA?A:B; outerR=outer.r; innerR=(outerIsA?B:A).r;
+    const eA=bodyExtentR(A), eB=bodyExtentR(B);
+    const outerIsA = eA>=eB;
+    outer = outerIsA?A:B; outerR=outerIsA?eA:eB; innerR=outerIsA?eB:eA;
   } else {
     outer = hasA ? bodies[bodyIndex(con.a.id)] : bodies[bodyIndex(con.b.id)];
-    outerR = outer.r; innerR = 0;
+    outerR = bodyExtentR(outer); innerR = 0;
   }
   const dev = rotSpringRelAngle(con) - con.restAngle;
   const base = Math.PI*4;
