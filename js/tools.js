@@ -594,9 +594,21 @@ cv.addEventListener('pointermove',e=>{
       projectPositions(8);
     } else {
       // pull the grabbed point toward the cursor; the island articulates to comply.
+      // The goal is capped by screen-space distance (§05.4 saturatingPull), not
+      // set to the raw cursor position: a hard pin straight to the cursor is one
+      // more rigid row demanding exact coincidence, and when the drag has any
+      // component the body's real constraints can't satisfy (dragging a rod
+      // welded to the background, or a slider, off its rail), that extra row
+      // fights the real ones for the same few DOF and shows up as a violation
+      // on them even though the reachable part of the drag is perfectly posable.
+      // Capping how far the goal itself can get from the body's current point
+      // keeps that tug bounded instead of ever-growing, so the real constraints
+      // stay solved and only the unreachable sliver of the drag goes unmet.
       // 'dragpin' is an internal-only row type (§06.5) -- never added to
       // `constraints`, just fed through projectPositions as a transient goal.
-      const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[mouseWorld[0],mouseWorld[1]]};
+      const [gx,gy]=worldPt(G,drag.off);
+      const [px,py]=saturatingPull(gx,gy,mouseWorld[0],mouseWorld[1],DRAG_CAP_PX);
+      const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[gx+px,gy+py]};
       projectPositions(8,[temp]);
     }
     saveState();
