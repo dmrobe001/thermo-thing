@@ -14,7 +14,17 @@ function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
   if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=0;b.vy=0;b.w=0; } }
   gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i]; });
-  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; });
+  // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
+  // against (constraints.js). Bodies just snapped back to the saved rest
+  // pose, so a reference accumulated across possibly many turns of prior
+  // rotation is stale and, left in place, would unwrap the restored geometry's
+  // angle onto the wrong winding — a huge, permanent Baumgarte bias (same
+  // failure this fixes at the horizontal crossing, but constant instead of
+  // one-step). Clearing it makes the next twoPointFrame call re-seed from the
+  // restored geometry's raw atan2, matching how restAngA/B were themselves
+  // captured from a fresh, un-accumulated angle. Mirrors cables' c._spoolAngle
+  // reset below.
+  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._phiRef=undefined; });
   cables.forEach((c,i)=>{
     if(saved.cSA[i]!=null){ c.spoolAngle=saved.cSA[i]; }
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;

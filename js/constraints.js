@@ -31,6 +31,18 @@ function epWorld(ep){
 // endpoint resolved (body or background), the segment A->B, its length, and
 // its perpendicular. phi is that segment's live world angle — the reference
 // a weld/prismatic lock's rest angle is measured against.
+//
+// phi is unwrapped against con._phiRef (the previous call's phi, persisted on
+// the constraint — same trick as cableFrame's spoolAngleRef) rather than used
+// as raw atan2(dy,dx). Raw atan2 has a branch cut at phi=±π: a rod/slot that
+// swings slowly through pointing along -x has dy cross zero with dx<0, and
+// the *physical* angle change that step is tiny, but the raw atan2 value
+// itself jumps by a full 2π. A welded/prismatic end's angle-lock row
+// (endpointAngleLockRow) measures C = thHere-phi-restAng, and thHere (a
+// body's th) is never wrapped — so that 2π jump in phi shows up whole in C,
+// and the solver's Baumgarte term (kb*C, physics.js §08.3) turns it into a
+// spurious multi-turn correction in a single step. Unwrapping phi here keeps
+// it continuous through that crossing, so C stays near zero throughout.
 function twoPointFrame(con){
   const hasA=con.a.id!=null, hasB=con.b.id!=null;
   const A = hasA ? bodies[bodyIndex(con.a.id)] : null;
@@ -39,7 +51,16 @@ function twoPointFrame(con){
   const [wbx,wby,rbx,rby] = hasB ? worldPt(B,con.b.off) : [con.b.off[0],con.b.off[1],0,0];
   const ia = hasA?bodyIndex(con.a.id):-1, ib = hasB?bodyIndex(con.b.id):-1;
   const dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
-  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux, phi=Math.atan2(dy,dx);
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const phiRaw=Math.atan2(dy,dx);
+  let phi=phiRaw;
+  if(con._phiRef!=null){
+    let da=phiRaw-con._phiRef;
+    while(da> Math.PI) da-=Math.PI*2;
+    while(da<-Math.PI) da+=Math.PI*2;
+    phi=con._phiRef+da;
+  }
+  con._phiRef=phi;
   return {hasA,hasB,A,B,ia,ib,wax,way,rax,ray,wbx,wby,rbx,rby,ux,uy,nx,ny,L,phi};
 }
 // One row locking `which` end's frame angle — a body's θ, or 0 for a
