@@ -248,7 +248,10 @@ function resizeBody(b, newR){
   }
   for(const g of gases){ scaleOffOnBody(g.a, b.id, ratio); if(g.head) scaleOffOnBody(g.head, b.id, ratio); }
   for(const cb of cables){ scaleOffOnBody(cb.tether, b.id, ratio); }
-  b.r=newR; refreshMass(b);
+  // mass now edits independently of radius (inspector.js §14.2 setBodyMass), so a
+  // resize can no longer just reset it to pi*r^2 -- scale it by area (ratio^2) to
+  // preserve whatever density the body currently has, mass-editing or not.
+  b.mass*=ratio*ratio; b.r=newR; refreshInertia(b);
   projectPositions(8);
 }
 function applyBodyResize(rd, wx, wy){

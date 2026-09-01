@@ -30,7 +30,7 @@ function renderInspector(){
       <h3>Body ${b.id}</h3><p class="sub">rigid disk</p>
       <div class="card"><div class="cardhead">properties</div>
         <div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>
-        <div class="field"><span class="lab">mass</span><span class="val" id="f_mass">${b.mass.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">mass</span><input class="numin" type="number" step="0.05" min="0.001" id="f_mass" value="${b.mass.toFixed(3)}"></div>
         <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
       </div>
       <div class="card"><div class="cardhead">state</div>
@@ -44,6 +44,9 @@ function renderInspector(){
       <button class="del" id="f_del">Delete body</button>`;
     document.getElementById('f_r').onchange=ev=>{ const v=parseFloat(ev.target.value);
       if(isFinite(v)&&v>0.08) resizeBody(b,v);
+      renderInspector(); saveState(); };
+    document.getElementById('f_mass').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>0.001) setBodyMass(b,v);
       renderInspector(); saveState(); };
     const commitPose=()=>{ const x=parseFloat(document.getElementById('f_x').value),
         y=parseFloat(document.getElementById('f_y').value), th=parseFloat(document.getElementById('f_th').value);
@@ -73,7 +76,9 @@ function renderInspector(){
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
-        <div class="field"><span class="lab">ratio</span><span class="val">${(c.rB/c.rA).toFixed(2)}</span></div>`;
+        <div class="field"><span class="lab">wrap rA</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rA" value="${c.rA.toFixed(3)}"></div>
+        <div class="field"><span class="lab">wrap rB</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rB" value="${c.rB.toFixed(3)}"></div>
+        <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
@@ -89,16 +94,31 @@ function renderInspector(){
       <div class="card"><div class="cardhead">reaction</div>
         <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">--</span></div>
         ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>':''}
-        ${c.type==='rod'?`<div class="field"><span class="lab">length</span><span class="val">${c.len.toFixed(3)}</span></div>`:''}
+        ${isRod?`<div class="field"><span class="lab">length</span><input class="numin" type="number" step="0.05" min="0.01" id="f_len" value="${c.len.toFixed(3)}"></div>`:''}
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
       </div>
       <button class="del" id="f_del">Delete constraint</button>`;
-    if(isBelt){ document.getElementById('f_cross').onchange=ev=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
-      c.sense=ev.target.checked?-1:1; c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; renderInspector(); saveState(); }; }
+    if(isBelt){
+      // recapturing restPhase against the *current* body angles after a wrap-radius
+      // edit is the same trick the crossed-belt toggle already uses just below --
+      // it keeps the edit from reading as a spurious phase jump next step.
+      const recapturePhase=()=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
+        c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; };
+      document.getElementById('f_cross').onchange=ev=>{ c.sense=ev.target.checked?-1:1; recapturePhase(); renderInspector(); saveState(); };
+      const commitWrap=()=>{ const rA=parseFloat(document.getElementById('f_rA').value), rB=parseFloat(document.getElementById('f_rB').value);
+        if(isFinite(rA)&&rA>0.02) c.rA=rA;
+        if(isFinite(rB)&&rB>0.02) c.rB=rB;
+        recapturePhase(); renderInspector(); saveState(); };
+      document.getElementById('f_rA').onchange=commitWrap;
+      document.getElementById('f_rB').onchange=commitWrap;
+    }
     if(isRod){
       document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
       document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
+      document.getElementById('f_len').onchange=ev=>{ const v=parseFloat(ev.target.value);
+        if(isFinite(v)&&v>0.01){ c.len=v; projectPositions(8); }
+        renderInspector(); saveState(); };
     }
     if(isSlot){
       document.getElementById('f_lockA').onchange=ev=>{ setSlotLock(c,'A',ev.target.checked); renderInspector(); saveState(); };
@@ -144,13 +164,16 @@ function renderInspector(){
       <h3>Cable</h3><p class="sub">tetherball · tension only</p>
       <div class="card"><div class="cardhead">state</div>
         <div class="field force"><span class="lab">tension</span><span class="val" id="cb_T">--</span></div>
-        <div class="field"><span class="lab">total length</span><span class="val" id="cb_Ltot">${cb.Ltot.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">total length</span><input class="numin" type="number" step="0.1" min="0.01" id="cb_Ltot" value="${cb.Ltot.toFixed(3)}"></div>
         <div class="field"><span class="lab">current length</span><span class="val" id="cb_Lcur">--</span></div>
         <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">--</span></div>
         <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">--</span></div>
         <p class="muted" style="margin:8px 0 0">Fixed total length. Drag the anchor handle to wind/unwind. The spool angle encodes which side the cable winds around and accumulates without bound.</p>
       </div>
       <button class="del" id="cb_del">Delete cable</button>`;
+    document.getElementById('cb_Ltot').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>0.01) cb.Ltot=v;
+      renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
   } else {
     p.innerHTML=`
@@ -184,9 +207,9 @@ function updateInspectorLive(){
     if(document.getElementById('f_x')){
       setLive('f_x',b.x.toFixed(3)); setLive('f_y',b.y.toFixed(3)); setLive('f_th',b.th.toFixed(3));
       setLive('f_vx',b.vx.toFixed(3)); setLive('f_vy',b.vy.toFixed(3)); setLive('f_w',b.w.toFixed(3));
-      // radius/mass/inertia change live while dragging the rim to resize (§13.6)
-      setLive('f_r',b.r.toFixed(3));
-      document.getElementById('f_mass').textContent=b.mass.toFixed(3);
+      // radius/mass change live while dragging the rim to resize (§13.6); mass
+      // also scales with it there, but is independently editable (setBodyMass)
+      setLive('f_r',b.r.toFixed(3)); setLive('f_mass',b.mass.toFixed(3));
       document.getElementById('f_I').textContent=b.I.toFixed(3); } }
   if(selConstraint){ const c=selConstraint; const r=reactionOf(c); const el=document.getElementById('f_rf');
     if(el){ if(c.type==='belt') el.textContent=(r?Math.abs(r.val):0).toFixed(2);
@@ -203,7 +226,7 @@ function updateInspectorLive(){
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);
-      document.getElementById('cb_Ltot').textContent=cb.Ltot.toFixed(3);
+      setLive('cb_Ltot',cb.Ltot.toFixed(3));
       document.getElementById('cb_Lcur').textContent=cableCurrentLength(cb,f).toFixed(3);
       document.getElementById('cb_L').textContent=(f?f.paidLength:(cb._Lallow!=null?cb._Lallow:0)).toFixed(3);
       document.getElementById('cb_W').textContent=(f?f.windAngle/(2*Math.PI):0).toFixed(2); } }
