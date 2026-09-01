@@ -20,10 +20,16 @@ function makeBody(x,y,r,isStatic){
            mass, I, invM:isStatic?0:1/mass, invI:isStatic?0:1/I,
            r, static:!!isStatic, sel:false, kind:'body' };
 }
-function refreshMass(b){
-  b.mass=Math.PI*b.r*b.r; b.I=0.5*b.mass*b.r*b.r;
+// Recompute I/invM/invI from the body's current mass and radius (uniform
+// disk: I = 0.5*mass*r^2). mass and r are independent fields -- resizing
+// (§13.6 resizeBody) scales mass with them to preserve density; editing mass
+// directly (inspector.js §14.2 setBodyMass) leaves r untouched. Either path
+// ends here so I/invM/invI never drift out of sync with whichever changed.
+function refreshInertia(b){
+  b.I=0.5*b.mass*b.r*b.r;
   b.invM=b.static?0:1/b.mass; b.invI=b.static?0:1/b.I;
 }
+function setBodyMass(b,m){ b.mass=m; refreshInertia(b); }
 
 // ---- §05.3 · world<->screen transforms ----
 function W(){ return cv.clientWidth; }
