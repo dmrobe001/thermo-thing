@@ -8,7 +8,7 @@ The distinguishing goal is **legible energy flow**: the system exists to make th
 
 ## World model and assumptions
 
-The world is planar. Every rigid body carries three configuration coordinates `(x, y, theta)` and their time derivatives `(x_dot, y_dot, theta_dot)`. There is no third spatial dimension and no out-of-plane motion.
+The world is planar and its units are SI. Every rigid body carries three configuration coordinates `(x, y, theta)` and their time derivatives `(x_dot, y_dot, theta_dot)`. There is no third spatial dimension and no out-of-plane motion, though an implicit 1 m depth gives planar areas a volume -- which is what lets a **gas vessel** (a body with one extra coordinate, its length, and a gas sealed inside it) work in real pascals and kelvin. See `VESSEL.md`.
 
 The following idealizations are load-bearing and should be treated as invariants of the design, not defaults to be relaxed later:
 
@@ -22,7 +22,7 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
-**Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or Alt-drag -- pan · keys 1-9, b/k/v/c -- select tools.
+**Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or Alt-drag -- pan · keys 1-9, b/g/k/v/c/q -- select tools.
 
 ## Project layout
 
@@ -33,5 +33,6 @@ README.md               this file
 AGENT.md                codebase navigation guide for developers and AI agents
 DEVELOPMENT.md          physics engine and constraint library design
 CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
+VESSEL.md               design note for the gas vessel (slots alongside DEVELOPMENT.md)
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```

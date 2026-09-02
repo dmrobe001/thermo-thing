@@ -1,12 +1,14 @@
 # Development Reference
 
-Technical design of the physics engine, constraint library, instrumentation, and editing model. For implementation status and pending work see `ROADMAP.md`; for codebase navigation see `AGENT.md`.
+Technical design of the physics engine, constraint library, force elements, instrumentation, and editing model. For implementation status and pending work see `ROADMAP.md`; for codebase navigation see `AGENT.md`; for the gas vessel's own derivation see `VESSEL.md`.
+
+Units are SI throughout (m, kg, s, N, J, Pa, K), with an implicit 1 m out-of-plane depth so a planar area reads directly as a volume.
 
 ## 3. Physics engine
 
 ### 3.1 Coordinate formulation
 
-The engine uses **maximal coordinates**: each body holds its full `(x, y, theta)` independently, and the system mass matrix `M` is block-diagonal with a per-body block `diag(m, m, I)`. This is deliberately the opposite of a minimal- or generalized-coordinate (Featherstone-style) engine. The reason is compositional: adding a body is adding a 3×3 mass block, and adding a constraint is appending rows to the constraint Jacobian `J`, with no kinematic tree to build, no loops to cut, and no structure to rebuild when the player edits the machine mid-simulation. Runtime editability -- the entire point of a sandbox -- is nearly free in this formulation and awkward in the minimal one. The size disadvantage of maximal coordinates (more coordinates than degrees of freedom) is real but is a constant factor, and it is eroded in practice because real mechanisms are full of closed loops that a minimal engine must itself resolve with loop-closure multipliers.
+The engine uses **maximal coordinates**: each body holds its full `(x, y, theta)` independently, and the system mass matrix `M` is block-diagonal with a per-body block `diag(m, m, I)`. One body kind, the gas vessel (§6.2), carries a *fourth* coordinate -- its length -- so its block is `diag(m, m, I(len), mu)`; because that block stays diagonal, it is a strictly local addition to this formulation rather than a departure from it (see `VESSEL.md` for why the mass matrix comes out diagonal). This is deliberately the opposite of a minimal- or generalized-coordinate (Featherstone-style) engine. The reason is compositional: adding a body is adding a 3×3 mass block, and adding a constraint is appending rows to the constraint Jacobian `J`, with no kinematic tree to build, no loops to cut, and no structure to rebuild when the player edits the machine mid-simulation. Runtime editability -- the entire point of a sandbox -- is nearly free in this formulation and awkward in the minimal one. The size disadvantage of maximal coordinates (more coordinates than degrees of freedom) is real but is a constant factor, and it is eroded in practice because real mechanisms are full of closed loops that a minimal engine must itself resolve with loop-closure multipliers.
 
 ### 3.2 The per-step solve
 
@@ -126,17 +128,28 @@ Because a spring genuinely stores and releases mechanical energy, its potential 
 
 > **Status (as built):** Implemented (code §06.6, applied in §08.1). Both spring types are pure force elements with no damping term -- lossless by construction, consistent with the engine's exact-constraint philosophy (`CABLE.md` §C.1 makes the same choice for the cable, for the same reason). A linear spring, when selected, shows a capped rest-length indicator parallel to itself with a draggable control point (constraints.js `springRestHandlePos`); the spring constant is inspector-only. A rotational spring renders as a belt between the two rims when they don't fully overlap, or as a decorative spiral (to the smaller body's rim, or to the body's centre when attached to the background, or when the bodies fully overlap) otherwise -- purely a rendering choice (`rotSpringVisualMode`/`rotSpringSpiralGeom`), not a change in the underlying torque law.
 
+### 6.2 Gas vessels
+
+A **vessel** is a body of fixed bore and variable length holding a gas that obeys the ideal equation of state. It is the one body kind with a fourth configuration coordinate: its length, whose rate is editable in the inspector alongside `(x_dot, y_dot, theta_dot)`. The full derivation and the reasoning behind every choice below live in `VESSEL.md`; the short version:
+
+- **The gas is a force element, not a constraint** -- an ordinary nonlinear spring acting on the length coordinate, exactly as §6.1's springs act on a distance or an angle. Its potential is `U(len) + P_bg*V(len)`, both state functions of the geometry once the adiabat invariant `P*V^gamma` and the gas mass are held fixed, and mechanics never changes either. Its gradient is the force law the vessel needs, `(P - P_bg) * bore`, rather than a separately asserted one.
+- **The gas carries its own inertia.** The generalized mass of the length coordinate is the axial second moment of the vessel's whole mass distribution, gas included, so weightless caps still accelerate finitely. That same number is the coefficient of `len^2` in the moment of inertia, which is what makes a spinning vessel conserve energy and angular momentum without a second model.
+- **Attachments are material.** A constraint, spring or cable endpoint on a vessel names a material fraction along the axis, so its length column is proportional to that fraction: a cap restrains the length fully, a mid-wall point not at all, anything between in proportion. Cap-to-ground, cap-to-cap and wall-only anchoring all fall out of the ordinary rod/slot/pin library with no vessel-specific joint.
+- **Heat and mass exchange are absent.** An isolated gas traverses its adiabat automatically, because nothing changes its adiabat invariant -- the branch is not built, it is what happens when nothing else acts. Coupling two vessels through a conducting or flowing body is the next thing to add (`VESSEL.md` §V.10), and the state is shaped for it.
+
+> **Status (as built):** Implemented -- geometry and gas state (code §05.2d), material endpoint offsets (§05.2c), the gas force (§08.1b), the fourth column throughout the solve and the position projection, the energy ledger's gas-internal and atmospheric rows (§12.1), rendering (§11.3), placement and corner resize (§13.5), and the inspector panel (§14.2b). Two bundled examples exercise it: a vessel standing on the ground as a gas spring, and a free spinning vessel that stretches centrifugally. Heat and mass exchange are not implemented. Because both the gas and the atmosphere enter the ledger as potentials rather than as accumulated work, §08.6's rescale needs no gas-specific energy channel at all -- unlike the previous, since-removed implementation, whose `Q`/`W_atm`/reflection bookkeeping existed only because it integrated `dU = -P dV` incrementally.
+
 ## 7. Instrumentation and state exposure
 
 Instrumentation is not an add-on; it is a consequence of the solver. Every bilateral constraint's Lagrange multiplier `lambda` **is** the reaction force or torque that joint carries, and `rate × lambda` is the mechanical power flowing through it -- both available for free from the solve the engine already performs. The system must expose, per object:
 
-- Per body: `(x, y, theta, x_dot, y_dot, theta_dot)`, kinetic energy.
+- Per body: `(x, y, theta, x_dot, y_dot, theta_dot)`, kinetic energy -- plus `len`/`len_dot` and the live `P, V, T, U` for a vessel (§6.2).
 - Per constraint: its multiplier `lambda` (reaction force/torque) and the power crossing it.
 - System-level: total energy by category, with a running balance so that dissipation-free operation is visibly conservative.
 
 This turns the constraint library into a measurement layer and is most of what makes the sandbox convincing as an honest instrument rather than a plausible-looking animation.
 
-> **Status (as built):** Partially surfaced. Live today: system energy by category -- kinetic, potential, and spring potential (§6.1) -- with a running total and sparkline (code §12); per-constraint reaction force/torque `lambda/h`, both in the inspector and as on-canvas arrows (code §09.3, §11.6). Not yet surfaced: the power crossing each constraint (`rate × lambda`). This is recoverable from quantities the solve already computes; only the readout is missing.
+> **Status (as built):** Partially surfaced. Live today: system energy by category -- kinetic, potential, spring potential (§6.1), gas internal energy and atmospheric potential (§6.2) -- with a running total and sparkline (code §12); per-constraint reaction force/torque `lambda/h`, both in the inspector and as on-canvas arrows (code §09.3, §11.6). Not yet surfaced: the power crossing each constraint (`rate × lambda`). This is recoverable from quantities the solve already computes; only the readout is missing.
 
 ## 8. Editing model and UX
 

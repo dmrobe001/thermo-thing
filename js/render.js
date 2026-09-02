@@ -4,7 +4,7 @@
 //  it calls in back-to-front order. None of these mutate sim state.
 //    §11.1  render            (per-frame scene orchestrator; sizing + draw order)
 //    §11.2  background        (drawGrid, drawAxes)
-//    §11.3  bodies            (drawBody, jointDot)
+//    §11.3  bodies            (drawBody, drawVessel, jointDot)
 //    §11.4  cable              (drawCable)
 //    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
@@ -63,16 +63,83 @@ function drawAxes(){
   ctx.beginPath();ctx.moveTo(0,sy0);ctx.lineTo(W(),sy0);ctx.stroke();
 }
 
-// ---- §11.3 · bodies (drawBody, jointDot) ----
+// ---- §11.3 · bodies (drawBody, drawVessel, jointDot) ----
+// A vessel's four corners in screen space. Shared by drawVessel and the corner
+// handles, and identical to the rectangle path since refreshVessel mirrors
+// bore/len into hw/hh (geometry.js §05.2d).
+function bodyCornersScreen(b){
+  return [[-b.hw,-b.hh],[b.hw,-b.hh],[b.hw,b.hh],[-b.hw,b.hh]]
+    .map(o=>{ const [wx,wy]=worldPt(b,o); return w2s(wx,wy); });
+}
+// Gas temperature -> fill colour. Ratio to ambient on a log scale rather than an
+// absolute range, so the same palette reads sensibly whether the world is running
+// near 300 K or near 3000 K: cold blue below ambient, neutral at it, hot orange
+// above, saturating at a factor of three either way.
+// Saturating at a factor of ~1.35 either way rather than a wider range: the
+// temperature swings a gas actually makes on a mechanical stroke are tens of
+// percent, and a scale that only reads a doubling would leave every real cycle
+// looking the same flat grey. The neutral midpoint is a cool slate rather than a
+// body grey, so an ambient vessel still reads as gas-filled and not as a plate.
+function gasTint(T){
+  const u=Math.max(-1,Math.min(1, Math.log(Math.max(T,1)/sim.bg.T)/Math.log(1.35)));
+  const cold=[74,132,226], mid=[104,130,162], hot=[238,116,58];
+  const a=u<0?cold:hot, k=Math.abs(u);
+  const c=mid.map((m,i)=>Math.round(m+(a[i]-m)*k));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+// A vessel: the gas interior tinted by temperature, the two CAPS (the material
+// planes f = -+1/2, perpendicular to the axis) drawn heavy, the two walls light. The
+// visual weight is the whole point -- the caps are what the pressure acts on and
+// what an anchor there restrains the length through, and the walls are not.
+function drawVessel(b){
+  const [sx,sy]=w2s(b.x,b.y);
+  const c=bodyCornersScreen(b);                  // 0:(-hw,-hh) 1:(hw,-hh) 2:(hw,hh) 3:(-hw,hh)
+  const path=()=>{ ctx.beginPath(); c.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); };
+  path();
+  ctx.fillStyle=gasTint(gasT(b)); ctx.globalAlpha=0.5; ctx.fill(); ctx.globalAlpha=1;
+  if(b.static||b.lenLock){
+    // Same hatch a static body carries, marking a length-locked vessel (a reservoir)
+    // as something the gas cannot move.
+    ctx.save(); path(); ctx.clip();
+    const xs=c.map(p=>p[0]), ys=c.map(p=>p[1]);
+    const x0=Math.min(...xs), y0=Math.min(...ys), span=(Math.max(...xs)-x0)+(Math.max(...ys)-y0);
+    ctx.strokeStyle='rgba(255,255,255,.10)';ctx.lineWidth=1;
+    for(let i=-span;i<span;i+=6){ctx.beginPath();ctx.moveTo(x0+i,y0);ctx.lineTo(x0+i+span,y0+span);ctx.stroke();}
+    ctx.restore();
+  }
+  const hoverOn = hover===b;
+  const resizeOn = hoverHandle && hoverHandle.kind==='resize' && hoverHandle.b===b;
+  // Walls thin and dim, caps heavy and bright -- and the two keep that contrast
+  // through selection and hover, because which pair of edges is a cap is a
+  // structural fact about the vessel, not a transient highlight. It is the caps the
+  // pressure acts on, and an anchor on one is what restrains the length.
+  const wallCol = resizeOn?'#6f9dc4' : b.sel? '#4b7fb4': hoverOn? '#6f9dc4':'#5d6878';
+  const capCol  = resizeOn?'#bfe4ff' : b.sel? '#8fc9ff': hoverOn? '#a8d4f7':'#9aa6b8';
+  ctx.strokeStyle=wallCol;
+  ctx.lineWidth = b.sel||hoverOn||resizeOn?1.6:1.2;                 // walls
+  ctx.beginPath();ctx.moveTo(c[1][0],c[1][1]);ctx.lineTo(c[2][0],c[2][1]);
+  ctx.moveTo(c[3][0],c[3][1]);ctx.lineTo(c[0][0],c[0][1]);ctx.stroke();
+  ctx.strokeStyle=capCol; ctx.lineCap='round';
+  ctx.lineWidth = resizeOn?6 : b.sel?5: hoverOn?4.5:4;              // caps
+  ctx.beginPath();ctx.moveTo(c[0][0],c[0][1]);ctx.lineTo(c[1][0],c[1][1]);
+  ctx.moveTo(c[2][0],c[2][1]);ctx.lineTo(c[3][0],c[3][1]);ctx.stroke();
+  ctx.lineCap='butt';
+  // Orientation tick along the bore (local +x, across the axis) plus the centre dot,
+  // matching every other body -- the axis itself is already read off the cap edges.
+  const [tx,ty]=w2s(b.x+Math.cos(b.th)*b.hw, b.y+Math.sin(b.th)*b.hw);
+  ctx.strokeStyle='#5d6878'; ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tx,ty);ctx.stroke();
+  ctx.fillStyle='#5d6878';ctx.beginPath();ctx.arc(sx,sy,2,0,Math.PI*2);ctx.fill();
+}
 function drawBody(b){
   const [sx,sy]=w2s(b.x,b.y);
+  if(b.shape==='vessel'){ drawVessel(b); return; }
   if(b.shape==='rect'){
     // Corners in screen space, via worldPt (world-frame rotation, same math
     // every other rim-point in the file already uses) rather than ctx.rotate
     // -- keeps the sign convention identical to worldPt/w2s everywhere else
     // instead of re-deriving how canvas rotation interacts with w2s's y-flip.
-    const corners=[[-b.hw,-b.hh],[b.hw,-b.hh],[b.hw,b.hh],[-b.hw,b.hh]]
-      .map(o=>{ const [wx,wy]=worldPt(b,o); return w2s(wx,wy); });
+    const corners=bodyCornersScreen(b);
     const path=()=>{ ctx.beginPath(); corners.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); };
     path();
     if(b.static){
@@ -327,7 +394,7 @@ function drawConstraint(con){
     return;
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
-  const [wax,way]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
+  const [wax,way]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
   if(con.type==='belt'){
     const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
     drawRim(A.x,A.y,con.rA,col); drawRim(B.x,B.y,con.rB,col);
@@ -410,9 +477,17 @@ function drawPending(){
 let bodyPreview=null;
 function drawPreview(){
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);
-  if(bodyPreview.shape==='rect'){
+  if(bodyPreview.shape==='rect'||bodyPreview.shape==='vessel'){
     const [sx0,sy0]=w2s(bodyPreview.x0,bodyPreview.y0), [sx1,sy1]=w2s(bodyPreview.x1,bodyPreview.y1);
-    ctx.strokeRect(Math.min(sx0,sx1),Math.min(sy0,sy1),Math.abs(sx1-sx0),Math.abs(sy1-sy0));
+    const x=Math.min(sx0,sx1), y=Math.min(sy0,sy1), w=Math.abs(sx1-sx0), h=Math.abs(sy1-sy0);
+    ctx.strokeRect(x,y,w,h);
+    // A vessel previews with its caps picked out, so which pair of edges the gas
+    // will push on is visible before the second click commits it.
+    if(bodyPreview.shape==='vessel'){
+      ctx.setLineDash([]); ctx.lineWidth=3.5;
+      ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+w,y);ctx.moveTo(x,y+h);ctx.lineTo(x+w,y+h);ctx.stroke();
+      ctx.setLineDash([5,4]); ctx.lineWidth=1.5;
+    }
   } else {
     const [sx,sy]=w2s(bodyPreview.cx,bodyPreview.cy);
     ctx.beginPath();ctx.arc(sx,sy,Math.max(bodyPreview.r*cam.scale,3),0,Math.PI*2);ctx.stroke();
