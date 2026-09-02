@@ -103,6 +103,6 @@ Give new code a home in an existing section (and register it in that section's s
 | `js/hud.js` | §12 | `energy` (incl. spring PE, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
 | `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
 | `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
-| `js/examples.js` | §15 | `loadExample` -- assembles prebuilt machines from library primitives |
+| `js/examples.js` | §15 | `SCENES` -- every prebuilt machine as scene-file text, with its own reasoning as `#` comments; `loadExample` is `importScene` and nothing else |
 | `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, and the definitive list of what a scene may contain), `exportScene`/`importScene`, `clearScene`, the scene-file panel card |
 | `js/transport.js` | §16 | `saveState`, `restoreState`, `setRunning`, keyboard shortcuts, boot |

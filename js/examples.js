@@ -1,120 +1,258 @@
 // ============================================================================
 //  §15 · EXAMPLES
-//  Prebuilt machines wired from the panel buttons (§03.4 / §14.2). Each clears
-//  the bench and assembles bodies + constraints from library primitives only.
-//  loadExample(kind) dispatches on the data-ex key; search e.g.  kind==='crank'.
+//  Prebuilt machines wired from the panel buttons (§03.4 / §14.2).
+//
+//  These are DATA, not code. Each example is a scene file (§17), and loading one
+//  is `importScene` and nothing else -- so an example cannot contain a body,
+//  constraint or interaction the tools cannot build, and cannot set a field the
+//  format does not name. That is the point: the bench twice grew examples with
+//  features no player could reproduce, and the fix is not review discipline but
+//  removing the code path that allowed it. See SCENE.md §S.2.
+//
+//  Each scene's own reasoning travels with it, as `#` comments in the file -- so
+//  exporting an example hands you the explanation along with the machine.
+//  `loadExample(kind)` dispatches on the data-ex key; search e.g. `crank:`.
 // ============================================================================
+const SCENES = {
+
+pendulum: `scene 1
+# A disk on a rigid rod, swinging from a fixed point. The rod's background end is
+# a plain pin, not the tool's welded default -- tap the end to free it, or untick
+# "end A welded" in the inspector.
+sim gravity=on
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=2.6 y=4.4 r=0.38
+
+# constraints
+rod bg(0,4.4) -- 1 len=2.6
+`,
+
+double: `scene 1
+# Two links, both pinned at both ends. The classic chaotic pair, and the case the
+# Baumgarte gain (§04.3) was tuned against: drift is largest at the extremes of a
+# swing, which is where a low gain bleeds energy visibly.
+sim gravity=on
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=1.8 y=4.6 r=0.32
+body 2 x=3.6 y=4.6 r=0.32
+
+# constraints
+rod bg(0,4.6) -- 1 len=1.8
+rod 1 -- 2 len=1.8
+`,
+
+fourbar: `scene 1
+# Two grounded cranks joined by a coupler -- the fourth bar is the ground itself,
+# the fixed distance between the two background anchors. Nothing states that
+# distance: it is implied by where the two anchors are.
+sim gravity=on
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=-1.2 y=2.8 r=0.3
+body 2 x=1.3 y=2.9 r=0.3
+
+# constraints
+rod bg(-1.6,1.2) -- 1 len=1.64924225025
+rod 1 -- 2 len=2.50199920064
+rod bg(1.6,1.2) -- 2 len=1.72626765016
+`,
+
+crank: `scene 1
+# Slider-crank: a crank pin, a connecting rod, and a piston confined to a
+# horizontal line.
+#
+# The rail is a slot with ONLY its background end prismatic (lock=B). A single
+# locked end pins the segment's angle phi = atan2(...) directly (§06.5), which is
+# singular if the piston ever passes through the anchor -- so the anchor sits ten
+# metres out, well outside its travel.
+sim gravity=on
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=-1 y=2.4 r=0.24
+body 2 x=1.7 y=2.4 r=0.34
+
+# constraints
+rod bg(-1.6,2.4) -- 1 len=0.6
+rod 1 -- 2 len=2.7
+slot 2 -- bg(-8.3,2.4) lock=B restAngB=0
+`,
+
+skate: `scene 1
+# A knife-edge wheel in zero gravity: the contact point cannot move sideways, but
+# slides freely along its heading and pivots freely about it. Nonholonomic -- the
+# constraint is on velocity and has no position form to integrate.
+sim gravity=off
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=0 y=2.6 r=0.45
+
+# constraints
+knife 1@(0.42,0) dir=(1,0)
+`,
+
+integrator: `scene 1
+# A wheel-on-disk integrator: the follower rolls on the big disk's face, so the
+# ratio is its distance from the centre. Slide it in or out and the ratio changes
+# continuously -- a CVT with no gear teeth anywhere.
+#
+# The big disk is held by a short rod welded at its BACKGROUND end only. The weld
+# fixes the rod's direction, so its free far end -- which sits exactly at the
+# disk's centre -- is itself fixed in space, and the disk spins freely about it.
+# That is what a ground pin is, built from a rod.
+#
+# The follower rides the same single-locked-background rail the crank uses.
+sim gravity=off
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=0 y=2.6 r=0.95
+body 2 x=1.17 y=2.6 r=0.22
+
+# constraints
+rod bg(-0.5,2.6) -- 1 len=0.5 weld=A restAngA=-3.14159265359
+slot 2 -- bg(-10,2.6) lock=B restAngB=0
+cvt 1 -- 2
+`,
+
+cable: `scene 1
+# A mass hanging from a cable wound on a fixed spool. Tension only: the cable goes
+# slack rather than pushing, and the wrap point tracks around the rim as it winds.
+# Ltot is the free span at creation -- a captured field, which is why it is written
+# out rather than re-derived from the pose (SCENE.md §S.3).
+sim gravity=on
+cam x=0 y=2.6 scale=64
+
+# bodies
+body 1 x=0 y=4.6 r=0.4 static
+body 2 x=0.9 y=4.4 r=0.32
+
+# cables
+cable 2 -- 1 Ltot=0.830662386292 localAngle=-0.218668945874
+`,
+
+gasspring: `scene 1
+# A vessel standing on the ground: its lower cap -- the material plane f = -1/2 --
+# is welded to a fixed world point, which pins that cap and locks the vessel's
+# rotation, leaving the length as the only free coordinate.
+#
+# Nothing here is a "gas spring" primitive. The oscillation is the vessel's own gas
+# potential (geometry.js §05.2d) against the weight the constraint transfers onto
+# the length coordinate: with the cap pinned, the centre of mass rises by half of
+# any extension, so gravity acquires a generalized force on len that it does not
+# have for a free vessel. The adiabat is not imposed either -- an isolated gas
+# simply never changes its adiabat invariant.
+sim gravity=on
+cam x=0 y=2.6 scale=64
+
+# bodies
+vessel 1 x=0 y=1.1 bore=0.5 len=1.2 P=101325 T=293.15
+
+# constraints
+rod bg(0,0.15) -- 1@(0,-0.5) len=0.35 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+`,
+
+spinvessel: `scene 1
+# A free vessel with nothing attached, spinning in zero gravity. I(len) grows as it
+# stretches, so the spin slows and the centrifugal generalized force (physics.js
+# §08.1) trades against the gas -- the vessel breathes. Angular momentum and total
+# energy both hold flat while it does, which is the point: the same constant mu
+# governs the length inertia and the len^2 term in I.
+sim gravity=off
+cam x=0 y=2.6 scale=64
+
+# bodies
+vessel 1 x=0 y=2.6 bore=0.4 len=1 P=101325 T=293.15 w=9
+`,
+
+heatpair: `scene 1
+# A hot reservoir warming a working vessel through a fixed plate. Nothing here is a
+# "heat exchanger" primitive: the plate is an ordinary static rectangle, and what
+# couples the two gases is a PAIR of heat interactions sharing it (physics.js
+# §08.0b). The rate is their conductivities in series times the SMALLER of the two
+# plate-to-vessel contact areas, so dragging a vessel half off the plate visibly
+# halves it.
+#
+# The reservoir is length-locked -- VESSEL.md §V.8's reservoir, a vessel whose
+# fourth coordinate is frozen the way static freezes the other three -- so it stores
+# heat without storing work, and only its temperature tint moves. The working vessel
+# is held by a rod welded at both ends to its own MID-WALL, the material point f = 0
+# whose length column is zero (§V.5): its pose is fixed and its length entirely
+# free. So the heat crossing the plate comes out as extension, against the
+# atmosphere -- heat turning into mechanical work, with nothing in the scene that
+# knows what a heat engine is.
+#
+# Both sides start mechanically balanced, so the vessel walks out quasi-statically
+# (its gas-spring period is a fraction of a second, the thermal time constant a few
+# seconds) instead of ringing. Total energy holds flat throughout: with the geometry
+# frozen during the pass the two dU are equal and opposite exactly.
+sim gravity=off
+cam x=0 y=2.6 scale=64
+
+# bodies
+rect 1 x=0 y=2.6 width=2.5 height=0.24 static
+vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=276513.730172 T=800 lenlock
+vessel 3 x=1.15 y=2.6 bore=0.9 len=0.9 P=101325 T=293.15
+
+# constraints
+rod bg(1.15,1.75) -- 3 len=0.85 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+
+# interactions
+heat body=1 vessel=2 k=2000
+heat body=1 vessel=3 k=2000
+`,
+
+flowpair: `scene 1
+# The mass-transfer counterpart, in the same layout: a pressurized length-locked
+# reservoir feeding a free vessel through a port body, with a pair of FLOW
+# interactions on it. Gas crosses until the pressures match, carrying its source's
+# enthalpy with it, so the emptying side cools along its own isentrope while the
+# filling side heats -- both visible directly in the temperature tint.
+#
+# The receiving vessel simply extends: its own pressure is pinned near ambient by
+# the atmosphere on the far side of its cap, so almost all of what arrives shows up
+# as volume. That is a pneumatic actuator, assembled from a reservoir, a port and an
+# anchor, with no actuator primitive anywhere.
+#
+# The reservoir's 243180 Pa is 2.4 atmospheres, at ambient temperature.
+sim gravity=off
+cam x=0 y=2.6 scale=64
+
+# bodies
+rect 1 x=0 y=2.6 width=2.5 height=0.24 static
+vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=243180 T=293.15 lenlock
+vessel 3 x=1.15 y=2.6 bore=0.9 len=0.9 P=101325 T=293.15
+
+# constraints
+rod bg(1.15,1.75) -- 3 len=0.85 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+
+# interactions
+flow body=1 vessel=2 k=0.00003
+flow body=1 vessel=3 k=0.00003
+`,
+
+// An empty bench is not a special case in the loader -- it is a scene with nothing
+// in it, which is exactly what "clear" means.
+clear: `scene 1
+sim gravity=on
+cam x=0 y=2.6 scale=64
+`,
+
+};
+
+// Loading an example is importing its file, and nothing else. The text goes into
+// the scene-file card on the way past (§17.5) so that clicking an example also
+// shows you the file that made it -- which is the shortest possible introduction
+// to the format.
 function loadExample(kind){
-  clearScene();          // one definition of a fresh bench, scene.js §17.4
-  sim.gravity=true; const gc=document.getElementById('tgGrav'); if(gc) gc.checked=true;
-  const dy=(x,y,r=0.38)=>{ const b=makeBody(x,y,r,false); bodies.push(b); return b; };
-  // A plain (unwelded) rod between two bodies -- free to rotate at both ends.
-  const rod=(A,B)=>constraints.push(makeRodCon({id:A.id,off:[0,0]},{id:B.id,off:[0,0]},false,false));
-  // A rod pinned to a fixed background point -- the free-swinging pivot a
-  // pendulum needs (both ends unwelded, unlike the tool's rigid-strut default).
-  const rodBG=(wx,wy,B)=>constraints.push(makeRodCon({id:null,off:[wx,wy]},{id:B.id,off:[0,0]},false,false));
-  if(kind==='pendulum'){ const b=dy(2.6,4.4); rodBG(0,4.4,b); }
-  else if(kind==='double'){ const b1=dy(1.8,4.6,0.32); const b2=dy(3.6,4.6,0.32); rodBG(0,4.6,b1); rod(b1,b2); }
-  else if(kind==='fourbar'){
-    const a=dy(-1.2,2.8,0.3), b=dy(1.3,2.9,0.3); rodBG(-1.6,1.2,a); rod(a,b); rodBG(1.6,1.2,b); }
-  else if(kind==='crank'){ const pin=dy(-1.0,2.4,0.24); const P=dy(1.7,2.4,0.34);
-    rodBG(-1.6,2.4,pin); rod(pin,P);
-    // Position-only rail: P (pin, free to rotate) confined to the horizontal
-    // line through a background point that's prismatic. A single locked end
-    // pins phi=atan2(...) directly (§06.5), which is singular if P ever passes
-    // through the anchor -- keep it well outside P's travel range.
-    constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x-10,P.y]}, false, true)); }
-  else if(kind==='skate'){ sim.gravity=false; if(gc) gc.checked=false;
-    const b=dy(0,2.6,0.45);
-    constraints.push(makeKnifeCon({id:b.id, off:[0.42,0]}, [1,0])); }
-  else if(kind==='integrator'){ sim.gravity=false; if(gc) gc.checked=false;
-    const A=dy(0,2.6,0.95);
-    // A short background-welded rod into A's own centre: the weld on the
-    // background end locks the rod's direction, so its free (pinned) far end
-    // -- which sits exactly at A's centre -- is itself fixed in space, letting
-    // A spin freely about that fixed axis. Replaces the old ground-pin tool.
-    constraints.push(makeRodCon({id:null,off:[A.x-0.5,A.y]},{id:A.id,off:[0,0]},true,false));
-    const B=dy(1.17,2.6,0.22);
-    // Position-only rail for the CVT follower B (pin, free to spin) -- same
-    // single-locked-background pattern as the crank example above.
-    constraints.push(makeSlotCon({id:B.id,off:[0,0]}, {id:null,off:[A.x-10,A.y]}, false, true));
-    constraints.push(makeCvtCon(A.id, B.id)); }
-  else if(kind==='gasspring'){
-    // A vessel standing on the ground: its lower cap -- the material plane
-    // f = -1/2 -- is welded to a fixed world point, which pins that cap and locks
-    // the vessel's rotation, leaving the length as the only free coordinate.
-    //
-    // Nothing here is a "gas spring" primitive. The oscillation is the vessel's own
-    // gas potential (geometry.js §05.2d) against the weight the constraint transfers
-    // onto the length coordinate: with the cap pinned, the centre of mass rises by
-    // half of any extension, so gravity acquires a generalized force on `len` that
-    // it does not have for a free vessel. The adiabat is not imposed either -- an
-    // isolated gas simply never changes its adiabat invariant.
-    const v=makeVessel(0,1.1,0.5,1.2,false); bodies.push(v);
-    const capY=v.y-v.len/2;
-    constraints.push(makeRodCon({id:null,off:[0,capY-0.35]},{id:v.id,off:[0,-0.5]},true,true));
-  }
-  else if(kind==='spinvessel'){
-    // A free vessel with nothing attached, spinning in zero gravity. I(len) grows as
-    // it stretches, so the spin slows and the centrifugal generalized force
-    // (physics.js §08.1) trades against the gas -- the vessel breathes. Angular
-    // momentum and total energy both hold flat while it does, which is the point:
-    // the same constant mu governs the length inertia and the len^2 term in I.
-    sim.gravity=false; if(gc) gc.checked=false;
-    const v=makeVessel(0,2.6,0.4,1.0,false); bodies.push(v);
-    v.w=9.0;
-  }
-  else if(kind==='heatpair'){
-    // A hot reservoir warming a working vessel through a fixed plate. Nothing here is
-    // a "heat exchanger" primitive: the plate is an ordinary static rectangle, and
-    // what couples the two gases is a PAIR of heat interactions sharing it
-    // (physics.js §08.0b). The rate is their conductivities in series times the
-    // SMALLER of the two plate-to-vessel contact areas, so dragging a vessel half off
-    // the plate visibly halves it.
-    //
-    // The reservoir is length-locked -- VESSEL.md §V.8's reservoir, a vessel whose
-    // fourth coordinate is frozen the way `static` freezes the other three -- so it
-    // stores heat without storing work, and only its temperature tint moves. The
-    // working vessel is held by a rod welded at both ends to its own MID-WALL, the
-    // material point f = 0 whose length column is zero (§V.5): its pose is fixed and
-    // its length entirely free. So the heat crossing the plate comes out as
-    // extension, against the atmosphere -- heat turning into mechanical work, with
-    // nothing in the scene that knows what a heat engine is.
-    //
-    // Both sides start mechanically balanced, so the vessel walks out quasi-statically
-    // (its gas-spring period is a fraction of a second, the thermal time constant a
-    // few seconds) instead of ringing. Total energy holds flat throughout: with the
-    // geometry frozen during the pass the two dU are equal and opposite exactly.
-    sim.gravity=false; if(gc) gc.checked=false;
-    const plate=makeRectBody(0,2.6,1.25,0.12,true); bodies.push(plate);
-    const res=makeVessel(-1.25,2.6,0.55,1.8,false); bodies.push(res);
-    res.lenLock=true; setVesselGasMT(res, res.gas.mass, 800); refreshVessel(res);
-    const work=makeVessel(1.15,2.6,0.9,0.9,false); bodies.push(work);
-    constraints.push(makeRodCon({id:null,off:[1.15,1.75]},{id:work.id,off:[0,0]},true,true));
-    for(const v of [res,work])
-      interactions.push({id:uid++, type:'heat', body:{id:plate.id}, vessel:{id:v.id}, k:2000, sel:false});
-  }
-  else if(kind==='flowpair'){
-    // The mass-transfer counterpart, in the same layout: a pressurized length-locked
-    // reservoir feeding a free vessel through a port body, with a pair of FLOW
-    // interactions on it. Gas crosses until the pressures match, carrying its
-    // source's enthalpy with it, so the emptying side cools along its own isentrope
-    // while the filling side heats -- both visible directly in the temperature tint.
-    // The receiving vessel simply extends: its own pressure is pinned near ambient by
-    // the atmosphere on the far side of its cap, so almost all of what arrives shows
-    // up as volume. That is a pneumatic actuator, assembled from a reservoir, a port
-    // and an anchor, with no actuator primitive anywhere.
-    sim.gravity=false; if(gc) gc.checked=false;
-    const port=makeRectBody(0,2.6,1.25,0.12,true); bodies.push(port);
-    const res=makeVessel(-1.25,2.6,0.55,1.8,false); bodies.push(res);
-    res.lenLock=true; setVesselGasPT(res, 2.4*sim.bg.P, sim.bg.T); refreshVessel(res);
-    const work=makeVessel(1.15,2.6,0.9,0.9,false); bodies.push(work);
-    constraints.push(makeRodCon({id:null,off:[1.15,1.75]},{id:work.id,off:[0,0]},true,true));
-    for(const v of [res,work])
-      interactions.push({id:uid++, type:'flow', body:{id:port.id}, vessel:{id:v.id}, k:3e-5, sel:false});
-  }
-  else if(kind==='cable'){ const S=makeBody(0,4.6,0.4,true); bodies.push(S); const m=dy(0.9,4.4,0.32);
-    cables.push(makeCableCon({id:m.id, off:[0,0]}, S.id)); }
-  saveState();
-  cam.x=0;cam.y=2.6;cam.scale=64;
+  const text = SCENES[kind];
+  if(text===undefined) throw new Error(`no such example: "${kind}"`);
+  sceneText = text;
+  importScene(text);
 }

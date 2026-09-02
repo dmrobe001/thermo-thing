@@ -51,8 +51,7 @@ for(const f of ['js/state.js','js/geometry.js','js/constraints.js','js/solver.js
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
 
 const run = src => vm.runInContext(src, ctx);
-const EXAMPLES = ['pendulum','double','fourbar','crank','skate','integrator','cable',
-                  'gasspring','spinvessel','heatpair','flowpair'];
+const EXAMPLES = run('Object.keys(SCENES)');
 
 // ---- the field list (2) compares, straight off the ledger, so it cannot go stale
 function snapshot(){
@@ -94,7 +93,27 @@ for(const ex of EXAMPLES){
   ok(ex.padEnd(12)+'every ledger field survives', s1===s2, firstDiff(s1,s2));
 }
 
-console.log('\n2. the file really carries the scene (spot checks on what it says)');
+console.log('\n2. every bundled example is a canonical scene file');
+// The examples ARE scene files now (§15), so they can drift from what the exporter
+// would write -- someone hand-edits one, or a ledger change alters the canonical
+// form and the checked-in text is not regenerated. Stripped of its comments and
+// blank lines, each one must be exactly the export. Run with --canon <name> to
+// print the canonical text of one, which is how you regenerate after a change.
+const strip = t => t.split('\n').filter(l=>l.trim() && !l.trim().startsWith('#')).join('\n')+'\n';
+const canonArg = process.argv.indexOf('--canon');
+if(canonArg>=0){
+  const name = process.argv[canonArg+1];
+  run(`loadExample(${JSON.stringify(name)})`);
+  process.stdout.write(run('exportScene()'));
+  process.exit(0);
+}
+for(const ex of EXAMPLES){
+  run(`loadExample(${JSON.stringify(ex)})`);
+  const written = run(`SCENES[${JSON.stringify(ex)}]`), canon = run('exportScene()');
+  ok(ex.padEnd(12)+'is canonical as checked in', strip(written)===strip(canon), firstDiff(strip(written), strip(canon)));
+}
+
+console.log('\n3. the file really carries the scene (spot checks on what it says)');
 const has=(ex,re,what)=>ok(`${ex.padEnd(12)}${what}`, re.test(texts[ex]||''),
   `not found in:\n${(texts[ex]||'').split('\n').map(l=>'        '+l).join('\n')}`);
 has('heatpair', /^rect \d+ .*\bstatic\b/m,           'the plate is a static rectangle');
@@ -109,7 +128,7 @@ has('crank',    /^slot \d+ -- bg\([^)]*\) lock=B/m,  'the one-end-prismatic rail
 has('skate',    /^knife \d+@\(0\.42,0\) dir=\(1,0\)$/m,'the knife heading');
 has('cable',    /^cable \d+ -- \d+ Ltot=\S+ localAngle=\S+$/m,'the cable, with its captured length');
 
-console.log('\n3. the reader accepts nothing the editor cannot build');
+console.log('\n4. the reader accepts nothing the editor cannot build');
 run(`loadExample('pendulum')`);
 const before = run('exportScene()');
 const rejects = [
@@ -132,7 +151,7 @@ for(const [what, text] of rejects){
 }
 ok('a rejected file leaves the bench standing', run('exportScene()')===before);
 
-console.log('\n4. an imported scene runs the same as the scene it was exported from');
+console.log('\n5. an imported scene runs the same as the scene it was exported from');
 // Every check above compares what the file SAYS. This one compares what the file
 // DOES: two seconds of the real substep on the example the tools built and on the
 // world the reader rebuilt from its export, then the full state of both. A derived

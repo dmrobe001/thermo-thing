@@ -312,19 +312,43 @@ a background pin, each leaving the bench standing; and -- the one that catches a
 itself can see -- two seconds of the real `substep` on the world the tools built and
 on the world rebuilt from its export agree.
 
-**Phase 3 -- flip the examples, and shut the door.** Convert each example to scene
-text in `js/scenes.js` (embedded string literals, `file://`-safe), keeping the
-explanatory comments as `#` lines. `loadExample` becomes a two-line dispatch. Add
-`tools/scene-roundtrip.js` per §S.2. Then state the invariant in `AGENT.md` where
-future agents will read it: *outside `js/geometry.js`, `js/constraints.js` and the
-tool dispatch, no file pushes onto `bodies`, `constraints`, `cables`, `springs`,
-`rotSprings` or `interactions`; scenes are built from scene text.*
+**Phase 3 -- flip the examples, and shut the door. `[done]`** All eleven examples
+are scene text in `js/examples.js` (§15) -- embedded string literals, so no `fetch`
+and no build step -- and `loadExample` is `importScene` and nothing else. A separate
+`js/scenes.js` turned out not to be worth it: §15 was already "the examples", and
+now it holds them.
+
+Three things fell out that the plan did not call:
+
+- **"Clear bench" stopped being a special case.** It is the scene with nothing in
+  it. The loader has no branch for it.
+- **The examples' prose moved into the files.** Every paragraph that explained why
+  the gas spring is not a gas-spring primitive, or what makes the heat pair a heat
+  engine with nothing that knows what a heat engine is, is now a `#` comment in the
+  scene text. Exporting an example hands you the explanation along with the
+  machine, and clicking one drops its file into the scene-file card -- which is the
+  shortest introduction to the format there is.
+- **Canonicality needs its own guard.** A checked-in scene file can drift from what
+  the exporter would write, either by hand-editing or because a ledger change moved
+  the canonical form. The validator now asserts that each example, stripped of
+  comments and blank lines, is exactly the export; `node tools/scene-roundtrip.js
+  --canon <name>` prints the canonical text, which is how you regenerate one.
+
+The migration was verified against the code it replaced: every one of the twelve
+scenes is byte-identical to what the old imperative `loadExample` produced.
+
+The invariant now holds and is stated in `AGENT.md`: *outside the constructors in
+`js/geometry.js` and `js/constraints.js`, only the tool dispatch (§13.5) and the
+scene reader (§17.4) push onto `bodies`, `constraints`, `cables`, `springs`,
+`rotSprings` or `interactions`.* Every kind of scene object has exactly one
+constructor, and it is called from exactly those two places.
 
 **Phase 4 -- fold in `saveState`.** Point `transport.js` §16.1 at the ledger's
 state-class fields, deleting the parallel definition described in §S.4.
 
-Phases 0-2 are done. Phase 3 is where the architectural claim gets paid for; Phase 4
-is cleanup that only becomes cheap once the ledger exists.
+Phases 0-3 are done, so the architectural claim is paid for: there is no longer a
+code path by which a scene can contain something the editor cannot build. Phase 4 is
+cleanup that only became cheap once the ledger existed.
 
 ---
 
