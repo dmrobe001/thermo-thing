@@ -497,12 +497,25 @@ function substep(h){
   //    here; a gas with no interactions (kappa/flow = 0, the adiabatic "gas
   //    spring" case) is untouched by §08.0b and traverses its adiabat purely
   //    through this term, exactly as before.
+  //
+  //    The gas's own dU only accounts for work crossing *its* boundary, but
+  //    the force actually delivered to the bodies (§08.1) is the *net*
+  //    (P_gas - P_bg)·bore, not P_gas·bore alone -- the background makes up
+  //    the difference by doing P_bg·dV of flow work on (or absorbing it from)
+  //    the piston at its open face, same as atmospheric pressure doing work
+  //    on a piston expanding into open air. That term never touches the
+  //    gas's own T, but it does leave (or enter) the mechanism's own
+  //    KE/PE/U ledger, so it has to be booked here -- g._Watm, alongside
+  //    g._Qstep -- or §08.6's invariant is missing an energy channel and
+  //    "corrects" for it by silently overwriting the correct post-solve KE,
+  //    which is exactly what masks a real (P_gas - P_bg) restoring force.
   for(const g of gases){
     const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
     const dU=-g._P*dV;
     g.T += dU/(g.n*(1/(g.gamma-1)));
     if(g.T<1e-4) g.T=1e-4;
     g._Q=g._Qstep/h;
+    g._Watm=sim.bg.P*dV;
   }
 
   // ---- §08.6 · energy-conservation rescale ----
@@ -549,18 +562,23 @@ function substep(h){
   // so scaling it can never reintroduce the drift the first step removed.
   if(!grabbing){
     for(const isl of islands){
-      let totalQ=0; for(const g of isl.gases) totalQ+=g._Qstep;
+      let totalQ=0, totalWatm=0; for(const g of isl.gases){ totalQ+=g._Qstep; totalWatm+=g._Watm; }
       const post=energy(isl);
       // totalQ is the raw reservoir heat Q (not net dU): the P·dV term inside
       // dU=Q-P·dV is internal work already transferred into the mechanism's
       // KE/PE by §08.1/§08.3/§08.4 and reflected in post.pe/post.ke, so adding
       // it again here would double-count it. Only the externally-sourced Q
       // belongs in the invariant alongside preE (which already includes the
-      // gas's own pre-substep internal energy). post.SPE (spring potential
-      // energy, hud.js §12.1) is subtracted the same way post.pe is: it's a
+      // gas's own pre-substep internal energy). totalWatm (§08.5) is the
+      // flow work each gas traded with the background at its open face
+      // (P_bg·dV) -- energy that leaves the mechanism as it expands (or
+      // enters it as it's compressed) without ever being heat or being
+      // credited to the gas's own U, so it has to leave the invariant the
+      // same way totalQ enters it. post.SPE (spring potential energy,
+      // hud.js §12.1) is subtracted the same way post.pe is: it's a
       // legitimate KE<->PE channel the spring force itself already moved
       // energy through in §08.1/§08.4, not a discrepancy to fold back.
-      const keTarget=isl.preE+totalQ-post.pe-post.U-post.SPE;
+      const keTarget=isl.preE+totalQ-totalWatm-post.pe-post.U-post.SPE;
       if(isl.anchored){
         // keTarget<=0 (all mechanical energy would have to come from an
         // impossible negative KE) or the island is momentarily at rest: leave

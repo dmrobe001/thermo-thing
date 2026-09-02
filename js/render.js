@@ -193,7 +193,11 @@ function drawGas(g){
   const nrm=[-f.dW[1],f.dW[0]]; const hw=g.bore*0.5;
   const H1=[f.hx+nrm[0]*hw, f.hy+nrm[1]*hw], H2=[f.hx-nrm[0]*hw, f.hy-nrm[1]*hw];
   const P1=[f.pax+nrm[0]*hw, f.pay+nrm[1]*hw], P2=[f.pax-nrm[0]*hw, f.pay-nrm[1]*hw];
-  const P=g._P || g.n*g.T/(g.bore*f.xc);
+  // Always live from n/T/bore/geometry, never the physics-cached g._P -- that
+  // cache only refreshes on a substep, so while paused (or right after an
+  // inspector edit to n/bore before the sim next runs) it would otherwise
+  // keep showing the pressure from before the edit.
+  const P=g.n*g.T/(g.bore*f.xc);
   // fill tinted by pressure, hue warmed by temperature
   const a=Math.max(0.05, Math.min(0.55, P*0.03));
   const warm=Math.max(0, Math.min(1, (g.T-0.4)/2));
@@ -254,7 +258,7 @@ function drawFlowInteraction(fi){
   drawInteractionLine(ep, sel?'#5aa9f0':hoverOn?'#8fc4f7':'#5ac2e0');
 }
 function drawGasForce(g){
-  const f=gasFrame(g); const P=g._P||g.n*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
+  const f=gasFrame(g); const P=g.n*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
   sim.forceRef=Math.max(sim.forceRef*0.985, mag);
   const px=58*mag/sim.forceRef; const [sx,sy]=w2s(f.pax,f.pay);
   const ex=sx+f.dW[0]*px, ey=sy-f.dW[1]*px;
