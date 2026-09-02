@@ -6,6 +6,11 @@
 // ============================================================================
 function loadExample(kind){
   bodies=[];constraints=[];gases=[];heatInteractions=[];flowInteractions=[];cables=[];uid=1;clearSelection();eHist.length=0;
+  // uid restarts at 1 above, so a fresh scene's bodies can reuse ids a prior
+  // scene's islands used as their ENERGY_BANK key (physics.js §08.6) --
+  // clear it so a stale banked correction can never leak into an unrelated
+  // scene's very first substep.
+  ENERGY_BANK.clear();
   sim.gravity=true; const gc=document.getElementById('tgGrav'); if(gc) gc.checked=true;
   const dy=(x,y,r=0.38)=>{ const b=makeBody(x,y,r,false); bodies.push(b); return b; };
   // A plain (unwelded) rod between two bodies -- free to rotate at both ends.
