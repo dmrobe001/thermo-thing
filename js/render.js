@@ -376,8 +376,12 @@ function drawConstraint(con){
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
     ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-    drawEndMarker(wax,way,con.weldA,con.a.id==null,col);
-    drawEndMarker(wbx,wby,con.weldB,con.b.id==null,col);
+    // A vessel-interior endpoint (constraints.js §06.2d) reads con.a.id/
+    // con.b.id as null too (it has no `id` of its own), but it isn't
+    // background-anchored -- it moves with the vessel -- so the ground
+    // hatch is reserved for a *true* background end.
+    drawEndMarker(wax,way,con.weldA,con.a.id==null&&con.a.vesselId==null,col);
+    drawEndMarker(wbx,wby,con.weldB,con.b.id==null&&con.b.vesselId==null,col);
     return;
   }
   if(con.type==='slot'){
@@ -404,10 +408,17 @@ function drawConstraint(con){
     drawEndMarker(wbx,wby,con.prismaticB,con.b.id==null,col);
     return;
   }
+  if(con.type==='pin'){
+    // Either end may be a vessel-interior point (constraints.js §06.2d) --
+    // epWorld handles both that and a plain body, and the two endpoints
+    // coincide by construction, so drawing con.a's alone is enough.
+    const [wax,way]=epWorld(con.a);
+    jointDot(wax,way,col);
+    return;
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
-  if(con.type==='pin'){ jointDot(wax,way,col); }
-  else if(con.type==='belt'){
+  if(con.type==='belt'){
     const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
     drawRim(A.x,A.y,con.rA,col); drawRim(B.x,B.y,con.rB,col);
     ctx.strokeStyle=col; ctx.lineWidth=2.5;

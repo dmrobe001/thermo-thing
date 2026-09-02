@@ -888,13 +888,15 @@ function runToolClick(wx,wy){
   if(tool==='rod'){
     // Each end snaps to a body if one is under/near the click, else attaches
     // to the background at the raw world point (id:null), or -- failing
-    // both -- a vessel-interior point (constraints.js §06.2d).
+    // both -- a vessel-interior point (constraints.js §06.2d). pending
+    // wraps {ep,wp} (not the bare endpoint) so drawPending (render.js
+    // §11.7) still has a plain world point to draw the pending anchor at.
     if(!pending){ const t=anchorOrVesselTarget(wx,wy);
-      pending = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
+      pending = { ep: t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]}, wp:[wx,wy] };
       return; }
     const t=anchorOrVesselTarget(wx,wy);
     const Bep = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
-    const Aep=pending;
+    const Aep=pending.ep;
     if((Aep.id==null&&Aep.vesselId==null) && (Bep.id==null&&Bep.vesselId==null)) return; // a rod needs at least one real target -- keep pending, wait for a better second click
     if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself -- ditto
     pending=null;
@@ -937,11 +939,11 @@ function runToolClick(wx,wy){
     // at creation (makeSpringCon, constraints.js §06.6) -- no weld concept
     // here, a spring only ever pulls/pushes along its own line.
     if(!pending){ const t=anchorOrVesselTarget(wx,wy);
-      pending = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
+      pending = { ep: t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]}, wp:[wx,wy] };
       return; }
     const t=anchorOrVesselTarget(wx,wy);
     const Bep = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
-    const Aep=pending;
+    const Aep=pending.ep;
     if((Aep.id==null&&Aep.vesselId==null) && (Bep.id==null&&Bep.vesselId==null)) return; // a spring needs at least one real target -- keep pending, wait for a better second click
     if(Aep.id!=null && Bep.id===Aep.id) return;    // can't spring a body to itself -- ditto
     pending=null;
@@ -997,14 +999,32 @@ cv.addEventListener('pointermove',e=>{
   if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
   if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
   if(vesselDrag){
-    // Translate the whole vessel rigidly (head and cap by the identical
-    // world-space delta, so the axial separation -- and sepRate -- are
-    // untouched), the edit-mode counterpart of an ordinary body's pose drag.
+    // The edit-mode counterpart of an ordinary body's pose drag. When the
+    // head end is a real (free) body, translate head and cap by the
+    // identical world-space delta -- a pure rigid shift that leaves the
+    // hidden prismatic's own rows already exactly satisfied (the axial
+    // separation and sepRate are untouched), no different from picking up
+    // the whole assembly. When the head is world-anchored, there's no
+    // "whole vessel" to translate at all -- only the cap can move, and
+    // only along the fixed axis (extend/compress), like dragging the
+    // piston face on a wall-mounted cylinder; projecting the raw delta
+    // onto the axis here (rather than handing an arbitrary 2D delta to
+    // the cap and letting projectPositions claw the lateral part back out)
+    // avoids a large transient lateral error the prismatic's angle-lock
+    // rows can otherwise over-correct through, dragging the axial position
+    // along with it.
     const dx=mouseWorld[0]-vesselDrag.wx, dy=mouseWorld[1]-vesselDrag.wy;
     vesselDrag.wx=mouseWorld[0]; vesselDrag.wy=mouseWorld[1];
     const g=vesselDrag.g;
-    if(g.head.id!=null){ const hb=bodies[bodyIndex(g.head.id)]; if(hb && !hb.static){ hb.x+=dx; hb.y+=dy; } }
-    if(g.piston){ const cb=bodies[bodyIndex(g.piston.id)]; if(cb){ cb.x+=dx; cb.y+=dy; } }
+    if(g.head.id!=null){
+      const hb=bodies[bodyIndex(g.head.id)];
+      if(hb && !hb.static){ hb.x+=dx; hb.y+=dy; }
+      if(g.piston){ const cb=bodies[bodyIndex(g.piston.id)]; if(cb){ cb.x+=dx; cb.y+=dy; } }
+    } else if(g.piston){
+      const cb=bodies[bodyIndex(g.piston.id)];
+      if(cb){ const f=gasFrame(g); const along=dx*f.dW[0]+dy*f.dW[1];
+        cb.x+=f.dW[0]*along; cb.y+=f.dW[1]*along; }
+    }
     projectPositions(8);
     saveState();
     return;
