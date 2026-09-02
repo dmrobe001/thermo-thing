@@ -21,7 +21,7 @@ function energy(island){
     ke+=0.5*b.mass*(b.vx*b.vx+b.vy*b.vy)+0.5*b.I*b.w*b.w;
     if(sim.gravity) pe+=b.mass*sim.g*b.y;
   }
-  let U=0; for(const g of gss) U += g.n*(1/(g.gamma-1))*g.T;   // internal energy of the gas
+  let U=0; for(const g of gss) U += g.mass*(1/(g.gamma-1))*g.T;   // internal energy of the gas
   // spring potential energy: 0.5*k*deviation^2 for each linear (length) and
   // rotational (angle) spring, so §08.6's rescale sees them as a legitimate
   // KE<->PE channel rather than a discrepancy to erase (see physics.js §08.6).

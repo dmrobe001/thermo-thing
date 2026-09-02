@@ -169,18 +169,18 @@ function applyHeatPair(iA,iB,h){
   const TA = gA?gA.T:sim.bg.T, TB = gB?gB.T:sim.bg.T;
   const D0=TA-TB; if(D0===0) return;
   if(gA && gB){
-    const CA=gA.n/(gA.gamma-1), CB=gB.n/(gB.gamma-1);
+    const CA=gA.mass/(gA.gamma-1), CB=gB.mass/(gB.gamma-1);
     const D1=D0*Math.exp(-cond*(1/CA+1/CB)*h);
     const W=CA*TA+CB*TB;
     const TA1=(W+CB*D1)/(CA+CB), TB1=(W-CA*D1)/(CA+CB);
     gA._Qstep+=CA*(TA1-TA); gA.T=TA1;
     gB._Qstep+=CB*(TB1-TB); gB.T=TB1;
   } else if(gA){
-    const CA=gA.n/(gA.gamma-1);
+    const CA=gA.mass/(gA.gamma-1);
     const TA1=TB+D0*Math.exp(-cond/CA*h);
     gA._Qstep+=CA*(TA1-TA); gA.T=TA1;
   } else {
-    const CB=gB.n/(gB.gamma-1);
+    const CB=gB.mass/(gB.gamma-1);
     const TB1=TA-D0*Math.exp(-cond/CB*h);
     gB._Qstep+=CB*(TB1-TB); gB.T=TB1;
   }
@@ -223,7 +223,7 @@ function applyFlowPair(iA,iB,h){
   const VA = gA?Math.max(gA.bore*gasFrame(gA).xc,1e-6):null;
   const VB = gB?Math.max(gB.bore*gasFrame(gB).xc,1e-6):null;
   const sA = gA?gA.T/VA:null, sB = gB?gB.T/VB:null;
-  const PA = gA?gA.n*sA:sim.bg.P, PB = gB?gB.n*sB:sim.bg.P;
+  const PA = gA?gA.mass*sA:sim.bg.P, PB = gB?gB.mass*sB:sim.bg.P;
   let dnBtoA; // net moles moved from B's side to A's side this substep (signed)
   if(gA && gB){
     // dn_A/dt = flowCond(P_B-P_A) = -flowCond·D (D=P_A-P_B), so n_A moves
@@ -233,24 +233,24 @@ function applyFlowPair(iA,iB,h){
     dnBtoA=-(D0-D1)/(sA+sB);
   } else if(gA){
     const nEq=sim.bg.P/sA;
-    dnBtoA=(nEq-gA.n)*(1-Math.exp(-flowCond*sA*h));
+    dnBtoA=(nEq-gA.mass)*(1-Math.exp(-flowCond*sA*h));
   } else {
     const nEq=sim.bg.P/sB;
-    dnBtoA=-(nEq-gB.n)*(1-Math.exp(-flowCond*sB*h));
+    dnBtoA=-(nEq-gB.mass)*(1-Math.exp(-flowCond*sB*h));
   }
   if(!isFinite(dnBtoA) || dnBtoA===0) return;
   const mdot=dnBtoA/h; // molar rate into A (out of B)
   if(dnBtoA>0){
     const Tsrc = gB?gB.T:sim.bg.T, cvSrc = gB?1/(gB.gamma-1):1/(sim.bg.gamma-1);
-    if(gB) gB.n=Math.max(gB.n-dnBtoA,1e-6);
-    if(gA){ const cvA=1/(gA.gamma-1); const Uold=gA.n*cvA*gA.T; const dU=dnBtoA*cvSrc*Tsrc;
-      gA.n+=dnBtoA; gA.T=(Uold+dU)/(gA.n*cvA); gA._Qstep+=dU; }
+    if(gB) gB.mass=Math.max(gB.mass-dnBtoA,1e-6);
+    if(gA){ const cvA=1/(gA.gamma-1); const Uold=gA.mass*cvA*gA.T; const dU=dnBtoA*cvSrc*Tsrc;
+      gA.mass+=dnBtoA; gA.T=(Uold+dU)/(gA.mass*cvA); gA._Qstep+=dU; }
   } else {
     const dn=-dnBtoA;
     const Tsrc = gA?gA.T:sim.bg.T, cvSrc = gA?1/(gA.gamma-1):1/(sim.bg.gamma-1);
-    if(gA) gA.n=Math.max(gA.n-dn,1e-6);
-    if(gB){ const cvB=1/(gB.gamma-1); const Uold=gB.n*cvB*gB.T; const dU=dn*cvSrc*Tsrc;
-      gB.n+=dn; gB.T=(Uold+dU)/(gB.n*cvB); gB._Qstep+=dU; }
+    if(gA) gA.mass=Math.max(gA.mass-dn,1e-6);
+    if(gB){ const cvB=1/(gB.gamma-1); const Uold=gB.mass*cvB*gB.T; const dU=dn*cvSrc*Tsrc;
+      gB.mass+=dn; gB.T=(Uold+dU)/(gB.mass*cvB); gB._Qstep+=dU; }
   }
   if(gA) gA._flowForce += flowForceMag(mdot, gB?gB.T:sim.bg.T, gA.T);
   if(gB) gB._flowForce += flowForceMag(-mdot, gA?gA.T:sim.bg.T, gB.T);
@@ -258,6 +258,12 @@ function applyFlowPair(iA,iB,h){
 // ---- §08.1 · applied forces -> candidate velocities ----
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
+  // Keep every vessel's cap body mass equal to its gas's own mass/3 (the
+  // ramp-profile effective inertia, geometry.js) *before* islands/preE are
+  // captured below -- so a mass change from the previous substep's flow
+  // transfer is already baked into this substep's energy baseline instead
+  // of being read as drift by §08.6's rescale.
+  for(const g of gases) syncVesselCapMass(g);
   const N=bodies.length;
   // Snapshot each island's pre-substep energy budget (§08.6's target) and
   // momentum (§08.6's momentum-conservation target for a free island)
@@ -308,7 +314,7 @@ function substep(h){
   // gas's own boundary via a flow interaction.
   for(const g of gases){
     const f=gasFrame(g);
-    const P=g.n*g.T/(g.bore*f.xc); g._P=P; g._V=g.bore*f.xc; g._x=f.x; g._dW=f.dW;
+    const P=g.mass*g.T/(g.bore*f.xc); g._P=P; g._V=g.bore*f.xc; g._x=f.x; g._dW=f.dW;
     const Fmag=(P-sim.bg.P)*g.bore + g._flowForce;
     const Fx=Fmag*f.dW[0], Fy=Fmag*f.dW[1];
     if(f.A && !f.A.static){ FX[f.ia]+=Fx; FY[f.ia]+=Fy; TAU[f.ia]+= f.prx*Fy - f.pry*Fx; }
@@ -333,12 +339,19 @@ function substep(h){
   // §06.1), reused as-is since a spring needs only L and the unit direction,
   // never phi (there is no weld/angle-lock row for a force element).
   for(const sp of springs){
-    const f=twoPointFrame(sp);
-    const {hasA,hasB,ia,ib,rax,ray,rbx,rby,ux,uy,L}=f;
+    // Either endpoint may be a vessel-interior point (constraints.js
+    // §06.2d) -- epFrame handles both uniformly; a force (Fx,Fy) applied at
+    // a point is exactly that point's velCols evaluated at (Fx,Fy) rather
+    // than a unit direction (virtual-work identity, see §06.2d's comment).
+    const A=epFrame(sp.a), B=epFrame(sp.b);
+    const dx=A.wx-B.wx, dy=A.wy-B.wy, L=Math.hypot(dx,dy)||1e-9;
+    const ux=dx/L, uy=dy/L;
     const Fmag=sp.k*(sp.restLen-L);
     const Fx=Fmag*ux, Fy=Fmag*uy;
-    if(hasA && !bodies[ia].static){ FX[ia]+=Fx; FY[ia]+=Fy; TAU[ia]+= rax*Fy - ray*Fx; }
-    if(hasB && !bodies[ib].static){ FX[ib]-=Fx; FY[ib]-=Fy; TAU[ib]+= rbx*(-Fy) - rby*(-Fx); }
+    for(const [idx,cx,cy,cw] of mergeCols([A.velCols(Fx,Fy), B.velCols(-Fx,-Fy)])){
+      if(bodies[idx].static) continue;
+      FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw;
+    }
   }
   // rotational spring force elements: torsional, tau = k*(restAngle-thRel)
   // between the two bodies' frame angles (background reads as a fixed
@@ -627,7 +640,7 @@ function substep(h){
     // P_bg·dV on every reflecting step once dU alone stopped leaking.
     const dU = g._reflected ? 0 : -g._P*dV;
     const cv=1/(g.gamma-1);
-    g.T += dU/(g.n*cv);
+    g.T += dU/(g.mass*cv);
     let clampedAway=0;
     if(g.T<1e-4){
       // T can't actually go negative, but the substep that would have taken
@@ -645,7 +658,7 @@ function substep(h){
       // out of the invariant the same way real atmospheric flow work is --
       // it already left the tracked KE+PE+U system as real KE, so it
       // shouldn't also sit in keTarget waiting to be clawed back.
-      clampedAway=(1e-4-g.T)*(g.n*cv);
+      clampedAway=(1e-4-g.T)*(g.mass*cv);
       g.T=1e-4;
     }
     g._Q=g._Qstep/h;

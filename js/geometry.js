@@ -44,6 +44,43 @@ function refreshInertia(b){
   b.invM=b.static?0:1/b.mass; b.invI=b.static?0:1/b.I;
 }
 function setBodyMass(b,m){ b.mass=m; refreshInertia(b); }
+// A gas vessel's cap body (the "piston is a hidden auxiliary body" redesign,
+// DEVELOPMENT.md §6.1) doesn't carry an independently-editable structural
+// mass -- its inertia *is* the gas's own, distributed uniformly along the
+// axial span with one end (the head) fixed: the classic "one end fixed,
+// mass distributed uniformly along the moving segment" rod result gives an
+// effective inertia of mass/3 at the moving end. Called once per substep
+// (physics.js §08.0, before islands/preE are snapshotted -- so a mass
+// change from the *previous* substep's flow transfer is already baked into
+// the new energy baseline, not read as drift by §08.6's rescale) and
+// immediately on any inspector edit to the vessel's mass field.
+const EFF_MASS_FLOOR = 1e-6;
+function syncVesselCapMass(v){
+  if(!v.piston) return;
+  const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
+  setBodyMass(cap, Math.max(v.mass/3, EFF_MASS_FLOOR));
+}
+// Reposition a vessel's length -- for a movable piston, this means moving
+// the cap body itself along the axis (keeping its orientation and the
+// hidden prismatic's rotation lock intact; projectPositions settles any
+// other joint riding on it, mirroring how the inspector's rod-length edit
+// calls projectPositions after a direct length change); for a fixed vessel
+// (no piston body), it's a bare constant. Used by the inspector's
+// radio-lock recompute (inspector.js) whenever `length` is the field being
+// derived or edited.
+function setVesselLength(v, newLen){
+  newLen = Math.max(newLen, GAS_MIN_X);
+  if(v.piston){
+    const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
+    const f = gasFrame(v);
+    const wx = f.hx + f.dW[0]*newLen, wy = f.hy + f.dW[1]*newLen;
+    const [ox,oy] = R(cap.th, v.piston.off[0], v.piston.off[1]);
+    cap.x = wx-ox; cap.y = wy-oy;
+    projectPositions(8);
+  } else {
+    v.len = newLen;
+  }
+}
 
 // ---- §05.2b · shape-generic body geometry ----
 // A handful of pure functions any picking/snapping/rendering code can call

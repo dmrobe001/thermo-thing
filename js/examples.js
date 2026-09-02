@@ -18,15 +18,24 @@ function loadExample(kind){
   // A rod pinned to a fixed background point -- the free-swinging pivot a
   // pendulum needs (both ends unwelded, unlike the tool's rigid-strut default).
   const rodBG=(wx,wy,B)=>constraints.push(makeRodCon({id:null,off:[wx,wy]},{id:B.id,off:[0,0]},false,false));
-  // A vertical piston P sliding in a world-fixed cylinder, with a gas below it
-  // (head at headOff, axis +y) and the auto piston<->cylinder hidden
-  // prismatic link a real placement (tools.js §13.5) would also create --
-  // shared by the gasspring and heatengine examples below.
-  const gasPiston=(P,headOff,T,n=5,gamma=1.4,bore=1.0)=>{
-    const link=makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:headOff}, true, true);
-    const g={kind:'gas', id:uid++, head:{id:null,off:headOff,dir:[0,1]}, piston:{id:P.id,off:[0,0]}, bore, n, gamma, T, sel:false};
+  // A vertical piston vessel in a world-fixed cylinder (head at headOff,
+  // axis +y, initial length `len`) -- the redesigned single-object piston
+  // (DEVELOPMENT.md §6.1): a synthetic, auto-managed cap body (hidden from
+  // the player as a separate body, drawn as part of the one vessel
+  // rectangle) linked to the head frame by the same hidden prismatic a real
+  // placement (tools.js §13.5) would also create, its own mass forced to
+  // the gas's mass/3 effective inertia rather than an independently-set
+  // plate mass. Shared by the gasspring and heatengine examples below;
+  // returns the vessel, with `g.piston.id` already naming the cap body.
+  const gasPiston=(headOff,T,mass=5,gamma=1.4,bore=1.0,len=1.0)=>{
+    const cap=makeRectBody(headOff[0], headOff[1]+len, bore/2, 0.06, false);
+    cap.synthetic=true; bodies.push(cap);
+    const head={id:null, off:headOff, dir:[0,1]}, piston={id:cap.id, off:[0,0]};
+    const link=makeSlotCon(piston, head, true, true);
+    const g={kind:'gas', id:uid++, head, piston, bore, mass, gamma, T, lockedField:'P', sel:false};
     link.hidden=true; link.gasLink=g.id;
     constraints.push(link); gases.push(g);
+    syncVesselCapMass(g);
     return g;
   };
   if(kind==='pendulum'){ const b=dy(2.6,4.4); rodBG(0,4.4,b); }
@@ -40,24 +49,24 @@ function loadExample(kind){
     // pins phi=atan2(...) directly (§06.5), which is singular if P ever passes
     // through the anchor -- keep it well outside P's travel range.
     constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x-10,P.y]}, false, true)); }
-  else if(kind==='gasspring'){ const P=dy(0,2.8,0.4);
+  else if(kind==='gasspring'){
     // No heat/flow interactions at all -- with nothing to exchange with, the
     // gas traverses its adiabat purely through the mechanical P·dV term
     // (physics.js §08.5), exactly the "kappa=0" gas spring the old reservoir
     // model needed a special-cased toggle for.
-    gasPiston(P,[P.x,P.y-1],1.0); }
-  else if(kind==='heatengine'){ const P=dy(0,2.8,0.4);
+    gasPiston([0,1.8],1.0); }
+  else if(kind==='heatengine'){
     // Same piston/cylinder as the gas spring above, but started hot (T=2,
     // background defaults to T=1) and with a heat *and* a flow interaction
-    // from the piston plate to both the gas and the background -- the plate
-    // mediates both couplings (spec: two interactions sharing a body couple
-    // whatever they each name), so heat and mass both leak from the hot gas
-    // out to atmosphere at a finite rate, and the piston settles as they do.
-    const g=gasPiston(P,[P.x,P.y-1],2.0);
-    heatInteractions.push({kind:'heat', id:uid++, bodyId:P.id, gasId:g.id, k:1.5, sel:false});
-    heatInteractions.push({kind:'heat', id:uid++, bodyId:P.id, gasId:null, k:1.5, sel:false});
-    flowInteractions.push({kind:'flow', id:uid++, bodyId:P.id, gasId:g.id, k:0.4, sel:false});
-    flowInteractions.push({kind:'flow', id:uid++, bodyId:P.id, gasId:null, k:0.4, sel:false}); }
+    // from the cap to both the gas and the background -- it mediates both
+    // couplings (spec: two interactions sharing a body couple whatever they
+    // each name), so heat and mass both leak from the hot gas out to
+    // atmosphere at a finite rate, and the piston settles as they do.
+    const g=gasPiston([0,1.8],2.0);
+    heatInteractions.push({kind:'heat', id:uid++, bodyId:g.piston.id, gasId:g.id, k:1.5, sel:false});
+    heatInteractions.push({kind:'heat', id:uid++, bodyId:g.piston.id, gasId:null, k:1.5, sel:false});
+    flowInteractions.push({kind:'flow', id:uid++, bodyId:g.piston.id, gasId:g.id, k:0.4, sel:false});
+    flowInteractions.push({kind:'flow', id:uid++, bodyId:g.piston.id, gasId:null, k:0.4, sel:false}); }
   else if(kind==='skate'){ sim.gravity=false; if(gc) gc.checked=false;
     const b=dy(0,2.6,0.45);
     constraints.push({type:'knife', a:{id:b.id, off:[0.42,0]}, dir:[1,0], sel:false}); }
