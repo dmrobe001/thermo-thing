@@ -4,6 +4,7 @@
 //  sparkline. The running energy total is the honesty check: with no dissipation
 //  it should hold flat (spec §7, system-level accounting).
 //    §12.1  energy     (KE + PE + spring PE + gas internal + atmospheric -> totals)
+//    §12.1b bathTotal  (the ledger total, net of what the background bath supplied)
 //    §12.2  updateHUD  (write ledger/status DOM, push spark history)
 //    §12.3  drawSpark  (total-energy trace)
 // ============================================================================
@@ -37,6 +38,17 @@ function energy(island){
   for(const rs of rss){ const dev=rotSpringRelAngle(rs)-rs.restAngle; SPE += 0.5*rs.k*dev*dev; }
   return {ke,pe,SPE,U,WA,tot:ke+pe+SPE+U+WA};
 }
+// ---- §12.1b · bathTotal ----
+// The scene total the ledger and the sparkline actually show. `energy().tot` is the
+// world's own mechanical+gas content, which is what §08.6 defends per island; but a
+// heat or mass interaction against the BACKGROUND (physics.js §08.0b) legitimately
+// moves energy across a boundary the world does not track, because the background is
+// an infinite reservoir rather than a body. sim.bathQ is the running total the bath
+// has supplied, so subtracting it restores the flat line: the ledger shows it as its
+// own row (negated, so the rows still sum to the total displayed) and the honesty
+// check keeps meaning what it meant before interactions existed. In any scene with no
+// background interaction, bathQ is identically zero and nothing here changes.
+function bathTotal(e){ return e.tot - sim.bathQ; }
 // ---- §12.2 · updateHUD ----
 function updateHUD(){
   const e=energy();
@@ -45,13 +57,15 @@ function updateHUD(){
   const esp=document.getElementById('eSPE'); if(esp) esp.textContent=e.SPE.toFixed(2);
   const eu=document.getElementById('eU'); if(eu) eu.textContent=e.U.toFixed(2);
   const ea=document.getElementById('eWA'); if(ea) ea.textContent=e.WA.toFixed(2);
-  document.getElementById('eTot').textContent=e.tot.toFixed(2);
-  document.getElementById('eTotHead').textContent=e.tot.toFixed(2);
+  const eb=document.getElementById('eBath'); if(eb) eb.textContent=(-sim.bathQ).toFixed(2);
+  const tot=bathTotal(e);
+  document.getElementById('eTot').textContent=tot.toFixed(2);
+  document.getElementById('eTotHead').textContent=tot.toFixed(2);
   document.getElementById('status').textContent=
     `${sim.running?'running':'paused'} · ${bodies.length} bodies · ${constraints.length} constraints`
     + (!sim.running && violCount ? ` · [!] ${violCount} unsatisfied` : '');
-  if(sim.running){ eHist.push(e.tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
-  if(selBody||selConstraint||selCable||selSpring||selRotSpring) updateInspectorLive();
+  if(sim.running){ eHist.push(tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
+  if(selBody||selConstraint||selCable||selSpring||selRotSpring||selInteraction) updateInspectorLive();
 }
 // ---- §12.3 · drawSpark ----
 function drawSpark(){

@@ -106,8 +106,13 @@
   .spacer{flex:1}
 
   /* ---- §02.4 · left tool rail ---- */
+  /* The rail grows with the tool count (16 of them as of the heat/mass interaction
+     tools), so it is allowed to scroll rather than clip its last entry on a short
+     window -- the delete tool at the bottom must never be the one that falls off. */
   #rail{grid-row:2;background:var(--panel);border-right:1px solid var(--hair);
-        display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 0}
+        display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;
+        overflow-y:auto;scrollbar-width:none}
+  #rail::-webkit-scrollbar{width:0}
   .tool{width:40px;height:40px;border-radius:8px;border:1px solid transparent;background:transparent;
         color:var(--mid);cursor:pointer;display:grid;place-items:center;position:relative}
   .tool:hover{background:var(--panel-2);color:var(--hi)}
@@ -118,7 +123,7 @@
         color:var(--hi);font-family:var(--mono);font-size:11px;padding:4px 8px;border-radius:6px;
         opacity:0;pointer-events:none;transition:.1s;transform:translateX(-4px);z-index:20}
   .tool:hover .tip{opacity:1;transform:translateX(0)}
-  .rail-sep{width:24px;height:1px;background:var(--hair);margin:4px 0}
+  .rail-sep{width:24px;height:1px;background:var(--hair);margin:2px 0}
 
   /* ---- §02.5 · canvas / stage / hint / status ---- */
   #stage{grid-row:2;position:relative;overflow:hidden}
@@ -237,6 +242,7 @@
         <div class="row"><span class="k">spring</span><span class="v" id="eSPE">0.00</span></div>
         <div class="row"><span class="k">gas internal</span><span class="v" id="eU">0.00</span></div>
         <div class="row"><span class="k">atmospheric</span><span class="v" id="eWA">0.00</span></div>
+        <div class="row"><span class="k">bath</span><span class="v" id="eBath">0.00</span></div>
         <div class="row total"><span class="k">total</span><span class="v" id="eTot">0.00</span></div>
         <canvas id="spark"></canvas>
       </div>

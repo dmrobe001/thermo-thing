@@ -7,6 +7,7 @@
 //    §11.3  bodies            (drawBody, drawVessel, jointDot)
 //    §11.4  cable              (drawCable)
 //    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
+//    §11.4c interactions      (drawInteraction -- heat & mass exchange couplings)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
 //    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
@@ -33,6 +34,7 @@ function render(){
   for(const sp of springs) drawSpring(sp);
   for(const rs of rotSprings) drawRotSpring(rs);
   for(const con of constraints) drawConstraint(con);
+  for(const it of interactions) drawInteraction(it);
   drawHandles();
   if(sim.showForces && sim.running){ for(const con of constraints) drawReaction(con); }
   if(pending) drawPending();
@@ -346,6 +348,48 @@ function drawRotSpring(rs){
   const {pA,pB}=rotSpringControlPoints(rs);
   jointDot(pA[0],pA[1],col); jointDot(pB[0],pB[1],col);
 }
+// ---- §11.4c · interactions (heat & mass exchange) ----
+// An interaction couples one solid body to one vessel (or to the background, when
+// `vessel.id` is null) and carries no force at all -- so it is drawn as a WIRE, not a
+// joint: a dashed segment from the body's centre to the vessel's, in a warm colour
+// for heat and a cool one for mass flow. That is the same visual argument the signal
+// layer will need (DEVELOPMENT.md §5): a channel that carries something other than
+// force has to read differently from a rod, or the energy accounting the sandbox
+// exists to expose gets muddled by its own picture. A background side has no centre
+// to reach, so the line runs a fixed distance out of the body and ends in a short
+// hatch, the standard "open to atmosphere" mark.
+function interactionEndpoints(it){
+  const bi=bodyIndex(it.body.id); if(bi<0) return null;
+  const body=bodies[bi];
+  const p0=[body.x,body.y];
+  if(it.vessel.id!=null){
+    const vi=bodyIndex(it.vessel.id); if(vi<0) return null;
+    return {p0, p1:[bodies[vi].x, bodies[vi].y], bg:false};
+  }
+  return {p0, p1:[body.x, body.y+0.55], bg:true};
+}
+function drawInteraction(it){
+  const ep=interactionEndpoints(it); if(!ep) return;
+  const sel=it.sel, hoverOn=!sel && hover===it;
+  const col = sel?'#5aa9f0' : hoverOn?'#8fc4f7' : (it.type==='heat'?'#e0895a':'#5ac2e0');
+  const [x0,y0]=w2s(ep.p0[0],ep.p0[1]), [x1,y1]=w2s(ep.p1[0],ep.p1[1]);
+  ctx.save();
+  ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:2; ctx.setLineDash([5,4]);
+  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
+  ctx.setLineDash([]);
+  if(ep.bg){
+    const ang=Math.atan2(y1-y0,x1-x0);
+    for(const off of [-6,0,6]){
+      const px=x1-Math.sin(ang)*off, py=y1+Math.cos(ang)*off;
+      ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(px+Math.cos(ang)*10, py+Math.sin(ang)*10); ctx.stroke();
+    }
+  }
+  // The body end carries the dot: that is the end the PAIRING rule is about -- two
+  // dots on one body is what makes a path, and one dot on its own is inert.
+  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x0,y0,3.5,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
 // ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
 // Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
 function drawConstraint(con){

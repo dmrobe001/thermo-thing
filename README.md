@@ -8,11 +8,11 @@ The distinguishing goal is **legible energy flow**: the system exists to make th
 
 ## World model and assumptions
 
-The world is planar and its units are SI. Every rigid body carries three configuration coordinates `(x, y, theta)` and their time derivatives `(x_dot, y_dot, theta_dot)`. There is no third spatial dimension and no out-of-plane motion, though an implicit 1 m depth gives planar areas a volume -- which is what lets a **gas vessel** (a body with one extra coordinate, its length, and a gas sealed inside it) work in real pascals and kelvin. See `VESSEL.md`.
+The world is planar and its units are SI. Every rigid body carries three configuration coordinates `(x, y, theta)` and their time derivatives `(x_dot, y_dot, theta_dot)`. There is no third spatial dimension and no out-of-plane motion, though an implicit 1 m depth gives planar areas a volume -- which is what lets a **gas vessel** (a body with one extra coordinate, its length, and a gas sealed inside it) work in real pascals and kelvin. Vessels exchange heat and gas only through **interactions** the player places -- a pair of them sharing a body couples what they each name through it. See `VESSEL.md`.
 
 The following idealizations are load-bearing and should be treated as invariants of the design, not defaults to be relaxed later:
 
-**Nothing interacts unless the player says it does.** Bodies do not collide, overlap-resolve, or exert forces on one another except through constraints and force elements the player explicitly creates. This removes the broad-phase/narrow-phase collision burden from the common case and makes the default world sparse and cheap.
+**Nothing interacts unless the player says it does.** Bodies do not collide, overlap-resolve, or exert forces on one another except through constraints and force elements the player explicitly creates. This removes the broad-phase/narrow-phase collision burden from the common case and makes the default world sparse and cheap. Two vessels sitting on top of one another share nothing: heat and gas cross only where an interaction says they do, and the one outline-overlap test in the engine runs only on the pair that names it.
 
 **Friction is either absent or perfectly static.** There is no kinetic friction model. Where "friction" is wanted, it appears as a *constraint* (a static no-slip condition) rather than as a dissipative force law. This keeps the engine's force vocabulary small and keeps energy accounting clean.
 
@@ -22,7 +22,7 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
-**Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or Alt-drag -- pan · keys 1-9, b/g/k/v/c/q -- select tools.
+**Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or Alt-drag -- pan · keys 1-9, b/f/g/h/k/v/c/q -- select tools.
 
 ## Project layout
 

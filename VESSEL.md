@@ -6,16 +6,18 @@ alongside `DEVELOPMENT.md`; it references that document's section numbers (§3.2
 KKT solve, §3.3 the velocity-linear constraint class, §4.1 rod/slot rows, §6.1
 springs as force elements, §7 instrumentation) rather than repeating them.
 
-> **Status (as built):** Implemented -- §V.1 through §V.9, plus the length-locked
+> **Status (as built):** Implemented -- §V.1 through §V.10, plus the length-locked
 > reservoir of §V.8. Code: `geometry.js` §05.2d (the vessel, its inertia and the gas
-> state), §05.2c (material endpoint offsets); `constraints.js` §06.1 (`epFrame`'s
-> length column, and the rod/slot rows rebuilt on it); `physics.js` §08.1b (the gas
-> force) and §08.1/§08.3/§08.4/§08.6; `render.js` §11.3 (`drawVessel`); `tools.js`
-> §13.5 (placement, corner resize); `inspector.js` §14.2b. Heat and mass exchange
-> (§V.10) are not built. The repository previously carried a *different* gas system
-> (two synthetic boundary bodies coupled by a hidden prismatic joint, stripped in
-> commit `97f7a72`); §V.3 and §V.9 explain what that design got right, what it got
-> wrong, and why this one is not a revival of it.
+> state), §05.2c (material endpoint offsets), §05.2e (contact area);
+> `constraints.js` §06.1 (`epFrame`'s length column, and the rod/slot rows rebuilt on
+> it); `physics.js` §08.0b (heat and mass exchange) and §08.1b (the gas force), plus
+> §08.1/§08.3/§08.4/§08.6; `render.js` §11.3 (`drawVessel`) and §11.4c
+> (interactions); `tools.js` §13.1/§13.5 (placement, corner resize, the two
+> interaction tools); `inspector.js` §14.2/§14.2b; `hud.js` §12.1b. The repository
+> previously carried a *different* gas system (two synthetic boundary bodies coupled
+> by a hidden prismatic joint, stripped in commit `97f7a72`); §V.3, §V.9 and §V.10
+> explain what that design got right, what it got wrong, and why this one is not a
+> revival of it.
 
 The short version: **a vessel is one body with four configuration coordinates
 `(x, y, theta, len)`, and the gas inside it is a force element with a potential
@@ -442,28 +444,145 @@ columns exactly for two plain bodies and gets the vessel case right for free. Ev
 bundled example still conserves energy to machine precision after that refactor,
 which is the check that it was exact and not merely close.
 
-## V.10 What this sets up for heat and mass flow
+## V.10 Heat and mass exchange
 
-Deliberately out of scope here, but the shape of it matters for the choices above.
-With `U` a state function of `(kap, mass, len)`, an exchange pass runs **before** the
-force pass, at frozen geometry, and touches only `kap` and `mass`:
+This is what the state was shaped for, and the shape paid off: with `U` a state
+function of `(kap, mass, len)`, an exchange pass runs at **frozen geometry** and
+touches only `kap` and `mass`. Because `V` does not move during the pass, "how much
+energy moved" is a difference of two evaluations of a function, not an integral
+anyone has to accumulate, attribute, or decide about -- and between two vessels the
+two `dU` are exactly equal and opposite, by construction rather than by a correction
+term.
 
-* **Heat.** Volumes are fixed during the pass, so the closed-form two-body
-  exponential relaxation in `T` used previously carries over verbatim; recompute each
-  side's `kap` from its new `T` at the unchanged `V`. Because `V` did not move, the
-  two `dU` are exactly equal and opposite -- the pass is conservative by construction
-  rather than by a correction term.
-* **Mass flow.** Same relaxation with pressure and moles in place of temperature and
-  capacity, with moles carrying the source gas's internal energy across.
-* **Interactions** stay as the spec proposes -- first-class objects naming a body and
-  a vessel, active in pairs sharing a body -- which is a good fit for the existing
-  constraint/island machinery and keeps the overlap test to explicitly-paired objects.
+### The object
 
-The only new obligation on §08.6 is the one heat genuinely creates: the amount moved
-this substep is a legitimate non-mechanical energy channel and must be added to the
-island's invariant, exactly one term, computed once, with no interaction with
-anything mechanical. That is a far smaller surface than the stripped implementation's
-`_Qstep` / `_Watm` / `_reflected` triple.
+An **interaction** is a first-class element naming one solid body and one vessel
+(`vessel.id === null` reads as the background, mirroring the null-id convention used
+everywhere else). A lone interaction moves nothing. **Two interactions of the same
+kind sharing the same body are a pair:** that body is a wall between the two things
+they name, and the pair couples them *through* it. That is deliberately the same
+shape as every other coupling in the library -- a relation between two named
+participants, active only where the player put it -- and it keeps the overlap test
+below confined to explicitly-paired objects, so the sandbox's standing "nothing
+interacts unless the player says it does" invariant is exactly where it was.
+
+The rate law is the same for both kinds: the **contact area** between the body's
+outline and each vessel's rectangle (`geometry.js` §05.2e, a general convex-polygon
+clip -- a circle is approximated as a 20-gon so one routine serves every shape),
+limited by the **smaller of the two** (conduction or flow through a wall is
+bottlenecked by whichever side touches less of it), times the pair's own coefficients
+combined **in series**, `1/k_eff = 1/k_1 + 1/k_2`, like two conductors back to back.
+A background side has no outline and imposes no area limit of its own. This is the
+only place in the engine where two bodies' outlines are compared at all; it produces
+no force, and it is not the beginning of a collision system.
+
+### Heat
+
+Volumes are frozen, so the pair's own ODE is linear and is solved outright:
+
+```
+C_A T_A' = cond*(T_B - T_A),   C_B T_B' = -cond*(T_B - T_A)
+```
+
+`D = T_A - T_B` decays as `D0*exp(-lambda*h)` with `lambda = cond*(1/C_A + 1/C_B)`,
+while `C_A T_A + C_B T_B` is conserved -- so both temperatures land in **closed
+form**, unconditionally stable at any step size and incapable of overshooting
+equilibrium. Each side's new `kap` is then just its new temperature re-expressed at
+the unchanged volume, and `U = C*T` exactly (`C = mass*Rs/(gamma-1)`), so the energy
+moved reads straight off the temperature change. A background side has infinite
+capacity and never itself moves; `lambda` reduces to `cond/C` on the real side alone,
+which is Newton's law of cooling toward a fixed bath.
+
+### Mass flow
+
+The same relaxation with pressure and mass in place of temperature and capacity.
+Holding `T` and `V` frozen, each side's pressure per kilogram `s = Rs*T/V` is a
+constant and `P = m*s`, so `dm_A/dt = cond*(P_B - P_A)` is the identical linear form
+with `s` playing the role of `1/C`: the pressure difference decays exponentially,
+total mass is exactly conserved, and the amount that crossed comes out in closed
+form.
+
+What crosses carries the source's **enthalpy**, not (as an earlier draft of this
+section had it) its internal energy. Both conserve the total, but only enthalpy is
+the exact open-system balance for a rigid volume, `dU = -h dm`, and that balance
+integrates to something worth having:
+
+```
+T ~ m^(gamma-1) at fixed V     i.e.     kap_new = kap * (m_new/m_old)^gamma
+```
+
+**Removing gas from a vessel leaves what stays behind on its own isentrope** -- which
+is just the statement that the remaining gas expands reversibly into the room the
+departed gas left. So the source's whole substep is one closed-form update, exact for
+a finite `dm` rather than a small-`dm` approximation (`tools/vessel-check-exchange.js`
+checks one big step against twenty thousand small ones), and a discharging vessel
+visibly cools along its adiabat without anything having to model that as a process.
+Carrying internal energy instead would leave the source too warm and the destination
+too cold by exactly the flow work.
+
+### What the mass takes with it
+
+Mass cannot move without its momentum, so the transfer moves that too. Refusing to
+would not be the more conservative choice -- it would be the less honest one, and it
+is what the stripped implementation's invented thrust-like recoil force was standing
+in for.
+
+* **Leaving.** The source's four rates are *unchanged*: material leaves at the body's
+  own velocity, so its linear momentum, `I*w` and `mu*vlen` all drop by precisely the
+  departing mass's share, and the kinetic energy that share carried leaves with it.
+* **Arriving.** The crossing mass brings its source's translation. Its spin and
+  breathing do not survive the port, which is a throttle, not a pipe with a shape:
+  what those modes carried arrives as energy rather than as momentum. The destination
+  absorbs the linear momentum by an inelastic merge and dilutes its own spin and
+  length rates (`I*w` and `mu*vlen` held as `I` and `mu` grow).
+* **Climbing.** Gas that moves between two heights changes the scene's gravitational
+  potential, and the ledger counts a vessel's whole mass, so that change is paid for
+  out of the crossing gas's internal energy by exactly the rule the ledger uses.
+* **The remainder.** Every joule the merge did not keep as kinetic energy lands in
+  the destination's internal energy -- which is what mixing dissipation physically is.
+
+Sum it and the books close identically: linear momentum is conserved exactly, and so
+is total energy.
+
+### The obligation on §08.6 turned out to be free
+
+This section used to predict "one new term in the island's invariant: the amount moved
+this substep, computed once." Ordering the pass **before** §08.0's snapshot rather
+than after *spends* that term instead of carrying it. Every island's `preE` is simply
+read off the post-exchange state, so the rescale defends a target that already
+includes whatever the exchange moved, per island, with no channel to plumb, nothing to
+miscredit, and **not one line of §08.6 changed**. The `_Qstep` / `_Watm` / `_reflected`
+triple the stripped implementation needed has no analogue at all here.
+
+The one boundary that genuinely is outside the world is the background, which is an
+infinite reservoir rather than a tracked body. Exchange against it moves energy across
+that boundary for real, so `sim.bathQ` accumulates what the bath supplied and the
+ledger carries `-bathQ` as its own row (`hud.js` §12.1b). The running total then stays
+flat exactly as it does with no exchange at all, which is what keeps the honesty check
+honest once reservoirs exist. Between two real vessels `bathQ` is never touched.
+
+### As built, measured
+
+`physics.js` §08.0b (the pass), `geometry.js` §05.2e (contact area) and §05.2d
+(`gasC`, `gasEnthalpy`, `setVesselGasU`), `render.js` §11.4c, `tools.js` §13.1/§13.5,
+`inspector.js` §14.1/§14.2, `hud.js` §12.1b. Two bundled examples exercise it: a hot
+reservoir driving a working vessel through a plate, and a pressurized reservoir
+driving one through a port.
+
+`tools/vessel-check-exchange.js` checks both closed forms against RK4 on the raw ODEs
+(agreement to 1e-14 relative at `h` from 1/120 up to 1e6 seconds, landing *on*
+equilibrium at the largest rather than past it), the finite-`dm` isentrope against its
+own differential limit, and a transfer's energy and momentum books.
+
+In the browser at `h = 1/120`, over 50 s of play, against the scene's own peak kinetic
+energy rather than the large constant `U + P_bg*V` offset:
+
+| scene | worst `\|dE\|` |
+|---|---|
+| heat exchange (reservoir -> working vessel through a plate) | 2.9e-7 J, and the working vessel walks out quasi-statically: peak KE over the whole run is 2.9 J |
+| gas flow (reservoir -> working vessel through a port) | 3.2e-8 J |
+| a vessel cooling to the background | 1.4e-8 J, while 1.87e5 J crossed the bath boundary and was tracked |
+| two free vessels exchanging mass, spinning and breathing | linear momentum drift 1e-16 relative across the pass; total energy 4e-2 J worst against a 2.4e8 J peak KE |
 
 ## V.11 Where this model is honestly limited
 
@@ -478,6 +597,22 @@ anything mechanical. That is a far smaller surface than the stripped implementat
 * Two vessels' gases only interact through explicit interactions (§V.10), never by
   geometric overlap -- unchanged from the sandbox's standing "nothing interacts unless
   the player says it does" invariant.
+* A port has no position, only a rate. Mass transfer therefore conserves linear
+  momentum exactly but **not angular momentum**: the crossing gas is taken out of one
+  vessel's whole distribution and merged into another's, with nothing naming the point
+  it left through or arrived at. Two anchored vessels never notice; two free ones
+  exchanging mass while spinning will see their total `L` walk, in proportion to
+  `dm * ((r_A - r_B) x v)`. Giving the mediating body's own centre the job of being
+  that point would fix it and is the obvious upgrade if it ever matters (§V.12).
+* Composition is not tracked. What crosses a port is mass and energy; the receiving
+  gas keeps its own `gamma` and `Rs` rather than becoming a mixture, and gas arriving
+  from the background arrives with the destination's properties. Two vessels holding
+  genuinely different gases will each stay their own substance no matter how much
+  flows between them.
+* An interaction's contact area is a plain outline overlap, which says nothing about
+  whether the wall is actually *between* the two vessels -- a body overlapping both
+  conducts between them however it is oriented. It is a rate-law input, not a
+  geometric argument about heat paths.
 * Belt, CVT and cable-spool attachments are restricted to disks, as before; a vessel
   is not a valid pick for any of them. A cable *tether* on a vessel does work.
 * A vessel's default shell density (`VESSEL_DENSITY`, 2000 kg/m^3) is a usability
@@ -487,10 +622,14 @@ anything mechanical. That is a far smaller surface than the stripped implementat
 
 ## V.12 Open items
 
-1. Heat and mass exchange (§V.10) -- the reason the state was shaped this way, and
-   the next thing to build.
+1. Locating the port. Mass transfer conserves linear momentum but not angular
+   momentum, because nothing names the point the gas crossed at (§V.11). The
+   mediating body already *is* that point physically; routing the transfer's impulse
+   through `epFrame`'s columns at it would close the gap, and would get the length
+   coordinate's share right for free the way every other endpoint does.
 2. Power instrumentation for a vessel: `P*dV/dt` alongside the per-constraint
-   reaction readout the joints already have (`DEVELOPMENT.md` §7).
+   reaction readout the joints already have (`DEVELOPMENT.md` §7). An interaction
+   already reports its own live rate; the mechanical side does not yet.
 3. Whether a maximum length is worth exposing. Deliberately absent for now: `Upot`
    bounds the length from below, and nothing bounds it from above, so a hard enough
    spin stretches a vessel without limit (§V.6). That is real, and only becomes a

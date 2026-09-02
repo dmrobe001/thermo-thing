@@ -5,6 +5,8 @@
 //  single constraint solve projects those velocities onto the manifold, then
 //  positions integrate, then an energy-conservation rescale closes the gap the
 //  earlier stages only approximate.
+//    §08.0b heat & mass exchange -- the closed-form relaxation an interaction
+//           pair runs at frozen geometry, ahead of everything mechanical
 //    §08.1b vesselGasStep -- the gas force, as a discrete gradient of its own
 //           potential, on a vessel's length coordinate (defined ahead of §08.1,
 //           which calls it)
@@ -16,8 +18,8 @@
 //    §08.6  energy-conservation rescale (exact, chain-length-independent,
 //           momentum-conserving on any island not anchored to the world)
 //  The stage numbers below (1..4) are the original inline markers; the §08.x
-//  tokens above are the greppable handles. §08.0 is a setup pass with no
-//  original inline number of its own.
+//  tokens above are the greppable handles. §08.0 and §08.0b are setup passes
+//  with no original inline number of their own.
 // ============================================================================
 // ---- §08.0 · momentum-conserving islands ----
 // Partition the world into islands: maximal groups of bodies transitively
@@ -120,6 +122,246 @@ function islandKinematics(idxs){
   }
   return {M,cx,cy,px,py,L,Ieff};
 }
+// ---- §08.0b · heat & mass exchange between vessels ----
+// The thermodynamic pass, and the only code in the engine allowed to write a gas's
+// `kap` or `mass` (geometry.js §05.2d). It runs FIRST -- ahead of islands, ahead of
+// the energy baseline, ahead of every force -- at FROZEN geometry, which is what
+// makes each exchange a closed-form relaxation rather than a stepped ODE, and what
+// makes the two sides' dU exactly equal and opposite (VESSEL.md §V.10).
+//
+// Frozen geometry is doing real work here. Because `U` is a state function of
+// (kap, mass, len) and `len` does not move during the pass, "how much energy moved"
+// is a difference of two evaluations of that function, not an integral anyone has to
+// accumulate, attribute, or decide about. The stripped implementation's `_Qstep` /
+// `_Watm` / `_reflected` triple existed only because it integrated dU = -P dV
+// incrementally alongside a rescale that also had to be told which increments were
+// legitimate; none of it has an analogue here.
+//
+// Running before §08.0's snapshot rather than after is what leaves §08.6 completely
+// untouched. VESSEL.md §V.10 anticipated one new term in the island invariant --
+// "the amount moved this substep ... exactly one term, computed once". Ordering it
+// ahead of `preE` is that term, spent instead of carried: every island's baseline is
+// simply read off the post-exchange state, so the rescale defends a target that
+// already includes whatever the exchange moved, per island, with no channel to plumb
+// and nothing to miscredit.
+//
+// An interaction names one solid body and one vessel (`vessel.id === null` reads as
+// the background, mirroring the null-id convention used everywhere else). A LONE
+// interaction moves nothing -- there is no source or sink on the far side of the
+// body. Two interactions of the same kind sharing the same body are a PAIR: the body
+// is a wall between the two things they name, and the pair couples them *through* it.
+// That is deliberately the same shape as every other coupling in the library -- a
+// relation between two named participants, active only where the player put it -- and
+// it keeps the outline-overlap test below confined to explicitly-paired objects,
+// leaving the sandbox's "nothing interacts unless the player says it does" invariant
+// exactly where it was.
+function vesselById(id){
+  if(id==null) return null;
+  const b=bodies.find(x=>x.id===id);
+  return (b && b.shape==='vessel') ? b : null;
+}
+// The two sides of a pair and the conductance between them, or null if the pair
+// cannot move anything. The rate depends on geometry the same way for heat and for
+// mass: the contact area between the mediating body's outline and each vessel's
+// rectangle (geometry.js §05.2e), limited by the SMALLER of the two -- conduction or
+// flow through a wall is bottlenecked by whichever side touches less of it -- and the
+// two interactions' own coefficients combined in series, like two conductors back to
+// back. A background side has no outline and imposes no area limit of its own.
+function exchangePair(it,jt){
+  const bi=bodyIndex(it.body.id); if(bi<0) return null;
+  const body=bodies[bi];
+  if(it.vessel.id!=null && !vesselById(it.vessel.id)) return null;   // dangling reference
+  if(jt.vessel.id!=null && !vesselById(jt.vessel.id)) return null;
+  const A=vesselById(it.vessel.id), B=vesselById(jt.vessel.id);
+  if(A===B) return null;                        // same vessel both sides, or both background
+  const areaA = A ? contactArea(body,A) : Infinity;
+  const areaB = B ? contactArea(body,B) : Infinity;
+  const area  = Math.min(areaA,areaB);
+  if(!(area>1e-9)) return null;                 // the body does not actually touch both
+  const k = 1/(1/Math.max(it.k,1e-30)+1/Math.max(jt.k,1e-30));
+  return {A,B,area,cond:k*area};
+}
+// Exact two-sided heat relaxation over one substep. Both the equilibrium temperature
+// and the exponential approach to it fall straight out of solving the pair's linear
+// ODE analytically:
+//     C_A dT_A/dt = cond*(T_B - T_A),   C_B dT_B/dt = -cond*(T_B - T_A)
+// so D = T_A - T_B decays as D0*exp(-lambda*h) with lambda = cond*(1/C_A + 1/C_B),
+// while C_A T_A + C_B T_B is conserved -- giving both temperatures in closed form,
+// unconditionally stable at any step size and incapable of overshooting equilibrium.
+// A background side has infinite capacity: it never itself moves, and lambda reduces
+// to cond/C on the real side alone (Newton's law of cooling toward a fixed bath).
+//
+// Nothing mechanical is touched at all. Volume is frozen, mass does not move, so each
+// side's new `kap` is just its new temperature re-expressed at the unchanged volume
+// (setVesselGasMT), and U = C*T exactly (geometry.js §05.2d gasC) makes the energy
+// moved readable straight off the temperature change.
+function applyHeatPair(it,jt,h){
+  const p=exchangePair(it,jt); if(!p) return;
+  const {A,B,cond}=p;
+  const TA = A?gasT(A):sim.bg.T, TB = B?gasT(B):sim.bg.T;
+  const D0 = TA-TB; if(D0===0) return;
+  const CA = A?gasC(A):Infinity, CB = B?gasC(B):Infinity;
+  let TA1=TA, TB1=TB;
+  if(A && B){
+    if(!(CA>0) || !(CB>0)) return;              // a vessel holding no gas has no capacity
+    const D1=D0*Math.exp(-cond*(1/CA+1/CB)*h);
+    const W=CA*TA+CB*TB;
+    TA1=(W+CB*D1)/(CA+CB); TB1=(W-CA*D1)/(CA+CB);
+  } else if(A){
+    if(!(CA>0)) return;
+    TA1 = TB + D0*Math.exp(-cond/CA*h);
+  } else {
+    if(!(CB>0)) return;
+    TB1 = TA - D0*Math.exp(-cond/CB*h);
+  }
+  let dUA=0, dUB=0;
+  if(A){ dUA=CA*(TA1-TA); setVesselGasMT(A, A.gas.mass, TA1); }
+  if(B){ dUB=CB*(TB1-TB); setVesselGasMT(B, B.gas.mass, TB1); }
+  // Between two real vessels dUA + dUB is zero by construction and the world total
+  // does not move. Against the background it is exactly what the bath supplied, and
+  // the ledger's own row (state.js sim.bathQ, hud.js §12.1) carries it so the running
+  // total still reads flat.
+  if(!A || !B) sim.bathQ += dUA+dUB;
+  // Each interaction reports the rate into *its own* side, so a pair always reads as
+  // one positive and one negative. A background side's share is whatever the pair
+  // moved that the real side did not keep.
+  const aId = A?A.id:null;
+  it._rate += (it.vessel.id!=null ? (it.vessel.id===aId?dUA:dUB) : -(dUA+dUB))/h;
+  jt._rate += (jt.vessel.id!=null ? (jt.vessel.id===aId?dUA:dUB) : -(dUA+dUB))/h;
+}
+// Move `dm` kilograms of gas from `src` to `dst` (either may be null, meaning the
+// background), exactly conserving energy and linear momentum. This is the one place
+// the exchange pass touches a mechanical quantity, and it does so because mass cannot
+// move without its momentum -- refusing to carry it would be the *less* honest
+// choice, not the more conservative one. It replaces the stripped implementation's
+// separate thrust-like recoil force, which was a force law invented to stand in for
+// exactly this transfer.
+//
+//   * Leaving. Removing gas from a rigid volume leaves what stays behind on its own
+//     isentrope -- T ~ m^(gamma-1) at fixed V, i.e. kap ~ m^gamma -- which is the
+//     exact integral of the open-system balance dU = -h dm, not an approximation of
+//     it. The source's four rates are unchanged (material leaves at the body's own
+//     velocity), so its momenta drop by precisely the departing mass's share, and the
+//     kinetic energy that share carried leaves with it.
+//   * Arriving. The crossing mass brings its source's translation and the energy it
+//     took out of the source. Its spin and breathing do not survive the port, which
+//     is a throttle, not a pipe with a shape: what those modes carried arrives as
+//     energy rather than as momentum. The destination absorbs the linear momentum by
+//     an inelastic merge and dilutes its own spin and length rates (I*w and mu*vlen
+//     conserved as I and mu grow), and every joule the merge did not keep as kinetic
+//     energy lands in the destination's internal energy -- which is what mixing
+//     dissipation physically is.
+//   * Climbing. Mass that moves between two different heights changes the scene's
+//     gravitational potential, and the ledger counts a vessel's whole mass (hud.js
+//     §12.1), so that change is real and has to be paid for: gas that goes up pays
+//     m*g*dy out of its own internal energy, gas that comes down is warmed by it.
+//     `peOf` reads height by exactly the rule the ledger does -- a static body's
+//     potential is not tracked, so it contributes none -- which is what keeps the two
+//     books identical rather than merely similar.
+//
+// Sum it: the source gives up (kinetic carried + energy carried), the destination
+// takes on (kinetic absorbed + potential gained + all the rest), and the terms cancel
+// identically. Against the background the same quantities cross sim.bathQ instead.
+function vesselMassTransfer(src,dst,dm){
+  const peOf = v => (v && !v.static && sim.gravity) ? sim.g*v.y : 0;
+  if(!(dm>0)) return 0;
+  if(src) dm=Math.min(dm, src.gas.mass);
+  if(!(dm>1e-18)) return 0;
+  let eCarried, keCarried=0, svx=0, svy=0;
+  if(src){
+    const m0=src.gas.mass, U0=gasU(src);
+    src.gas.mass = m0-dm;
+    src.gas.kap  = src.gas.kap*Math.pow(src.gas.mass/m0, src.gas.gamma);
+    eCarried = U0-gasU(src);                    // == the enthalpy the crossing mass carries
+    keCarried = 0.5*dm*(src.vx*src.vx+src.vy*src.vy)
+              + 0.5*(dm*(src.bore*src.bore+src.len*src.len)/12)*src.w*src.w
+              + 0.5*(dm/12)*src.vlen*src.vlen;
+    svx=src.vx; svy=src.vy;
+    refreshVessel(src);
+  } else {
+    // From the background: ambient air, at rest, arriving with the destination's own
+    // gas properties. Composition is not tracked -- what crosses a port here is mass
+    // and energy, never a second substance (VESSEL.md §V.11).
+    const g=dst.gas.gamma;
+    eCarried = dm*g*dst.gas.Rs*sim.bg.T/(g-1);
+    sim.bathQ += eCarried;
+  }
+  // Off to the background: its enthalpy, its kinetic energy and the potential its
+  // height carried all leave the tracked world together, and the bath took them.
+  if(!dst){ sim.bathQ -= eCarried+keCarried+dm*peOf(src); return dm; }
+  const m0=dst.mass, I0=dst.I, mu0=dst.mu;
+  const ke0=0.5*m0*(dst.vx*dst.vx+dst.vy*dst.vy)+0.5*I0*dst.w*dst.w+0.5*mu0*dst.vlen*dst.vlen;
+  const U0=gasU(dst);
+  dst.gas.mass+=dm; refreshVessel(dst);
+  dst.vx=(m0*dst.vx+dm*svx)/dst.mass; dst.vy=(m0*dst.vy+dm*svy)/dst.mass;
+  dst.w   = I0 *dst.w   /dst.I;
+  dst.vlen= mu0*dst.vlen/dst.mu;
+  const ke1=0.5*dst.mass*(dst.vx*dst.vx+dst.vy*dst.vy)+0.5*dst.I*dst.w*dst.w+0.5*dst.mu*dst.vlen*dst.vlen;
+  const ePE=dm*(peOf(dst)-peOf(src));
+  setVesselGasU(dst, U0+eCarried+keCarried-(ke1-ke0)-ePE);
+  return dm;
+}
+// Exact two-sided mass relaxation, the transfer analogue of applyHeatPair. Holding T
+// and V frozen over the substep -- the same stance the whole pass takes -- each side's
+// pressure per kilogram s = Rs*T/V is a constant and P = m*s, so
+//     dm_A/dt = cond*(P_B - P_A),   dm_B/dt = -cond*(P_B - P_A)
+// is the identical linear form as the heat ODE with s playing the role of 1/C: the
+// pressure difference decays as D0*exp(-lambda*h) with lambda = cond*(s_A + s_B),
+// total mass is exactly conserved, and the amount that crossed comes out in closed
+// form. A background side holds a fixed P and the real side alone relaxes toward the
+// mass that gives it ambient pressure.
+//
+// An evacuated vessel has no temperature of its own (gasT reads 0 at zero mass), so
+// its `s` is taken at the other side's temperature -- a stand-in only for the rate
+// law's slope. Its pressure is still exactly zero, because m = 0.
+function applyFlowPair(it,jt,h){
+  const p=exchangePair(it,jt); if(!p) return;
+  const {A,B,cond}=p;
+  const rawTA = A?gasT(A):sim.bg.T, rawTB = B?gasT(B):sim.bg.T;
+  const Tref = Math.max(rawTA, rawTB, 1e-3);
+  const TA = rawTA>1e-6?rawTA:Tref, TB = rawTB>1e-6?rawTB:Tref;
+  const sA = A? A.gas.Rs*TA/vesselVol(A) : 0;
+  const sB = B? B.gas.Rs*TB/vesselVol(B) : 0;
+  const PA = A? A.gas.mass*sA : sim.bg.P;
+  const PB = B? B.gas.mass*sB : sim.bg.P;
+  let dm;                                        // signed: kilograms moved from B into A
+  if(A && B){
+    if(!(sA+sB>0)) return;
+    const D0=PA-PB, D1=D0*Math.exp(-cond*(sA+sB)*h);
+    dm = -(D0-D1)/(sA+sB);
+  } else if(A){
+    if(!(sA>0)) return;
+    dm = (sim.bg.P/sA - A.gas.mass)*(1-Math.exp(-cond*sA*h));
+  } else {
+    if(!(sB>0)) return;
+    dm = -(sim.bg.P/sB - B.gas.mass)*(1-Math.exp(-cond*sB*h));
+  }
+  if(!isFinite(dm) || dm===0) return;
+  const moved = dm>0 ? vesselMassTransfer(B,A,dm) : -vesselMassTransfer(A,B,-dm);
+  if(moved===0) return;
+  const aId = A?A.id:null;                       // `moved` is signed into A's side
+  it._rate += (it.vessel.id===aId ? moved : -moved)/h;
+  jt._rate += (jt.vessel.id===aId ? moved : -moved)/h;
+}
+// One pass over every interaction pair. Interactions are grouped by the body they
+// name; within a body, every unordered same-kind pair runs. Several simultaneous
+// pairs are resolved by sequential operator splitting (each pair's relaxation sees
+// the previous pair's already-updated state) rather than one joint solve -- each
+// pair's own math stays exactly conservative, which is the property that matters.
+function vesselExchangeStep(h){
+  if(!interactions.length) return;
+  for(const it of interactions) it._rate=0;
+  const byBody=new Map();
+  for(const it of interactions){ let a=byBody.get(it.body.id); if(!a){ a=[]; byBody.set(it.body.id,a); } a.push(it); }
+  for(const [,list] of byBody){
+    for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++){
+      if(list[i].type!==list[j].type) continue;
+      if(list[i].type==='heat') applyHeatPair(list[i],list[j],h);
+      else                      applyFlowPair(list[i],list[j],h);
+    }
+  }
+}
+
 // ---- §08.1b · vesselGasStep (the gas force, as a discrete gradient) ----
 // Advance one vessel's length rate under the gas, the atmosphere, and every other
 // generalized force already accumulated on that coordinate (`Fother`).
@@ -187,6 +429,11 @@ function substep(h){
   // kept for the trapezoidal length update at §08.4 -- that update, paired with
   // §08.1b's discrete-gradient force, is what makes the gas exactly conservative.
   refreshVessels();
+  // The thermodynamic pass (§08.0b), at frozen geometry and ahead of everything
+  // mechanical -- including the energy/momentum snapshot below, which is exactly what
+  // spares §08.6 a heat channel of its own. Whatever an interaction pair moved is
+  // already standing in the state `preE` is about to read.
+  vesselExchangeStep(h);
   for(const b of bodies) if(b.shape==='vessel') b._vlen0=b.vlen;
   // Snapshot each island's pre-substep energy budget (§08.6's target) and
   // momentum (§08.6's momentum-conservation target for a free island)

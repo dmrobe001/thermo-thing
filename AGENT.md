@@ -52,7 +52,8 @@ All mutable world state lives in `js/state.js` (§04):
 - `cables` -- array of unilateral tetherball cable elements.
 - `springs` -- array of linear (Hookean) spring force elements, `{type:'spring', a, b, restLen, k, sel}` (`a`/`b` are rod-style `{id,off}` endpoints).
 - `rotSprings` -- array of rotational (torsional) spring force elements, `{type:'rotspring', a:{id}, b:{id}, restAngle, k, sel}`.
-- `sim` -- simulation parameters (`h`, `beta`, `reg`, `running`, `gravity`, `g`, ...).
+- `interactions` -- array of heat and mass-exchange couplings, `{type:'heat'|'flow', body:{id}, vessel:{id}, k, sel}` (`vessel.id === null` is the background). They carry no force and no constraint row; two of the same kind sharing a `body` are a *pair* and couple what they each name through it. See `VESSEL.md` §V.10 and `js/physics.js` §08.0b.
+- `sim` -- simulation parameters (`h`, `beta`, `reg`, `running`, `gravity`, `g`, `bathQ`, ...).
 - `cam` -- camera state (`x`, `y`, `scale`).
 
 ## Adding or moving code
@@ -63,16 +64,16 @@ Give new code a home in an existing section (and register it in that section's s
 
 | File | Section | What it does |
 |---|---|---|
-| `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `cables`, `springs`, `rotSprings`; `sim` (incl. `sim.bg`, the ambient atmosphere); `cam` |
-| `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshInertia`, `setBodyMass`, `w2s`/`s2w`; §05.2d `makeVessel`/`refreshVessel`/gas state, §05.2c `epLocal`/`epWorldPt`/`epOffOf` (material endpoint offsets) |
+| `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `cables`, `springs`, `rotSprings`, `interactions`; `sim` (incl. `sim.bg`, the ambient atmosphere, and `sim.bathQ`); `cam` |
+| `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshInertia`, `setBodyMass`, `w2s`/`s2w`; §05.2d `makeVessel`/`refreshVessel`/gas state, §05.2c `epLocal`/`epWorldPt`/`epOffOf` (material endpoint offsets), §05.2e `bodyPolygon`/`clipPoly`/`contactArea` (interaction contact area) |
 | `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `epFrame` (endpoint velocity columns, incl. a vessel's length column), `twoPointFrame`, `cableFrame`, `rowsFor`, `makeSpringCon`, `makeRotSpringCon`, `rotSpringSpiralGeom` |
 | `js/solver.js` | §07 | `solveLinear` -- dense Gauss-Jordan on the Schur complement |
-| `js/physics.js` | §08 | `substep` -- forces (gravity, drag, springs, vessel centrifugal) -> §08.1b `vesselGasStep` -> constraint solve -> position integration -> energy-conservation rescale |
+| `js/physics.js` | §08 | `substep` -- §08.0b `vesselExchangeStep` (heat & mass, at frozen geometry, ahead of everything) -> forces (gravity, drag, springs, vessel centrifugal) -> §08.1b `vesselGasStep` -> constraint solve -> position integration -> energy-conservation rescale |
 | `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` |
 | `js/loop.js` | §10 | `frame` -- fixed-step accumulator, calls `substep` -> `render` -> `updateHUD` |
-| `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawVessel`, `drawConstraint`, `drawCable`, `drawSpring`, `drawRotSpring`, `drawReaction`, ... |
-| `js/hud.js` | §12 | `energy` (incl. spring PE, gas internal energy and atmospheric potential), `updateHUD`, `drawSpark` |
-| `js/tools.js` | §13 | `TOOLS`, `setTool`, `pickBody`, `snapAnchor`, `conHandles`, pointer handlers |
-| `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector`, §14.2b `renderVesselInspector`, `updateInspectorLive` |
+| `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawVessel`, `drawConstraint`, `drawCable`, `drawSpring`, `drawRotSpring`, §11.4c `drawInteraction`, `drawReaction`, ... |
+| `js/hud.js` | §12 | `energy` (incl. spring PE, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
+| `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
+| `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
 | `js/examples.js` | §15 | `loadExample` -- assembles prebuilt machines from library primitives |
 | `js/transport.js` | §16 | `saveState`, `restoreState`, `setRunning`, keyboard shortcuts, boot |
