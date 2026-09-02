@@ -319,7 +319,11 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); } }
-  if(selGas){ const g=selGas; const f=gasFrame(g); const P=g._P||g.n*g.T/(g.bore*f.xc);
+  if(selGas){ const g=selGas; const f=gasFrame(g);
+    // Live from n/T/bore/geometry, not the physics-cached g._P (§08.1 only
+    // refreshes it on a substep, so paused -- or an edit before the next
+    // substep runs -- would otherwise keep showing the pre-edit pressure).
+    const P=g.n*g.T/(g.bore*f.xc);
     const eP=document.getElementById('g_P'); if(eP){ eP.textContent=P.toFixed(3);
       document.getElementById('g_V').textContent=(g.bore*f.xc).toFixed(3);
       document.getElementById('g_T').textContent=g.T.toFixed(3);
