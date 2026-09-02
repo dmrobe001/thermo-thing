@@ -5,9 +5,8 @@
 //    §11.1  render            (per-frame scene orchestrator; sizing + draw order)
 //    §11.2  background        (drawGrid, drawAxes)
 //    §11.3  bodies            (drawBody, jointDot)
-//    §11.4  gas & cable       (drawCable, drawVessel, drawGasForce)
+//    §11.4  cable              (drawCable)
 //    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
-//    §11.4c heat & flow overlays (drawHeatInteraction, drawFlowInteraction)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
 //    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
@@ -29,23 +28,13 @@ function render(){
   // paint before smaller ones so a small body nested against/inside a big
   // one is never hidden by it (a sort copy -- `bodies` itself stays in
   // creation order, which pick/hit-testing still relies on).
-  // Vessel head/cap bodies (synthetic:true, geometry.js/tools.js) are real
-  // physics bodies but never painted on their own -- drawVessel below owns
-  // the whole vessel's look, so the plain body loop skips them.
-  for(const b of [...bodies].filter(b=>!b.synthetic).sort((p,q)=>bodyExtentR(q)-bodyExtentR(p))) drawBody(b);
-  for(const g of gases) drawVessel(g);
+  for(const b of [...bodies].sort((p,q)=>bodyExtentR(q)-bodyExtentR(p))) drawBody(b);
   for(const cb of cables) drawCable(cb);
   for(const sp of springs) drawSpring(sp);
   for(const rs of rotSprings) drawRotSpring(rs);
-  // A gas's auto-created piston<->cylinder prismatic (tools.js §13.5, marked
-  // `hidden`) is deliberately not visualized (spec: "a mutually prismatic
-  // interaction which is not visualized") -- it's bookkeeping for the gas,
-  // not a joint the player placed.
-  for(const con of constraints) if(!con.hidden) drawConstraint(con);
-  for(const hi of heatInteractions) drawHeatInteraction(hi);
-  for(const fi of flowInteractions) drawFlowInteraction(fi);
+  for(const con of constraints) drawConstraint(con);
   drawHandles();
-  if(sim.showForces && sim.running){ for(const con of constraints) if(!con.hidden) drawReaction(con); for(const g of gases) drawGasForce(g); }
+  if(sim.showForces && sim.running){ for(const con of constraints) drawReaction(con); }
   if(pending) drawPending();
   if(bodyPreview) drawPreview();
   drawSnap();
@@ -156,7 +145,7 @@ function drawEndMarker(x,y,locked,isBackground,col){
   }
 }
 
-// ---- §11.4 · gas & cable (drawCable, drawVessel, drawGasForce) ----
+// ---- §11.4 · cable (drawCable) ----
 function drawCable(cb){
   const f=cableFrame(cb); if(!f)return;
   const lamMag = cb._lam&&cb._lam.length ? Math.hypot(...cb._lam) : 0;
@@ -191,83 +180,9 @@ function drawCable(cb){
     ctx.strokeStyle=handleHover?'#8fd0ff':col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ax2,ay2,rad,0,Math.PI*2); ctx.stroke();
   }
 }
-// Cool->hot hue ramp for a vessel's interior tint -- driven by temperature
-// alone (spec: "the interior is coloured according to the gas temperature"),
-// not by pressure the way the old drawGas's fill alpha was.
-function tempColor(T, alpha){
-  const t=Math.max(0, Math.min(1, (T-0.3)/2.2));
-  const hue=220-t*220; // 220=blue (cold) -> 0=red (hot)
-  return `hsla(${hue},70%,55%,${alpha})`;
-}
-function drawVessel(g){
-  const f=gasFrame(g); const sel=g.sel; const hoverOn=hover===g;
-  const nrm=[-f.dW[1],f.dW[0]]; const hw=g.bore*0.5;
-  const H1=[f.hx+nrm[0]*hw, f.hy+nrm[1]*hw], H2=[f.hx-nrm[0]*hw, f.hy-nrm[1]*hw];
-  const P1=[f.pax+nrm[0]*hw, f.pay+nrm[1]*hw], P2=[f.pax-nrm[0]*hw, f.pay-nrm[1]*hw];
-  ctx.beginPath();
-  [H1,P1,P2,H2].forEach((p,i)=>{ const [X,Y]=w2s(p[0],p[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
-  ctx.closePath();
-  ctx.fillStyle=tempColor(g.T, 0.4);
-  ctx.fill();
-  // One uniform rectangle outline -- head-cap, piston-cap and the two long
-  // walls all read as ordinary body edges (no distinguished "cap"), same
-  // line-weight/selection-color convention drawBody uses for a plain rect.
-  const col=sel?'#5aa9f0':hoverOn?'#8fc4f7':'#7c8798';
-  ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:hoverOn?2:1.4;
-  ctx.stroke();
-}
-// ---- §11.4c · heat & flow interaction overlays ----
-// Each interaction couples one body to one gas (or the background,
-// gasId===null) -- drawn as a short dashed line from the body's centre to
-// the gas's centroid (constraints.js gasCentroid), or, for the background, a
-// fixed-length stub topped with a small hatch mark standing in for "open to
-// atmosphere". Purely a rate-law-input visualization: color alone tells heat
-// (warm) from flow (cool) apart.
-function interactionEndpoints(it){
-  const body=bodies[bodyIndex(it.bodyId)]; if(!body) return null;
-  const gas = it.gasId!=null ? gases.find(g=>g.id===it.gasId) : null;
-  const p0=[body.x,body.y];
-  if(gas) return {p0, p1:gasCentroid(gas), bg:false};
-  return {p0, p1:[body.x, body.y+0.55], bg:true};
-}
-function drawInteractionLine(ep,col){
-  const [x0,y0]=w2s(ep.p0[0],ep.p0[1]), [x1,y1]=w2s(ep.p1[0],ep.p1[1]);
-  ctx.save();
-  ctx.strokeStyle=col; ctx.lineWidth=2; ctx.setLineDash([5,4]);
-  ctx.beginPath(); ctx.moveTo(x0,y0); ctx.lineTo(x1,y1); ctx.stroke();
-  ctx.setLineDash([]);
-  if(ep.bg){
-    const ang=Math.atan2(y1-y0,x1-x0);
-    for(const off of [-6,0,6]){ const px=x1-Math.sin(ang)*off, py=y1+Math.cos(ang)*off;
-      const ex=px+Math.cos(ang)*10, ey=py+Math.sin(ang)*10;
-      ctx.beginPath(); ctx.moveTo(px,py); ctx.lineTo(ex,ey); ctx.stroke(); }
-  }
-  ctx.fillStyle=col; ctx.beginPath(); ctx.arc(x0,y0,3.5,0,Math.PI*2); ctx.fill();
-  ctx.restore();
-}
-function drawHeatInteraction(hi){
-  const ep=interactionEndpoints(hi); if(!ep) return;
-  const sel=hi.sel, hoverOn=!sel&&hover===hi;
-  drawInteractionLine(ep, sel?'#5aa9f0':hoverOn?'#8fc4f7':'#e0895a');
-}
-function drawFlowInteraction(fi){
-  const ep=interactionEndpoints(fi); if(!ep) return;
-  const sel=fi.sel, hoverOn=!sel&&hover===fi;
-  drawInteractionLine(ep, sel?'#5aa9f0':hoverOn?'#8fc4f7':'#5ac2e0');
-}
-function drawGasForce(g){
-  const f=gasFrame(g); const P=g.mass*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
-  sim.forceRef=Math.max(sim.forceRef*0.985, mag);
-  const px=58*mag/sim.forceRef; const [sx,sy]=w2s(f.pax,f.pay);
-  const ex=sx+f.dW[0]*px, ey=sy-f.dW[1]*px;
-  ctx.strokeStyle='#f0a24c';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(ex,ey);ctx.stroke();
-  const ang=Math.atan2(-f.dW[1],f.dW[0]);
-  ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(ang-0.4),ey-8*Math.sin(ang-0.4));
-  ctx.moveTo(ex,ey);ctx.lineTo(ex-8*Math.cos(ang+0.4),ey-8*Math.sin(ang+0.4));ctx.stroke();
-}
 // ---- §11.4b · springs (drawSpring, drawRotSpring, drawSpiral) ----
 // Force elements, not constraints (constraints.js §06.6) -- drawn in their own
-// pass alongside gas/cable, before drawConstraint's rigid-joint pass.
+// pass alongside the cable, before drawConstraint's rigid-joint pass.
 // Zigzag/coil line for a linear spring's body, between two world points, with
 // short straight leads at each end (the standard spring glyph). Amplitude and
 // lead length are fixed in screen pixels (like the tol/off constants
@@ -376,12 +291,8 @@ function drawConstraint(con){
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
     ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-    // A vessel-interior endpoint (constraints.js §06.2d) reads con.a.id/
-    // con.b.id as null too (it has no `id` of its own), but it isn't
-    // background-anchored -- it moves with the vessel -- so the ground
-    // hatch is reserved for a *true* background end.
-    drawEndMarker(wax,way,con.weldA,con.a.id==null&&con.a.vesselId==null,col);
-    drawEndMarker(wbx,wby,con.weldB,con.b.id==null&&con.b.vesselId==null,col);
+    drawEndMarker(wax,way,con.weldA,con.a.id==null,col);
+    drawEndMarker(wbx,wby,con.weldB,con.b.id==null,col);
     return;
   }
   if(con.type==='slot'){
@@ -409,9 +320,8 @@ function drawConstraint(con){
     return;
   }
   if(con.type==='pin'){
-    // Either end may be a vessel-interior point (constraints.js §06.2d) --
-    // epWorld handles both that and a plain body, and the two endpoints
-    // coincide by construction, so drawing con.a's alone is enough.
+    // The two endpoints coincide by construction, so drawing con.a's alone
+    // is enough.
     const [wax,way]=epWorld(con.a);
     jointDot(wax,way,col);
     return;
@@ -495,8 +405,8 @@ function drawPending(){
 }
 // {shape:'circle',cx,cy,r} while dragging out a new disk (body tool), or
 // {shape:'rect',x0,y0,x1,y1} while dragging out a new rectangle (rectbody
-// tool, or the gas tool's piston-bounding box -- tools.js §13.5) from its
-// first-clicked corner to the live cursor position.
+// tool, tools.js §13.5) from its first-clicked corner to the live cursor
+// position.
 let bodyPreview=null;
 function drawPreview(){
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=1.5;ctx.setLineDash([5,4]);

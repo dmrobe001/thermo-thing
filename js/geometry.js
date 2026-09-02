@@ -4,7 +4,6 @@
 //  and the world<->screen coordinate maps used by every draw and pick routine.
 //    §05.1  rotation & rigid-body point math
 //    §05.2  body factory (mass/inertia from radius)
-//    §05.2c convex polygon overlap (body<->gas contact area for §08.5)
 //    §05.3  world<->screen transforms
 // ============================================================================
 
@@ -44,43 +43,6 @@ function refreshInertia(b){
   b.invM=b.static?0:1/b.mass; b.invI=b.static?0:1/b.I;
 }
 function setBodyMass(b,m){ b.mass=m; refreshInertia(b); }
-// A gas vessel's cap body (the "piston is a hidden auxiliary body" redesign,
-// DEVELOPMENT.md §6.1) doesn't carry an independently-editable structural
-// mass -- its inertia *is* the gas's own, distributed uniformly along the
-// axial span with one end (the head) fixed: the classic "one end fixed,
-// mass distributed uniformly along the moving segment" rod result gives an
-// effective inertia of mass/3 at the moving end. Called once per substep
-// (physics.js §08.0, before islands/preE are snapshotted -- so a mass
-// change from the *previous* substep's flow transfer is already baked into
-// the new energy baseline, not read as drift by §08.6's rescale) and
-// immediately on any inspector edit to the vessel's mass field.
-const EFF_MASS_FLOOR = 1e-6;
-function syncVesselCapMass(v){
-  if(!v.piston) return;
-  const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
-  setBodyMass(cap, Math.max(v.mass/3, EFF_MASS_FLOOR));
-}
-// Reposition a vessel's length -- for a movable piston, this means moving
-// the cap body itself along the axis (keeping its orientation and the
-// hidden prismatic's rotation lock intact; projectPositions settles any
-// other joint riding on it, mirroring how the inspector's rod-length edit
-// calls projectPositions after a direct length change); for a fixed vessel
-// (no piston body), it's a bare constant. Used by the inspector's
-// radio-lock recompute (inspector.js) whenever `length` is the field being
-// derived or edited.
-function setVesselLength(v, newLen){
-  newLen = Math.max(newLen, GAS_MIN_X);
-  if(v.piston){
-    const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
-    const f = gasFrame(v);
-    const wx = f.hx + f.dW[0]*newLen, wy = f.hy + f.dW[1]*newLen;
-    const [ox,oy] = R(cap.th, v.piston.off[0], v.piston.off[1]);
-    cap.x = wx-ox; cap.y = wy-oy;
-    projectPositions(8);
-  } else {
-    v.len = newLen;
-  }
-}
 
 // ---- §05.2b · shape-generic body geometry ----
 // A handful of pure functions any picking/snapping/rendering code can call
@@ -133,69 +95,6 @@ function bodyEdgeDist(b,wx,wy){
   if(b.shape==='rect'){ const [ex,ey]=bodyEdgePoint(b,wx,wy); return Math.hypot(wx-ex,wy-ey); }
   return Math.abs(Math.hypot(wx-b.x,wy-b.y)-b.r);
 }
-
-// ---- §05.2c · convex polygon overlap (body<->gas contact area) ----
-// A body's outline as a world-space convex polygon: a rectangle's four
-// corners, or a circle approximated by a 20-gon (accurate to <1% area error
-// and cheap to clip) -- used only for heat/flow interaction contact area
-// (physics.js §08.5), never for physics.js's own collision (there is none by
-// design, spec §10) or for the gas force/volume (constraints.js §06.2 keeps
-// its exact 1-D axial projection). Both this and gasPolygon below return
-// points wound consistently CCW in world (x right, y up) coordinates.
-function bodyPolygon(b){
-  if(b.shape==='rect'){
-    return [[-b.hw,-b.hh],[b.hw,-b.hh],[b.hw,b.hh],[-b.hw,b.hh]].map(([lx,ly])=>{
-      const [wx,wy]=worldPt(b,[lx,ly]); return [wx,wy]; });
-  }
-  const N=20, pts=[];
-  for(let i=0;i<N;i++){ const a=i/N*Math.PI*2; pts.push([b.x+b.r*Math.cos(a), b.y+b.r*Math.sin(a)]); }
-  return pts;
-}
-// A gas's rectangular volume as a world-space polygon -- the same four
-// corners drawGas already computes (render.js §11.4), reused here for area
-// math instead of just paint.
-function gasPolygon(g){
-  const f=gasFrame(g); const nrm=[-f.dW[1],f.dW[0]]; const hw=g.bore*0.5;
-  const H1=[f.hx+nrm[0]*hw, f.hy+nrm[1]*hw], H2=[f.hx-nrm[0]*hw, f.hy-nrm[1]*hw];
-  const P1=[f.pax+nrm[0]*hw, f.pay+nrm[1]*hw], P2=[f.pax-nrm[0]*hw, f.pay-nrm[1]*hw];
-  return [H1,P1,P2,H2];
-}
-// Signed shoelace area (positive iff `poly` is wound CCW); |.| is the plain area.
-function polySignedArea(poly){ let s=0; for(let i=0;i<poly.length;i++){
-  const [x1,y1]=poly[i], [x2,y2]=poly[(i+1)%poly.length]; s+=x1*y2-x2*y1; } return s*0.5; }
-function polyArea(poly){ return Math.abs(polySignedArea(poly)); }
-// Point where segment p1->p2 crosses line a->b (used only inside clipPoly,
-// where the crossing is already known to exist).
-function segIntersect(p1,p2,a,b){
-  const d1x=p2[0]-p1[0], d1y=p2[1]-p1[1], d2x=b[0]-a[0], d2y=b[1]-a[1];
-  const denom=d1x*d2y-d1y*d2x;
-  const t = Math.abs(denom)<1e-12 ? 0 : ((a[0]-p1[0])*d2y-(a[1]-p1[1])*d2x)/denom;
-  return [p1[0]+t*d1x, p1[1]+t*d1y];
-}
-// Sutherland-Hodgman: clip `subject` (any winding, possibly empty) against
-// convex polygon `clip` (any winding -- normalized to CCW here so the
-// inside-test sign is fixed regardless of how the caller wound it).
-function clipPoly(subject, clipIn){
-  if(subject.length===0) return [];
-  const clip = polySignedArea(clipIn)>=0 ? clipIn : [...clipIn].reverse();
-  let output=subject;
-  for(let i=0;i<clip.length && output.length;i++){
-    const A=clip[i], B=clip[(i+1)%clip.length];
-    const ex=B[0]-A[0], ey=B[1]-A[1];
-    const input=output; output=[];
-    for(let j=0;j<input.length;j++){
-      const cur=input[j], prev=input[(j-1+input.length)%input.length];
-      const curIn = ex*(cur[1]-A[1])-ey*(cur[0]-A[0]) >= 0;
-      const prevIn = ex*(prev[1]-A[1])-ey*(prev[0]-A[0]) >= 0;
-      if(curIn){ if(!prevIn) output.push(segIntersect(prev,cur,A,B)); output.push(cur); }
-      else if(prevIn){ output.push(segIntersect(prev,cur,A,B)); }
-    }
-  }
-  return output;
-}
-// The contact area between a solid body and a gas's rectangular volume --
-// the rate-law input for every heat/flow interaction (physics.js §08.5).
-function bodyGasOverlapArea(b,g){ return polyArea(clipPoly(bodyPolygon(b), gasPolygon(g))); }
 
 // ---- §05.3 · world<->screen transforms ----
 function W(){ return cv.clientWidth; }

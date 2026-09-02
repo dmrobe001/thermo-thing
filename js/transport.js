@@ -10,19 +10,10 @@
 // ============================================================================
 // ---- §16.1 · snapshots (reset baseline) ----
 let saved=null;
-// gMass (amount of gas) is saved alongside gT (temperature) now that flow
-// interactions can move mass between gases during play -- both are per-gas
-// state a Reset must roll back, exactly like a body's pose/velocity. A
-// vessel's own `sep`/`sepRate` (DEVELOPMENT.md §6.1's redesign) need no
-// separate entry here -- they live entirely on the cap body's own x/y/vx/vy,
-// already captured by the `b` snapshot above.
 function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})),
-  gT:gases.map(g=>g.T), gMass:gases.map(g=>g.mass), cSA:cables.map(c=>c.spoolAngle) }; }
+  cSA:cables.map(c=>c.spoolAngle) }; }
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
   if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0; } }
-  gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i];
-    if(saved.gMass[i]!=null) g.mass=saved.gMass[i];
-    syncVesselCapMass(g); });
   // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
   // pose, so a reference accumulated across possibly many turns of prior
@@ -67,14 +58,8 @@ window.addEventListener('keydown',e=>{
       constraints=constraints.filter(c=>c.a.id!==id&&!(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id&&!(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
-      for(const g of gases.filter(g=>(g.piston&&g.piston.id===id)||g.head.id===id)) purgeGas(g);
-      heatInteractions=heatInteractions.filter(h=>h.bodyId!==id);
-      flowInteractions=flowInteractions.filter(f=>f.bodyId!==id);
       bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}
-      else if(selConstraint){ if(!selConstraint.hidden){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); } }
-      else if(selGas){ purgeGas(selGas); clearSelection(); saveState(); }
-      else if(selHeat){ heatInteractions=heatInteractions.filter(x=>x!==selHeat); clearSelection(); saveState(); }
-      else if(selFlow){ flowInteractions=flowInteractions.filter(x=>x!==selFlow); clearSelection(); saveState(); }
+      else if(selConstraint){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); }
       else if(selSpring){ springs=springs.filter(s=>s!==selSpring); clearSelection(); saveState(); }
       else if(selRotSpring){ rotSprings=rotSprings.filter(s=>s!==selRotSpring); clearSelection(); saveState(); } }
   else { const t=TOOLS.find(t=>t.key===e.key); if(t) setTool(t.id); }

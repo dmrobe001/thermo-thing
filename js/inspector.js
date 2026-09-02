@@ -1,35 +1,21 @@
 // ============================================================================
 //  §14 · SELECTION & INSPECTOR
 //  What is selected, and the right-hand panel that reflects and edits it.
-//    §14.1  selection state (clearSelection, select*, pickGas, pickCable)
+//    §14.1  selection state (clearSelection, select*, pickCable)
 //    §14.2  renderInspector    (build the panel DOM per selection type)
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
 // ---- §14.1 · selection state ----
-let selBody=null, selConstraint=null, selGas=null, selCable=null, selSpring=null, selRotSpring=null;
-let selHeat=null, selFlow=null;
-function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); gases.forEach(g=>g.sel=false); cables.forEach(c=>c.sel=false);
+let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null;
+function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); cables.forEach(c=>c.sel=false);
   springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false);
-  heatInteractions.forEach(h=>h.sel=false); flowInteractions.forEach(f=>f.sel=false);
-  selBody=null; selConstraint=null; selGas=null; selCable=null; selSpring=null; selRotSpring=null;
-  selHeat=null; selFlow=null; renderInspector(); }
+  selBody=null; selConstraint=null; selCable=null; selSpring=null; selRotSpring=null;
+  renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
-function selectGas(i){ clearSelection(); gases[i].sel=true; selGas=gases[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
 function selectSpring(i){ clearSelection(); springs[i].sel=true; selSpring=springs[i]; renderInspector(); }
 function selectRotSpring(i){ clearSelection(); rotSprings[i].sel=true; selRotSpring=rotSprings[i]; renderInspector(); }
-function selectHeatInteraction(i){ clearSelection(); heatInteractions[i].sel=true; selHeat=heatInteractions[i]; renderInspector(); }
-function selectFlowInteraction(i){ clearSelection(); flowInteractions[i].sel=true; selFlow=flowInteractions[i]; renderInspector(); }
-function pickGas(wx,wy){
-  for(let i=gases.length-1;i>=0;i--){ if(gasHit(gases[i],wx,wy)) return i; }
-  return -1; }
-function pickHeatInteraction(wx,wy){
-  for(let i=heatInteractions.length-1;i>=0;i--){ if(interactionHit(heatInteractions[i],wx,wy)) return i; }
-  return -1; }
-function pickFlowInteraction(wx,wy){
-  for(let i=flowInteractions.length-1;i>=0;i--){ if(interactionHit(flowInteractions[i],wx,wy)) return i; }
-  return -1; }
 function pickCable(wx,wy){
   for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
   return -1; }
@@ -40,52 +26,8 @@ function pickRotSpring(wx,wy){
   for(let i=rotSprings.length-1;i>=0;i--){ if(rotSpringHit(rotSprings[i],wx,wy)) return i; }
   return -1; }
 
-// ---- §14.1b · vessel field lock/recompute ----
-// The inspector's 5-field radio group (T, P, bore, length, mass -- gamma
-// has no radio, it's never derived) implements a plain calculator
-// convenience: P·bore·length = mass·T (R=1) ties the five, so with any four
-// pinned the fifth follows. This is purely inspector/UI bookkeeping --
-// physics.js never reads `lockedField`; heat/flow interactions and the
-// vessel's own dynamics keep driving T/mass/length exactly as before,
-// completely independent of which field is "locked". P itself is never
-// stored anywhere (same convention as before this redesign): it's always
-// read live off the other four via the equation.
-function vesselLiveFields(g){
-  const f=gasFrame(g);
-  return { T:g.T, P:g.mass*g.T/(g.bore*f.xc), bore:g.bore,
-           length: g.piston?f.x:g.len, mass:g.mass };
-}
-// Commit an edit to one of the four *non-locked* fields: store it for real
-// (P is the one field with nothing to store), then recompute the locked
-// field from the equation using the other four's now-current values.
-function commitVesselFieldEdit(g, editedKey, newValue){
-  const lf=g.lockedField||'P';
-  const cur=vesselLiveFields(g); cur[editedKey]=newValue;
-  if(editedKey==='T') g.T=Math.max(newValue,1e-4);
-  else if(editedKey==='bore') g.bore=Math.max(newValue,0.05);
-  else if(editedKey==='mass'){ g.mass=Math.max(newValue,1e-6); syncVesselCapMass(g); }
-  else if(editedKey==='length') setVesselLength(g,Math.max(newValue,0.05));
-  if(lf===editedKey) return; // the locked field's own input is disabled; defensive only
-  const {T,P,bore,length,mass}=cur;
-  if(lf==='T') g.T=Math.max(P*bore*length/mass,1e-4);
-  else if(lf==='bore') g.bore=Math.max(mass*T/(P*length),0.05);
-  else if(lf==='length') setVesselLength(g,Math.max(mass*T/(P*bore),0.05));
-  else if(lf==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
-}
-// Switch which field is locked, immediately recomputing the newly-locked
-// one from the other four's current values (so the switch itself never
-// leaves an inconsistent reading).
-function relockVesselField(g, newLockedField){
-  g.lockedField=newLockedField;
-  const {T,P,bore,length,mass}=vesselLiveFields(g);
-  if(newLockedField==='T') g.T=Math.max(P*bore*length/mass,1e-4);
-  else if(newLockedField==='bore') g.bore=Math.max(mass*T/(P*length),0.05);
-  else if(newLockedField==='length') setVesselLength(g,Math.max(mass*T/(P*bore),0.05));
-  else if(newLockedField==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
-}
-
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
-// One branch per selection: body, constraint, gas, cable, spring, rotational
+// One branch per selection: body, constraint, cable, spring, rotational
 // spring, or the empty bench.
 function renderInspector(){
   const p=document.getElementById('panelBody');
@@ -203,64 +145,6 @@ function renderInspector(){
       document.getElementById('f_lockB').onchange=ev=>{ setSlotLock(c,'B',ev.target.checked); renderInspector(); saveState(); };
     }
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
-  } else if(selGas){
-    const g=selGas; const hasPiston=!!g.piston;
-    const lf=g.lockedField||'P';
-    const live=vesselLiveFields(g);
-    const FIELDS=[['T','temp T',0.05,0.01],['P','pressure P',0.05,0],
-      ['bore','bore',0.05,0.05],['length','length',0.05,0.05],['mass','mass',0.05,1e-6]];
-    const fieldRow=([key,label,step,min])=>{
-      const checked=lf===key?'checked':''; const disabled=lf===key?'disabled':'';
-      return `<div class="field">
-        <input type="radio" name="g_lock" class="radiolock" id="g_lock_${key}" value="${key}" ${checked} style="margin-right:6px">
-        <span class="lab">${label}</span>
-        <input class="numin" type="number" step="${step}" min="${min}" id="g_${key}" value="${live[key].toFixed(3)}" ${disabled}>
-      </div>`;
-    };
-    p.innerHTML=`
-      <h3>Gas vessel</h3><p class="sub">${hasPiston?'vessel + piston · ':'fixed vessel · '}P·bore·length = mass·T</p>
-      <div class="card"><div class="cardhead">properties</div>
-        ${FIELDS.map(fieldRow).join('')}
-        <div class="field"><span class="lab" style="margin-left:22px">gamma</span><input class="numin" type="number" step="0.01" min="1.01" id="g_gamma" value="${g.gamma.toFixed(3)}"></div>
-        <p class="muted" style="margin:8px 0 0">The radio marks which field the sim derives from the other four via the ideal gas law; its box is disabled and always shows the live value. ${hasPiston?'The moving wall’s own inertia is exactly mass/3 (DEVELOPMENT.md §6.1), not an independently-set plate mass.':'No movable wall: length is a fixed constant here.'}</p>
-      </div>
-      <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">heat+flow Q_dot</span><span class="val" id="g_Q">--</span></div>
-        <p class="muted" style="margin:8px 0 0">${hasPiston
-          ?'The movable wall feels internal pressure against the background’s -- add heat/flow interactions (their own tools) to couple this gas to another vessel or the background.'
-          :'No movable wall: a fixed-volume vessel, only useful via heat/flow interactions elsewhere.'}</p>
-      </div>
-      <button class="del" id="g_del">Delete gas</button>`;
-    for(const [key] of FIELDS){
-      document.getElementById('g_lock_'+key).onchange=()=>{ relockVesselField(g,key); renderInspector(); saveState(); };
-      if(lf!==key) document.getElementById('g_'+key).onchange=ev=>{
-        const v=parseFloat(ev.target.value);
-        if(isFinite(v)) commitVesselFieldEdit(g,key,v);
-        renderInspector(); saveState(); };
-    }
-    document.getElementById('g_gamma').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>1.001) g.gamma=v;
-      renderInspector(); saveState(); };
-    document.getElementById('g_del').onclick=()=>{ purgeGas(g); clearSelection(); saveState(); };
-  } else if(selHeat || selFlow){
-    const it=selHeat||selFlow; const isHeat=!!selHeat;
-    const gas = it.gasId!=null ? gases.find(x=>x.id===it.gasId) : null;
-    p.innerHTML=`
-      <h3>${isHeat?'Heat':'Flow'} interaction</h3>
-      <p class="sub">body ${it.bodyId} ↔ ${gas?('gas '+gas.id):'background'}</p>
-      <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">contact area</span><span class="val" id="i_area">--</span></div>
-      </div>
-      <div class="card"><div class="cardhead">${isHeat?'conductivity':'flow restriction'}</div>
-        <div class="field"><span class="lab">k</span><span class="val" id="i_kL">${it.k.toFixed(2)}</span></div>
-        <input type="range" id="i_k" min="0" max="20" step="0.1" value="${it.k}" style="width:100%">
-        <p class="muted" style="margin:8px 0 0">Two interactions on the same body -- one to each gas/background -- couple those gases through it, at a rate set by their combined k and the smaller of the two contact areas.</p>
-      </div>
-      <button class="del" id="i_del">Delete interaction</button>`;
-    document.getElementById('i_k').oninput=ev=>{ it.k=parseFloat(ev.target.value); document.getElementById('i_kL').textContent=it.k.toFixed(2); saveState(); };
-    document.getElementById('i_del').onclick=()=>{
-      if(isHeat) heatInteractions=heatInteractions.filter(x=>x!==it); else flowInteractions=flowInteractions.filter(x=>x!==it);
-      clearSelection(); saveState(); };
   } else if(selCable){
     const cb=selCable;
     p.innerHTML=`
@@ -320,21 +204,12 @@ function renderInspector(){
     p.innerHTML=`
       <h3>Bench</h3><p class="sub">nothing selected</p>
       <p class="muted">Select a body or constraint to inspect it. Every joint reports the reaction force it carries once the sim is running.</p>
-      <div class="card"><div class="cardhead">background</div>
-        <p class="muted" style="margin:0 0 8px">Counts as an infinite-capacity gas -- any heat/flow interaction pointed at empty space couples to this instead of a placed gas.</p>
-        <div class="field"><span class="lab">temp T</span><span class="val" id="bg_TL">${sim.bg.T.toFixed(2)}</span></div>
-        <input type="range" id="bg_T" min="0.2" max="3" step="0.05" value="${sim.bg.T}" style="width:100%">
-        <div class="field"><span class="lab">pressure P</span><span class="val" id="bg_PL">${sim.bg.P.toFixed(2)}</span></div>
-        <input type="range" id="bg_P" min="0" max="5" step="0.05" value="${sim.bg.P}" style="width:100%">
-      </div>
       <div class="card"><div class="cardhead">examples</div>
         <div class="examples">
           <button data-ex="pendulum">Rigid pendulum</button>
           <button data-ex="double">Double pendulum</button>
           <button data-ex="fourbar">Four-bar linkage</button>
-          <button data-ex="crank">Slider-crank + piston</button>
-          <button data-ex="gasspring">Gas spring</button>
-          <button data-ex="heatengine">Piston + heat/flow</button>
+          <button data-ex="crank">Slider-crank mechanism</button>
           <button data-ex="skate">Skate (knife-edge)</button>
           <button data-ex="integrator">Wheel integrator (CVT)</button>
           <button data-ex="cable">Cable ratchet</button>
@@ -342,12 +217,9 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c/q/h/f tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c/q tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
-    const bindBg=(id,lab,key,fix)=>{ const el=document.getElementById(id);
-      el.oninput=ev=>{ sim.bg[key]=parseFloat(ev.target.value); document.getElementById(lab).textContent=sim.bg[key].toFixed(fix); }; };
-    bindBg('bg_T','bg_TL','T',2); bindBg('bg_P','bg_PL','P',2);
   }
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----
@@ -373,28 +245,6 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); } }
-  if(selGas){ const g=selGas;
-    // Live from mass/T/bore/geometry, not the physics-cached g._P (§08.1
-    // only refreshes it on a substep, so paused -- or an edit before the
-    // next substep runs -- would otherwise keep showing the pre-edit
-    // pressure). Every field refreshes -- the locked one always (it's a
-    // pure readout), the other four only while not focused (setLive), so
-    // physics-driven state (T via heat exchange, mass via flow, length via
-    // the piston's own dynamics) stays visible without fighting the
-    // player's own keystrokes mid-edit.
-    const eQ=document.getElementById('g_Q');
-    if(eQ){
-      const live=vesselLiveFields(g);
-      for(const key of ['T','P','bore','length','mass']){
-        const el=document.getElementById('g_'+key); if(!el) continue;
-        if(el.disabled) el.value=live[key].toFixed(3); else setLive('g_'+key, live[key].toFixed(3));
-      }
-      eQ.textContent=(g._Q||0).toFixed(3);
-    } }
-  if(selHeat||selFlow){ const it=selHeat||selFlow; const body=bodies[bodyIndex(it.bodyId)];
-    const gas = it.gasId!=null ? gases.find(x=>x.id===it.gasId) : null;
-    const el=document.getElementById('i_area');
-    if(el && body) el.textContent = (gas ? bodyGasOverlapArea(body,gas).toFixed(3) : '∞ (background)'); }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);

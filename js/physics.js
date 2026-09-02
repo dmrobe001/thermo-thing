@@ -1,28 +1,24 @@
 // ============================================================================
 //  §08 · PHYSICS SUBSTEP
-//  One fixed-step advance of the entire world, in six inline stages. This is a
+//  One fixed-step advance of the entire world, in four inline stages. This is a
 //  velocity-impulse form: forces integrate to candidate velocities, then a
 //  single constraint solve projects those velocities onto the manifold, then
-//  positions integrate, then the gas state advances by the first law, then an
-//  energy-conservation rescale closes the gap the earlier stages only
-//  approximate.
-//    §08.0b heat & flow interactions (exponential relaxation toward
-//           equilibrium T/P; the gas half of the reservoir/piston overhaul)
-//    §08.1  applied forces -> candidate velocities (gravity, drag spring, gas,
+//  positions integrate, then an energy-conservation rescale closes the gap the
+//  earlier stages only approximate.
+//    §08.1  applied forces -> candidate velocities (gravity, drag spring,
 //           user-placed linear/rotational springs)
 //    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
-//    §08.5  gas thermodynamics (mechanical work: dU = -P dV)
 //    §08.6  energy-conservation rescale (exact, chain-length-independent,
 //           momentum-conserving on any island not anchored to the world)
-//  The stage numbers below (1..5) are the original inline markers; the §08.x
-//  tokens above are the greppable handles. §08.0 and §08.0b are setup passes
-//  with no original inline number of their own.
+//  The stage numbers below (1..4) are the original inline markers; the §08.x
+//  tokens above are the greppable handles. §08.0 is a setup pass with no
+//  original inline number of its own.
 // ============================================================================
 // ---- §08.0 · momentum-conserving islands ----
 // Partition the world into islands: maximal groups of bodies transitively
-// coupled by a constraint, cable, spring, rotational spring or gas. §08.6
+// coupled by a constraint, cable, spring, or rotational spring. §08.6
 // scopes its energy-conservation rescale to one island at a time (instead of
 // one scalar over the whole world) so an unrelated mechanism elsewhere in
 // the scene can't leak energy into this one, and -- for an island with
@@ -41,18 +37,18 @@
 function ufFind(p,i){ while(p[i]!==i){ p[i]=p[p[i]]; i=p[i]; } return i; }
 function ufUnion(p,a,b){ const ra=ufFind(p,a), rb=ufFind(p,b); if(ra!==rb) p[ra]=rb; }
 // Every two-endpoint coupling type shares the {id,...} endpoint shape
-// (constraints' a/b, cables' spool/tether, springs'/rotSprings' a/b, gases'
-// a/head) -- this table drives the union pass generically instead of
-// special-casing each element type. A missing endpoint field (e.g. the
-// single-ended 'knife' constraint) reads the same as a background-fixed one.
-// Wrapped in getters, not a plain array of the globals themselves: state.js
-// §-level code reassigns bodies/constraints/springs/rotSprings/gases/cables
-// wholesale (e.g. `constraints=constraints.filter(...)`, `bodies=[]` on load)
-// rather than mutating them in place, so a plain array captured once at
-// script-load time would keep pointing at whatever was live at that instant.
+// (constraints' a/b, cables' spool/tether, springs'/rotSprings' a/b) -- this
+// table drives the union pass generically instead of special-casing each
+// element type. A missing endpoint field (e.g. the single-ended 'knife'
+// constraint) reads the same as a background-fixed one. Wrapped in getters,
+// not a plain array of the globals themselves: state.js §-level code
+// reassigns bodies/constraints/springs/rotSprings/cables wholesale (e.g.
+// `constraints=constraints.filter(...)`, `bodies=[]` on load) rather than
+// mutating them in place, so a plain array captured once at script-load time
+// would keep pointing at whatever was live at that instant.
 const COUPLING_TABLES = [
   ()=>[constraints,'a','b'], ()=>[cables,'spool','tether'],
-  ()=>[springs,'a','b'], ()=>[rotSprings,'a','b'], ()=>[gases,'piston','head'],
+  ()=>[springs,'a','b'], ()=>[rotSprings,'a','b'],
 ];
 function computeIslands(){
   const N=bodies.length, WORLD=N;
@@ -71,37 +67,29 @@ function computeIslands(){
   const worldRoot=ufFind(p,WORLD);
   const byRoot=new Map();
   const islandOf=i=>{ const r=ufFind(p,i); let isl=byRoot.get(r);
-    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[],gases:[]}; byRoot.set(r,isl); }
+    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[]}; byRoot.set(r,isl); }
     return isl; };
   for(let i=0;i<N;i++) if(!bodies[i].static) islandOf(i).bodyIdx.push(i);
-  // Bucket each force element's PE/heat bookkeeping into its (now-final)
-  // island for §08.6's per-island energy target, keyed off whichever
-  // endpoint is a real body (an element always has at least one).
+  // Bucket each force element's PE bookkeeping into its (now-final) island
+  // for §08.6's per-island energy target, keyed off whichever endpoint is a
+  // real body (an element always has at least one).
   for(const sp of springs){ islandOf(bodyIndex((sp.a.id!=null?sp.a:sp.b).id)).springs.push(sp); }
   for(const rs of rotSprings){ islandOf(bodyIndex((rs.a.id!=null?rs.a:rs.b).id)).rotSprings.push(rs); }
-  // Bucket a gas into whichever of its two boundary bodies is real -- its
-  // piston if it has one, else its head (both may be missing/world, e.g. a
-  // free-floating fixed-volume vessel used only via heat/flow interactions
-  // elsewhere; such a gas belongs to no mechanical island and never joins
-  // isl.gases, exactly like a gas with a real body has nothing to lose from
-  // not being scoped to a rescale that can't touch it anyway).
-  for(const g of gases){ const realId = g.piston ? g.piston.id : g.head.id;
-    if(realId!=null) islandOf(bodyIndex(realId)).gases.push(g); }
   return [...byRoot.values()];
 }
 // §08.6's rescale is a *multiplicative* correction (v *= sqrt(target/actual)),
 // which is well-defined only while there's actual KE to scale -- right at an
-// island's own turning point (a pendulum at the top of its swing, a piston at
-// the top of its bounce) KE passes through zero for real, not as an
-// artifact, so neither branch below can apply its correction there and both
-// fall back to leaving velocities untouched for that one substep. That
-// residual keTarget-vs-actual gap doesn't vanish on its own: the next
-// substep's preE is read straight off whatever state was left standing, so
-// an uncorrected gap becomes the new baseline permanently rather than
-// something later substeps make up for -- confirmed by instrumented play on
-// the plain (gasless) pendulum example: 100% of its slow energy loss over a
-// long run landed exactly on the substeps where this fallback fired, with
-// every other substep's own delta at floating-point zero. ENERGY_BANK defers
+// island's own turning point (a pendulum at the top of its swing) KE passes
+// through zero for real, not as an artifact, so neither branch below can
+// apply its correction there and both fall back to leaving velocities
+// untouched for that one substep. That residual keTarget-vs-actual gap
+// doesn't vanish on its own: the next substep's preE is read straight off
+// whatever state was left standing, so an uncorrected gap becomes the new
+// baseline permanently rather than something later substeps make up for --
+// confirmed by instrumented play on the plain pendulum example: 100% of its
+// slow energy loss over a long run landed exactly on the substeps where this
+// fallback fired, with every other substep's own delta at floating-point
+// zero. ENERGY_BANK defers
 // that gap instead of dropping it: keyed by the island's own body-id
 // signature (stable frame to frame barring a mid-play topology edit), it
 // carries the unresolved amount forward and folds it into the very next
@@ -129,141 +117,9 @@ function islandKinematics(idxs){
   }
   return {M,cx,cy,px,py,L,Ieff};
 }
-// ---- §08.0b · heat & flow interactions ----
-// Every heatInteractions/flowInteractions entry is {bodyId, gasId, k} --
-// gasId===null reads as the background (state.js §04.3 sim.bg), mirroring
-// the null-id convention used everywhere else. Two interactions sharing the
-// same bodyId are a *pair*: the body mediates a coupling between whatever
-// its two interactions each name, at a rate set by the smaller of their two
-// body<->gas contact areas (geometry.js §05.2c bodyGasOverlapArea) and the
-// pair's conductivities combined in series (like two resistors/conductors
-// back to back: 1/k_eff = 1/k1 + 1/k2). A lone interaction with no partner
-// on its body moves nothing -- there is no source/sink on the far side.
-function groupInteractionsByBody(list){
-  const m=new Map();
-  for(const it of list){ let a=m.get(it.bodyId); if(!a){ a=[]; m.set(it.bodyId,a); } a.push(it); }
-  return m;
-}
-function gasById(id){ return id==null?null:gases.find(g=>g.id===id); }
-// Exact two-body heat relaxation over one substep. Both the equilibrium
-// temperature and the exponential approach to it fall straight out of
-// solving the pair's linear ODE analytically (spec: "approached
-// exponentially ... to avoid overshooting equilibrium") --
-//   C_A dT_A/dt = cond(T_B-T_A),  C_B dT_B/dt = -cond(T_B-T_A)
-// so D=T_A-T_B decays as D0*exp(-lambda t), lambda=cond(1/C_A+1/C_B), and
-// C_A T_A + C_B T_B is exactly conserved -- giving both T's in closed form,
-// unconditionally stable for any h. A background side has infinite
-// capacity (C->infinity): it never itself moves, and lambda reduces to
-// cond/C on the real side alone (Newton's law of cooling toward a fixed
-// bath). Mutates the real gas(es)' T and accumulates their _Qstep (the
-// non-mechanical energy this substep, physics.js §08.6's rescale target).
-function applyHeatPair(iA,iB,h){
-  const body=bodies[bodyIndex(iA.bodyId)]; if(!body) return;
-  const gA=gasById(iA.gasId), gB=gasById(iB.gasId);
-  if(gA===gB) return; // both background, or the same gas on both sides: nothing to move
-  const areaA = gA ? bodyGasOverlapArea(body,gA) : Infinity;
-  const areaB = gB ? bodyGasOverlapArea(body,gB) : Infinity;
-  const areaMin=Math.min(areaA,areaB);
-  if(!(areaMin>1e-9)) return;
-  const cond = areaMin/(1/Math.max(iA.k,1e-6)+1/Math.max(iB.k,1e-6));
-  const TA = gA?gA.T:sim.bg.T, TB = gB?gB.T:sim.bg.T;
-  const D0=TA-TB; if(D0===0) return;
-  if(gA && gB){
-    const CA=gA.mass/(gA.gamma-1), CB=gB.mass/(gB.gamma-1);
-    const D1=D0*Math.exp(-cond*(1/CA+1/CB)*h);
-    const W=CA*TA+CB*TB;
-    const TA1=(W+CB*D1)/(CA+CB), TB1=(W-CA*D1)/(CA+CB);
-    gA._Qstep+=CA*(TA1-TA); gA.T=TA1;
-    gB._Qstep+=CB*(TB1-TB); gB.T=TB1;
-  } else if(gA){
-    const CA=gA.mass/(gA.gamma-1);
-    const TA1=TB+D0*Math.exp(-cond/CA*h);
-    gA._Qstep+=CA*(TA1-TA); gA.T=TA1;
-  } else {
-    const CB=gB.mass/(gB.gamma-1);
-    const TB1=TA-D0*Math.exp(-cond/CB*h);
-    gB._Qstep+=CB*(TB1-TB); gB.T=TB1;
-  }
-}
-// Signed recoil-force contribution from a molar flow rate `mdotIn` (moles/
-// time flowing INTO the gas this belongs to) -- a thrust-like |P·A| effect
-// applied along the gas's own axis (dW), scaled by a thermal-speed-like
-// characteristic velocity sqrt(T) of whichever side the moles are actually
-// leaving (the source's T, not the destination's). Summed per-gas into
-// g._flowForce (reset each substep) and applied in §08.1 alongside the
-// pressure force, split across the same piston/head attachment points.
-function flowForceMag(mdotIn, Tsrc, Town){
-  const vChar=Math.sqrt(Math.max(mdotIn>0?Tsrc:Town, 1e-6));
-  return mdotIn*vChar;
-}
-// Exact two-body flow relaxation, the mass-transfer analogue of
-// applyHeatPair: with T and V held fixed over the substep (same
-// instantaneous-equilibrium stance as the gas's own P=nT/V, spec §6.1), each
-// side's "pressure per mole" s=T/V is constant, P=n·s, and
-//   dn_A/dt = flowCond(P_B-P_A),  dn_B/dt = -flowCond(P_B-P_A)
-// reduces to the identical linear form as the heat ODE with s playing the
-// role of 1/C -- D=P_A-P_B decays as D0*exp(-lambda t), lambda=flowCond
-// (s_A+s_B), and n_A+n_B is exactly conserved, giving n_A(t) (and hence
-// n_B(t)) in closed form. A background side holds a fixed P (sim.bg.P): the
-// real side alone relaxes toward n_eq=P_bg/s. Moles that cross carry their
-// *source* gas's own internal energy (dn·cv_src·T_src) into the
-// destination, which is absorbed at the destination's own cv (mirrors a
-// real gas mixing at constant composition); the gas left behind keeps its
-// own T unchanged, since removing gas at a given T doesn't change the T of
-// what remains.
-function applyFlowPair(iA,iB,h){
-  const body=bodies[bodyIndex(iA.bodyId)]; if(!body) return;
-  const gA=gasById(iA.gasId), gB=gasById(iB.gasId);
-  if(gA===gB) return;
-  const areaA = gA ? bodyGasOverlapArea(body,gA) : Infinity;
-  const areaB = gB ? bodyGasOverlapArea(body,gB) : Infinity;
-  const areaMin=Math.min(areaA,areaB);
-  if(!(areaMin>1e-9)) return;
-  const flowCond = areaMin/(1/Math.max(iA.k,1e-6)+1/Math.max(iB.k,1e-6));
-  const VA = gA?Math.max(gA.bore*gasFrame(gA).xc,1e-6):null;
-  const VB = gB?Math.max(gB.bore*gasFrame(gB).xc,1e-6):null;
-  const sA = gA?gA.T/VA:null, sB = gB?gB.T/VB:null;
-  const PA = gA?gA.mass*sA:sim.bg.P, PB = gB?gB.mass*sB:sim.bg.P;
-  let dnBtoA; // net moles moved from B's side to A's side this substep (signed)
-  if(gA && gB){
-    // dn_A/dt = flowCond(P_B-P_A) = -flowCond·D (D=P_A-P_B), so n_A moves
-    // *down* when A is the higher-pressure side (D0>0) -- the minus sign
-    // here is that direction, not a typo of the heat pair's plus.
-    const D0=PA-PB, D1=D0*Math.exp(-flowCond*(sA+sB)*h);
-    dnBtoA=-(D0-D1)/(sA+sB);
-  } else if(gA){
-    const nEq=sim.bg.P/sA;
-    dnBtoA=(nEq-gA.mass)*(1-Math.exp(-flowCond*sA*h));
-  } else {
-    const nEq=sim.bg.P/sB;
-    dnBtoA=-(nEq-gB.mass)*(1-Math.exp(-flowCond*sB*h));
-  }
-  if(!isFinite(dnBtoA) || dnBtoA===0) return;
-  const mdot=dnBtoA/h; // molar rate into A (out of B)
-  if(dnBtoA>0){
-    const Tsrc = gB?gB.T:sim.bg.T, cvSrc = gB?1/(gB.gamma-1):1/(sim.bg.gamma-1);
-    if(gB) gB.mass=Math.max(gB.mass-dnBtoA,1e-6);
-    if(gA){ const cvA=1/(gA.gamma-1); const Uold=gA.mass*cvA*gA.T; const dU=dnBtoA*cvSrc*Tsrc;
-      gA.mass+=dnBtoA; gA.T=(Uold+dU)/(gA.mass*cvA); gA._Qstep+=dU; }
-  } else {
-    const dn=-dnBtoA;
-    const Tsrc = gA?gA.T:sim.bg.T, cvSrc = gA?1/(gA.gamma-1):1/(sim.bg.gamma-1);
-    if(gA) gA.mass=Math.max(gA.mass-dn,1e-6);
-    if(gB){ const cvB=1/(gB.gamma-1); const Uold=gB.mass*cvB*gB.T; const dU=dn*cvSrc*Tsrc;
-      gB.mass+=dn; gB.T=(Uold+dU)/(gB.mass*cvB); gB._Qstep+=dU; }
-  }
-  if(gA) gA._flowForce += flowForceMag(mdot, gB?gB.T:sim.bg.T, gA.T);
-  if(gB) gB._flowForce += flowForceMag(-mdot, gA?gA.T:sim.bg.T, gB.T);
-}
 // ---- §08.1 · applied forces -> candidate velocities ----
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
-  // Keep every vessel's cap body mass equal to its gas's own mass/3 (the
-  // ramp-profile effective inertia, geometry.js) *before* islands/preE are
-  // captured below -- so a mass change from the previous substep's flow
-  // transfer is already baked into this substep's energy baseline instead
-  // of being read as drift by §08.6's rescale.
-  for(const g of gases) syncVesselCapMass(g);
   const N=bodies.length;
   // Snapshot each island's pre-substep energy budget (§08.6's target) and
   // momentum (§08.6's momentum-conservation target for a free island)
@@ -275,16 +131,6 @@ function substep(h){
     isl.P0=[k0.px,k0.py]; isl.L0=k0.L; isl.M=k0.M; isl.com0=[k0.cx,k0.cy];
   }
   const grabbing = !!(grab && bodies[grab.bi] && !bodies[grab.bi].static);
-
-  // §08.0b heat & flow interactions: resolved once per substep, strictly
-  // after preE above so its energy delta (_Qstep) reads as the legitimate
-  // external input the §08.6 rescale expects, never as pre-existing state.
-  for(const g of gases){ g._Qstep=0; g._flowForce=0; g._reflected=false; }
-  for(const [,list] of groupInteractionsByBody(heatInteractions))
-    for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++) applyHeatPair(list[i],list[j],h);
-  for(const [,list] of groupInteractionsByBody(flowInteractions))
-    for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++) applyFlowPair(list[i],list[j],h);
-  for(const g of gases){ if(g.T<1e-4) g.T=1e-4; }
 
   // 1) accumulate applied forces, then integrate into candidate velocities v*
   const FX=new Array(N).fill(0), FY=new Array(N).fill(0), TAU=new Array(N).fill(0);
@@ -304,45 +150,15 @@ function substep(h){
       FX[i]+=Fx; FY[i]+=Fy; TAU[i]+=rx*Fy-ry*Fx;
     }
   }
-  // gas force elements: net F = (P_gas - P_bg)·bore along the axis, pushing
-  // the piston off the head -- the movable wall feels internal *and*
-  // atmospheric pressure (spec: piston update), the rest of the vessel feels
-  // the equal and opposite reaction. A fixed-volume gas (no piston body,
-  // f.A null) has no movable wall to push, so contributes no force at all.
-  // A separate contribution, g._flowForce (§08.0b), rides the same axis and
-  // the same head/piston split -- the recoil from gas mass crossing this
-  // gas's own boundary via a flow interaction.
-  for(const g of gases){
-    const f=gasFrame(g);
-    const P=g.mass*g.T/(g.bore*f.xc); g._P=P; g._V=g.bore*f.xc; g._x=f.x; g._dW=f.dW;
-    const Fmag=(P-sim.bg.P)*g.bore + g._flowForce;
-    const Fx=Fmag*f.dW[0], Fy=Fmag*f.dW[1];
-    if(f.A && !f.A.static){ FX[f.ia]+=Fx; FY[f.ia]+=Fy; TAU[f.ia]+= f.prx*Fy - f.pry*Fx; }
-    if(f.B && !f.B.static){ FX[f.ib]-=Fx; FY[f.ib]-=Fy; TAU[f.ib]+= f.hrx*(-Fy) - f.hry*(-Fx); }
-    // The flow-force's own mechanical work is drawn from the same
-    // transferred internal energy already booked into _Qstep at §08.0b --
-    // credit it here (pre-solve point velocities, first-order in h) so
-    // §08.6's rescale treats this recoil KE as legitimate external input
-    // instead of erasing it as drift. The ordinary pressure-force work needs
-    // no such credit: it already trades against the gas's own P·dV term
-    // (§08.5).
-    if(Math.abs(g._flowForce)>1e-12){
-      const ffx=g._flowForce*f.dW[0], ffy=g._flowForce*f.dW[1];
-      let work=0;
-      if(f.A){ const vpx=f.A.vx-f.A.w*f.pry, vpy=f.A.vy+f.A.w*f.prx; work+=ffx*vpx+ffy*vpy; }
-      if(f.B){ const vhx=f.B.vx-f.B.w*f.hry, vhy=f.B.vy+f.B.w*f.hrx; work-=ffx*vhx+ffy*vhy; }
-      g._Qstep+=work*h;
-    }
-  }
   // linear spring force elements: Hookean, F = k*(restLen-L) along the line
   // joining the two endpoints -- same two-endpoint frame as rod (twoPointFrame,
   // §06.1), reused as-is since a spring needs only L and the unit direction,
   // never phi (there is no weld/angle-lock row for a force element).
   for(const sp of springs){
-    // Either endpoint may be a vessel-interior point (constraints.js
-    // §06.2d) -- epFrame handles both uniformly; a force (Fx,Fy) applied at
-    // a point is exactly that point's velCols evaluated at (Fx,Fy) rather
-    // than a unit direction (virtual-work identity, see §06.2d's comment).
+    // A force (Fx,Fy) applied at a point is exactly that point's velCols
+    // evaluated at (Fx,Fy) rather than a unit direction (virtual-work
+    // identity: dir.v_point = sum(jx*vx+jy*vy+jw*w) holds for any dir, so it
+    // holds component-wise for dir=(Fx,Fy) too).
     const A=epFrame(sp.a), B=epFrame(sp.b);
     const dx=A.wx-B.wx, dy=A.wy-B.wy, L=Math.hypot(dx,dy)||1e-9;
     const ux=dx/L, uy=dy/L;
@@ -356,7 +172,7 @@ function substep(h){
   // rotational spring force elements: torsional, tau = k*(restAngle-thRel)
   // between the two bodies' frame angles (background reads as a fixed
   // theta=0, mirroring rotSpringRelAngle, §06.6) -- a pure couple, no point
-  // of application, so no torque-arm term the way rod/gas need one.
+  // of application, so no torque-arm term the way rod needs one.
   for(const rs of rotSprings){
     const hasA=rs.a.id!=null, hasB=rs.b.id!=null;
     const ia=hasA?bodyIndex(rs.a.id):-1, ib=hasB?bodyIndex(rs.b.id):-1;
@@ -487,67 +303,6 @@ function substep(h){
       cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C});
     }
   }
-  // Gas minimum-volume stop (constraints.js §06.2b, gasStopRow): keeps a
-  // piston's true axial separation x from ever compressing past GAS_MIN_X.
-  // Without this, that job fell to gasFrame's xc=max(x,GAS_MIN_X) clamp
-  // inside the P=nT/V formula alone -- softening the *pressure*, not the
-  // geometry. A piston fast enough to cross GAS_MIN_X within one substep
-  // then kept compressing past it unopposed by any further pressure rise
-  // (xc, and so P and V=bore*xc, all plateau once x<GAS_MIN_X), so §08.5's
-  // dU=-P.dV saw a frozen V and stopped crediting/debiting the gas's own U
-  // for motion that was still really happening -- decoupling the mechanism's
-  // actual KE change from the gas's energy ledger. §08.6's rescale, which
-  // trusts that ledger, then "corrected" the resulting mismatch by erasing
-  // real KE every time a stroke dipped below the floor, a loss that doesn't
-  // cancel over a cycle and drives the gas toward its T floor at small
-  // volumes -- exactly the reported symptom.
-  //
-  // This is deliberately *not* folded into the Schur-complement rows below:
-  // every row there shares one Baumgarte target (drive post-solve Jv toward
-  // -kb*C, this function's `rhs` line further down), which is exactly right
-  // for a bilateral joint (a rod should stay at rest once its length is
-  // satisfied) but wrong here -- pinning the piston's own Jv at ~0 for as
-  // long as it sits at the floor makes the stop a fully inelastic "glue"
-  // that destroys its entire closing KE on contact. And because that KE
-  // lands at exactly zero rather than merely shrinking, §08.6's *multiplicative*
-  // rescale can't hand it back either (nothing to scale up from zero) --
-  // confirmed by instrumented play: every floor contact was a one-substep,
-  // uncompensated KE loss of exactly 0.5*m*v^2, not the rare, self-correcting
-  // "momentarily at rest" case that branch's own comment expects, because a
-  // deep stroke hits the floor on every cycle, not once in passing. A stop
-  // meant to be energy-conserving needs restitution, not Baumgarte, so this
-  // is a standalone elastic (e=1) reflection impulse applied directly:
-  // cancel the closing component of Jv and hand it straight back reversed,
-  // which conserves this DOF's KE exactly and needs no rescue from §08.6 at
-  // all -- same target math as the rows below (lambda=-(1+e)*Jv/w), just
-  // with the restitution target a bilateral row's Baumgarte rhs doesn't
-  // have.
-  //
-  // Activation is anticipatory: C+h*Jv (this step's own linear prediction of
-  // where C=x-GAS_MIN_X lands after §08.4's position integration, at the
-  // current pre-reflection closing rate) rather than just the current C.
-  // GAS_MIN_X is deliberately tiny (a numerical floor, not a real object's
-  // thickness), so a piston needs only a modest closing speed for h*Jv to
-  // already exceed the whole gap once C gets close; waiting for C itself to
-  // cross zero the way the cable's own end-stop does would let §08.4
-  // integrate position past the floor first, reopening the same gap for the
-  // one substep it takes to react.
-  for(const g of gases){
-    if(!g.piston) continue; // fixed-length vessel: x is a constant, nothing to stop
-    const {cols,C}=gasStopRow(g);
-    let Jv=0; for(const c of cols){ const b=bodies[c[0]]; Jv+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; }
-    if(!(C<-1e-4 || (C+h*Jv<1e-4 && Jv<0))) continue; // not about to violate
-    let w=0; for(const c of cols){ const im=invMdiag(bodies[c[0]]); w+=c[1]*c[1]*im[0]+c[2]*c[2]*im[1]+c[3]*c[3]*im[2]; }
-    if(w<1e-12) continue;
-    if(Jv<0){ const lambda=-2*Jv/w; // e=1 reflection: post-solve Jv = -Jv
-      for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.vx+=b.invM*c[1]*lambda; b.vy+=b.invM*c[2]*lambda; b.w+=b.invI*c[3]*lambda; }
-      g._reflected=true; }
-    if(C<0){ // already past the floor (e.g. a scene loaded with x<GAS_MIN_X) -- snap back out
-      const lamPos=-C/w;
-      for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.x+=b.invM*c[1]*lamPos; b.y+=b.invM*c[2]*lamPos; b.th+=b.invI*c[3]*lamPos; } }
-  }
   const m=rows.length;
   if(m>0){
     // per-row body->j map for K assembly
@@ -582,89 +337,6 @@ function substep(h){
   // 4) integrate positions
   for(const b of bodies){ if(b.static)continue; b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w; }
 
-  // ---- §08.5 · gas thermodynamics (mechanical work) ----
-  // 5) mechanical work: dU = -P dV over this substep's actual volume change
-  //    (R = 1 in abstract units; c_v = 1/(gamma-1)). Work leaves the gas as the
-  //    same P·DeltaV the piston force just did on the mechanism -> energy is
-  //    consistent. Heat/flow's non-mechanical energy input was already folded
-  //    into T (and n) at §08.0b, above the force pass -- g._Qstep already
-  //    holds that amount for the §08.6 rescale below, so it isn't added again
-  //    here; a gas with no interactions (kappa/flow = 0, the adiabatic "gas
-  //    spring" case) is untouched by §08.0b and traverses its adiabat purely
-  //    through this term, exactly as before.
-  //
-  //    The gas's own dU only accounts for work crossing *its* boundary, but
-  //    the force actually delivered to the bodies (§08.1) is the *net*
-  //    (P_gas - P_bg)·bore, not P_gas·bore alone -- the background makes up
-  //    the difference by doing P_bg·dV of flow work on (or absorbing it from)
-  //    the piston at its open face, same as atmospheric pressure doing work
-  //    on a piston expanding into open air. That term never touches the
-  //    gas's own T, but it does leave (or enter) the mechanism's own
-  //    KE/PE/U ledger, so it has to be booked here -- g._Watm, alongside
-  //    g._Qstep -- or §08.6's invariant is missing an energy channel and
-  //    "corrects" for it by silently overwriting the correct post-solve KE,
-  //    which is exactly what masks a real (P_gas - P_bg) restoring force.
-  for(const g of gases){
-    const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
-    // A substep in which the minimum-volume stop (§08.3) elastically
-    // reflected this gas's piston doesn't get an ordinary dV credited to
-    // its *own* U here. That reflection redirects KE alone (no U change, by
-    // design), but position still integrates over this *entire* step
-    // (§08.4) at the post-reflection (outward) velocity, so Vnew-g._V reads
-    // as a real expansion that never happened as gas work -- it's just the
-    // reflection's own kinematics, whose KE it already conserved on its
-    // own. Crediting that phantom dV to P·dV here double-books it: on top
-    // of the KE the reflection already conserved, this would *also* debit
-    // the gas's U for having (apparently) produced that KE -- a real,
-    // uncompensated loss confirmed by instrumented play (every reflecting
-    // substep's own energy dropped; every other substep's didn't, and the
-    // two didn't cancel over a cycle). So dV reads as zero for *this* gas's
-    // own thermodynamic purposes on a reflected step; g._V/g._P simply
-    // resynchronize to the new true geometry starting next substep.
-    //
-    // g._Watm, below, does NOT get the same treatment, even though it's
-    // built from the same dV: it isn't the gas's own energy, it's real
-    // P_bg·dV work crossing the piston's *outer*, atmosphere-facing face,
-    // and the background does that work regardless of *why* the piston
-    // moved this step -- reflection or ordinary compression -- because the
-    // real geometry (and so the real V) changed either way. Zeroing it here
-    // too (an earlier version of this fix did exactly that) quietly broke
-    // the *other* half of the invariant instead: §08.6's keTarget subtracts
-    // totalWatm from the mechanism's own energy precisely so a piston
-    // expanding into the atmosphere is credited for the work leaving
-    // through that open face: forge Watm to 0 while x still genuinely grew
-    // this step and the mechanism's tracked energy keeps everything it
-    // "should" have paid the atmosphere for that expansion, injecting a
-    // real surplus once per reflection -- confirmed by instrumented play:
-    // KE+PE+U+P_bg·V (the true, atmosphere-inclusive total) grew by exactly
-    // P_bg·dV on every reflecting step once dU alone stopped leaking.
-    const dU = g._reflected ? 0 : -g._P*dV;
-    const cv=1/(g.gamma-1);
-    g.T += dU/(g.mass*cv);
-    let clampedAway=0;
-    if(g.T<1e-4){
-      // T can't actually go negative, but the substep that would have taken
-      // it there already delivered the *mechanical* side of that dU to the
-      // bodies in full back at §08.1 (computed from g._P, itself derived
-      // from T *before* this clamp) -- clamping T alone, with nothing else
-      // adjusted, leaves post.U reading higher than the naive dU implied
-      // while KE already reflects the full amount, so §08.6 below is left
-      // to "discover" that surplus and correct for it via whatever spare
-      // capacity that substep's rescale happens to have (the same
-      // degenerate-KE limitation as a turning point, banked the same way --
-      // but this floor binds far more often than a real turning point does,
-      // so the unresolved residue adds up over long runs instead of staying
-      // negligible). Crediting the clamped-away amount to g._Watm keeps it
-      // out of the invariant the same way real atmospheric flow work is --
-      // it already left the tracked KE+PE+U system as real KE, so it
-      // shouldn't also sit in keTarget waiting to be clawed back.
-      clampedAway=(1e-4-g.T)*(g.mass*cv);
-      g.T=1e-4;
-    }
-    g._Q=g._Qstep/h;
-    g._Watm=sim.bg.P*dV+clampedAway;
-  }
-
   // ---- §08.6 · energy-conservation rescale ----
   // The Baumgarte-stabilized solve (§08.3) is only an approximate velocity
   // projection -- its leak grows with per-substep drift and with how many
@@ -673,10 +345,8 @@ function substep(h){
   // Rather than chase a bigger gain (a shorter correction lag traded for a
   // bigger per-step kick, and a lower instability ceiling on longer chains),
   // close the gap exactly: absent a live drag (which legitimately injects/
-  // removes energy) the mechanical+gas total entering this substep (preE),
-  // plus whatever heat/flow interactions (§08.0b) legitimately added or
-  // removed this substep (totalQ), is treated as an invariant -- per island
-  // (§08.0), not once over the whole
+  // removes energy) the mechanical total entering this substep (preE) is
+  // treated as an invariant -- per island (§08.0), not once over the whole
   // world, so an unrelated mechanism elsewhere in the scene can't leak
   // energy into (or out of) this one through a shared scalar.
   //
@@ -709,7 +379,6 @@ function substep(h){
   // so scaling it can never reintroduce the drift the first step removed.
   if(!grabbing){
     for(const isl of islands){
-      let totalQ=0, totalWatm=0; for(const g of isl.gases){ totalQ+=g._Qstep; totalWatm+=g._Watm; }
       // Free island: apply the exact-trapezoidal COM position correction
       // *before* post.pe is read below -- see the "Free island" comment
       // further down for the full derivation of why this exists at all.
@@ -718,10 +387,7 @@ function substep(h){
       // same gravity-vs-position mismatch: post.pe has to already reflect
       // the corrected geometry, or keTarget still carries the old (stale)
       // shortfall and the internal rescale "discovers" and re-fixes it a
-      // second time on top of this one, injecting real spurious energy --
-      // confirmed by instrumented play (this ordering bug alone inflated a
-      // gas piston's total energy over 20x across 2000 simulated seconds
-      // once there was internal motion for the rescale to (over)act on).
+      // second time on top of this one, injecting real spurious energy.
       if(!isl.anchored){
         const k0now=islandKinematics(isl.bodyIdx);
         const Ptx0=isl.P0[0], Pty0=isl.P0[1]+(sim.gravity? -sim.g*isl.M*h : 0);
@@ -731,23 +397,13 @@ function substep(h){
         for(const i of isl.bodyIdx){ bodies[i].x+=dComX; bodies[i].y+=dComY; }
       }
       const post=energy(isl);
-      // totalQ is the raw reservoir heat Q (not net dU): the P·dV term inside
-      // dU=Q-P·dV is internal work already transferred into the mechanism's
-      // KE/PE by §08.1/§08.3/§08.4 and reflected in post.pe/post.ke, so adding
-      // it again here would double-count it. Only the externally-sourced Q
-      // belongs in the invariant alongside preE (which already includes the
-      // gas's own pre-substep internal energy). totalWatm (§08.5) is the
-      // flow work each gas traded with the background at its open face
-      // (P_bg·dV) -- energy that leaves the mechanism as it expands (or
-      // enters it as it's compressed) without ever being heat or being
-      // credited to the gas's own U, so it has to leave the invariant the
-      // same way totalQ enters it. post.SPE (spring potential energy,
-      // hud.js §12.1) is subtracted the same way post.pe is: it's a
-      // legitimate KE<->PE channel the spring force itself already moved
-      // energy through in §08.1/§08.4, not a discrepancy to fold back.
+      // post.SPE (spring potential energy, hud.js §12.1) is subtracted the
+      // same way post.pe is: it's a legitimate KE<->PE channel the spring
+      // force itself already moved energy through in §08.1/§08.4, not a
+      // discrepancy to fold back.
       const bankKey=islandBankKey(isl);
       const banked=ENERGY_BANK.get(bankKey)||0;
-      const keTarget=isl.preE+totalQ-totalWatm-post.pe-post.U-post.SPE+banked;
+      const keTarget=isl.preE-post.pe-post.SPE+banked;
       if(isl.anchored){
         // keTarget<=0 (all mechanical energy would have to come from an
         // impossible negative KE) or the island is momentarily at rest: leave
@@ -788,7 +444,7 @@ function substep(h){
       // uncorrected, that's exactly the classic secular energy drift of
       // symplectic Euler applied to *constant* (unbounded, non-oscillating)
       // acceleration: confirmed on a single free body with gravity and
-      // nothing else touching it -- no gas, no internal motion for the
+      // nothing else touching it -- no internal motion for the
       // multiplicative rescale below to ever absorb the deficit into, so
       // ENERGY_BANK just grew forever instead of resolving. The COM position
       // correction applied above (before `post`) is what actually fixes
