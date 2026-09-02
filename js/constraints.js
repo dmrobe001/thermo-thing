@@ -30,6 +30,7 @@ function bodyIndex(id){ return bodies.findIndex(b=>b.id===id); }
 // null-id convention already used by gas heads and cable tethers. Shared by
 // rod and slot, whose endpoints are both {id, off} pairs.
 function epWorld(ep){
+  if(ep.vesselId!=null){ const {wx,wy}=epFrame(ep); return [wx,wy,0,0]; }
   if(ep.id==null) return [ep.off[0], ep.off[1], 0, 0];
   return worldPt(bodies[bodyIndex(ep.id)], ep.off);
 }
@@ -212,6 +213,90 @@ function gasStopRow(g){
   if(f.A) cols.push([f.ia, f.dW[0], f.dW[1], -f.dW[0]*f.pry+f.dW[1]*f.prx]);
   if(f.B) cols.push([f.ib, -f.dW[0], -f.dW[1], f.dW[0]*f.hry-f.dW[1]*f.hrx]);
   return { cols, C: f.x-GAS_MIN_X };
+}
+
+// ---- §06.2d · vessel-interior endpoints ----
+// A point *inside* a gas vessel (DEVELOPMENT.md §6.1's "the piston is a
+// single hidden-DOF body" redesign) is a valid rod/pin/spring endpoint, not
+// just the head or cap plate. `frac` is the *material* fraction of the way
+// from head to cap (so the point rides along with the gas as it expands,
+// staying at the same fraction rather than a fixed distance) and `lat` is
+// the fixed lateral offset across the bore. Its velocity follows the same
+// linear ramp used for the cap body's mass/3 effective inertia: zero
+// (relative to the head frame) at frac=0, the full head-to-cap relative
+// rate at frac=1.
+//
+//   v_point = v_head_at(frac*sep, lat)
+//           + frac * dW * [ dW . (v_cap_at(cap.off) - v_head_at(sep,0)) ]
+//
+// `mergeCols` sums duplicate body-index entries -- required, not cosmetic:
+// physics.js's Schur assembly builds each row's per-body map with
+// `mp.set(idx,...)`, which *overwrites* rather than accumulates, so two
+// separate column entries for the same body silently drop one and corrupt
+// the row. Two of this function's three terms land on the same body
+// (head), so they must be pre-summed before returning.
+function mergeCols(colArrays){
+  const m=new Map();
+  for(const cols of colArrays) for(const [idx,cx,cy,cw] of cols){
+    const e=m.get(idx); if(e){ e[0]+=cx; e[1]+=cy; e[2]+=cw; } else m.set(idx,[cx,cy,cw]);
+  }
+  return [...m.entries()].map(([idx,[cx,cy,cw]])=>[idx,cx,cy,cw]);
+}
+// Velocity-Jacobian columns for a vessel-interior point, projected onto an
+// arbitrary probe direction (dirx,diry) -- linear in that direction, so
+// calling this with the *negated* direction gives the negated columns (used
+// to combine two endpoints of one row) and calling it with an actual force
+// vector (Fx,Fy) instead of a unit direction gives that force's generalized
+// (FX,FY,TAU) contribution to each involved body (virtual-work identity:
+// dir.v_point = sum(jx*vx+jy*vy+jw*w) holds for any dir, so it holds
+// component-wise for dir=(Fx,Fy) too).
+function vesselPointCoeffs(v, frac, lat, dirx, diry){
+  const f=gasFrame(v);
+  frac=Math.max(0,Math.min(1,frac)); lat=lat||0;
+  const dW=f.dW;
+  const terms=[];
+  if(f.B){
+    // term 1: head's own rigid motion, carried out to the interior point.
+    const [,,rx1,ry1]=worldPt(f.B,[frac*f.x, lat]);
+    terms.push([[f.ib, dirx, diry, dirx*(-ry1)+diry*rx1]]);
+    if(f.A){
+      // term 2: subtract head's motion at the cap's own attach point, so
+      // only the *relative* (cap-vs-head) rate feeds term 3 below.
+      const k=frac*(dirx*dW[0]+diry*dW[1]);
+      const [,,rx2,ry2]=worldPt(f.B,[f.x,0]);
+      terms.push([[f.ib, -k*dW[0], -k*dW[1], (-k*dW[0])*(-ry2)+(-k*dW[1])*rx2]]);
+      // term 3: the cap's share of that relative rate, at its own offset.
+      terms.push([[f.ia, k*dW[0], k*dW[1], (k*dW[0])*(-f.pry)+(k*dW[1])*(f.prx)]]);
+    }
+  } else if(f.A){
+    // World-anchored head: no head-body terms at all, and nothing moves
+    // relative to the (fixed) frame except the cap's own share.
+    const k=frac*(dirx*dW[0]+diry*dW[1]);
+    terms.push([[f.ia, k*dW[0], k*dW[1], (k*dW[0])*(-f.pry)+(k*dW[1])*(f.prx)]]);
+  }
+  return mergeCols(terms);
+}
+// Resolve any rod/pin/spring endpoint -- a plain body {id,off}, a
+// background point {id:null,off}, or a vessel-interior point
+// {vesselId,frac,lat} -- to its live world position plus a `velCols`
+// closure giving the velocity-Jacobian columns for an arbitrary probe
+// direction (see vesselPointCoeffs above for the vessel case; a plain body
+// reduces to the ordinary single-column rotate-form, background to no
+// columns at all). Not used by rod's weld / slot's prismatic locks (a
+// vessel-interior point has no rotation of its own to lock to) -- those
+// keep using twoPointFrame directly.
+function epFrame(ep){
+  if(ep.vesselId!=null){
+    const v=gases.find(g=>g.id===ep.vesselId);
+    const f=gasFrame(v);
+    const frac=Math.max(0,Math.min(1,ep.frac)), lat=ep.lat||0;
+    const nrm=[-f.dW[1],f.dW[0]];
+    const wx=f.hx+f.dW[0]*frac*f.x+nrm[0]*lat, wy=f.hy+f.dW[1]*frac*f.x+nrm[1]*lat;
+    return { wx, wy, velCols:(dirx,diry)=>vesselPointCoeffs(v,frac,lat,dirx,diry) };
+  }
+  if(ep.id==null) return { wx:ep.off[0], wy:ep.off[1], velCols:()=>[] };
+  const idx=bodyIndex(ep.id); const [wx,wy,rx,ry]=worldPt(bodies[idx],ep.off);
+  return { wx, wy, velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx]] };
 }
 
 // ---- §06.3 · cableFrame ----
@@ -413,19 +498,28 @@ function rowsFor(con){
     ];
   }
   if(con.type==='pin'){
-    const A = bodies[bodyIndex(con.a.id)], B = bodies[bodyIndex(con.b.id)];
-    const [wax,way,rax,ray] = worldPt(A,con.a.off);
-    const [wbx,wby,rbx,rby] = worldPt(B,con.b.off);
-    const Cx = wax-wbx, Cy = way-wby;
-    const ia = bodyIndex(con.a.id), ib = bodyIndex(con.b.id);
+    // Either endpoint may be a vessel-interior point (§06.2d) instead of a
+    // plain body -- epFrame handles both uniformly.
+    const A=epFrame(con.a), B=epFrame(con.b);
+    const Cx = A.wx-B.wx, Cy = A.wy-B.wy;
     return [
-      { cols:[[ia,1,0,-ray],[ib,-1,0, rby]], C:Cx },
-      { cols:[[ia,0,1, rax],[ib,0,-1,-rbx]], C:Cy }
+      { cols: mergeCols([A.velCols(1,0), B.velCols(-1,0)]), C:Cx },
+      { cols: mergeCols([A.velCols(0,1), B.velCols(0,-1)]), C:Cy }
     ];
   }
   if(con.type==='rod'){
     // Either end may be background-anchored (id===null, off holds the world
-    // point directly -- §06.1 epWorld) instead of riding a body.
+    // point directly -- §06.1 epWorld), or a vessel-interior point
+    // (§06.2d) -- neither supports a weld, so the weld rows below only ever
+    // fire for the plain twoPointFrame path.
+    const isVessel = con.a.vesselId!=null || con.b.vesselId!=null;
+    if(isVessel){
+      const A=epFrame(con.a), B=epFrame(con.b);
+      const dx=A.wx-B.wx, dy=A.wy-B.wy, L=Math.hypot(dx,dy)||1e-9;
+      const ux=dx/L, uy=dy/L;
+      const cols=mergeCols([A.velCols(ux,uy), B.velCols(-ux,-uy)]);
+      return [{ cols, C:L-con.len }];
+    }
     const f=twoPointFrame(con);
     const {hasA,hasB,ia,ib,rax,ray,rbx,rby,ux,uy,L}=f;
     const distCols=[];

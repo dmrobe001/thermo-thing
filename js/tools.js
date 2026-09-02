@@ -46,14 +46,18 @@ function setTool(id){ tool=id; pending=null; bodyPreview=null; hover=null; hover
 // ---- §13.2 · picking & snapping ----
 let mouseScreen=[0,0], mouseWorld=[0,0], drag=null, panning=null;
 
+// A vessel's head/cap bodies (synthetic:true, geometry.js/tools.js §13.5)
+// are real physics bodies but not player-facing ones -- the vessel's own
+// pick path (gasHit/vesselEndpointAt below) owns them instead, so ordinary
+// body picking skips them.
 function pickBody(wx,wy){
-  for(let i=bodies.length-1;i>=0;i--){ if(bodyContains(bodies[i],wx,wy)) return i; }
+  for(let i=bodies.length-1;i>=0;i--){ if(!bodies[i].synthetic && bodyContains(bodies[i],wx,wy)) return i; }
   return -1;
 }
 // topmost body under the cursor that isn't `exceptId` -- lets the 2nd pin
 // pick reach a body occluded by the one already selected
 function pickBodyExcept(wx,wy,exceptId){
-  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i]; if(b.id===exceptId) continue;
+  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i]; if(b.id===exceptId || b.synthetic) continue;
     if(bodyContains(b,wx,wy)) return i; }
   return -1;
 }
@@ -75,9 +79,14 @@ function constraintHit(con,wx,wy){
     const midx=(ax+bx)/2, midy=(ay+by)/2;
     return Math.abs(nx*(wx-midx)+ny*(wy-midy))<=tol;
   }
+  if(con.type==='pin'){
+    // Either end may be a vessel-interior point (constraints.js §06.2d) --
+    // epWorld handles both that and a plain body uniformly.
+    const [ax,ay]=epWorld(con.a);
+    return (wx-ax)**2+(wy-ay)**2<=tol*tol;
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return false;
   const [ax,ay]=con.a.off?worldPt(A,con.a.off):[A.x,A.y];
-  if(con.type==='pin'){ return (wx-ax)**2+(wy-ay)**2<=tol*tol; }
   if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B) return false;
     return distSeg(wx,wy,A.x,A.y,B.x,B.y)<=tol; }
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
@@ -94,32 +103,52 @@ function pickConstraint(wx,wy){
 }
 // per-gas / per-cable hit tests, mirroring pickGas/pickCable (inspector.js
 // §14.1) -- used the same way, to test one specific already-selected object.
-// The whole piston area is the gas's target, not just its interior gas
-// column: axially from the head's inner face out through the *far* side of
-// the piston body (the body is drawn on top of the gas rectangle, render.js
-// §11.4 drawGas, so a click on it should still reach the gas it belongs to),
-// laterally across the full bore. Only the head stays excluded, matching
-// "except for the head" -- selecting or pointing a heat/flow interaction at
-// the head still targets that body.
+// The vessel now renders (render.js drawVessel) and is targeted as one
+// plain rectangle, head face to piston face, full bore -- no more special
+// casing to route a click on the (now hidden) piston plate through to the
+// gas underneath it.
 function gasHit(g,wx,wy){
   const f=gasFrame(g);
   const nrm=[-f.dW[1],f.dW[0]], hw=g.bore*0.5;
   const dx=wx-f.hx, dy=wy-f.hy;
   const s=dx*f.dW[0]+dy*f.dW[1], t=dx*nrm[0]+dy*nrm[1];
-  if(Math.abs(t)>hw) return false;
-  let sMax=f.x;
-  if(f.A){
-    // The piston's own far face/rim along the gas axis -- a rect plate's
-    // offset reflected through its centre (the offset already reaches the
-    // *near* face, by construction, tools.js §13.5/§06.2), or a circular
-    // piston's radius past its centre.
-    const A=f.A;
-    let ox,oy;
-    if(A.shape==='rect'){ [ox,oy]=worldPt(A,[-g.piston.off[0],-g.piston.off[1]]); }
-    else { ox=A.x+f.dW[0]*A.r; oy=A.y+f.dW[1]*A.r; }
-    sMax=(ox-f.hx)*f.dW[0]+(oy-f.hy)*f.dW[1];
-  }
-  return s>=0 && s<=sMax;
+  return s>=0 && s<=f.x && Math.abs(t)<=hw;
+}
+// Any point on or inside a vessel's rectangle is a valid rod/pin/spring
+// target (constraints.js §06.2d's {vesselId,frac,lat} endpoint) -- clamps a
+// click outside the outline back onto it, mirroring bodyEdgePoint's
+// clamp-to-boundary behavior for an ordinary body.
+function vesselEndpointAt(v,wx,wy){
+  const f=gasFrame(v);
+  const nrm=[-f.dW[1],f.dW[0]], hw=v.bore*0.5;
+  const dx=wx-f.hx, dy=wy-f.hy;
+  let s=dx*f.dW[0]+dy*f.dW[1], t=dx*nrm[0]+dy*nrm[1];
+  s=Math.max(0,Math.min(f.x,s)); t=Math.max(-hw,Math.min(hw,t));
+  return { vesselId:v.id, frac: f.x>1e-9 ? s/f.x : 0, lat:t };
+}
+// Which real body (head or cap) a heat/flow interaction reaches when the
+// player clicks somewhere on the vessel -- whichever half of the rectangle
+// (axially) the click landed in. Falls back to whichever end is real if the
+// other is world-anchored (head.id===null has no body at all).
+function pickVesselBody(v,wx,wy){
+  const f=gasFrame(v);
+  const dx=wx-f.hx, dy=wy-f.hy, s=dx*f.dW[0]+dy*f.dW[1];
+  if(s>=f.x/2 && f.A) return f.A.id;
+  if(f.B) return f.B.id;
+  return f.A ? f.A.id : null;
+}
+// Resolve a click to a rod/pin/spring endpoint on an ordinary body (via
+// anchorTarget) or, failing that, a vessel-interior point -- the two tool
+// paths (§13.5) that build these constraints go through this uniformly so
+// "any point on the vessel is a target" needs no per-tool special casing.
+function anchorOrVesselTarget(wx,wy){
+  const t=anchorTarget(wx,wy); if(t) return {kind:'body', body:t.body, wp:t.wp};
+  const gi=pickGas(wx,wy); if(gi>=0) return {kind:'vessel', ep:vesselEndpointAt(gases[gi],wx,wy)};
+  return null;
+}
+function epFromAnchorTarget(t){
+  if(t.kind==='vessel') return t.ep;
+  return {id:t.body.id, off:offOf(t.body,t.wp)};
 }
 // heat/flow interaction hit test, shared by both kinds -- the same dashed
 // line render.js §11.4c draws (body centre -> gas centroid, or a short stub
@@ -184,7 +213,7 @@ function offOf(b,P){ return R(-b.th, P[0]-b.x, P[1]-b.y); }
 // snap a world point to the nearest body centre or edge (optionally limited to some bodies)
 function snapAnchor(wx,wy,allow){
   const Rr=12/cam.scale; let best=null, bestD=Rr;
-  for(const b of bodies){ if(allow && !allow.includes(b.id)) continue;
+  for(const b of bodies){ if(b.synthetic) continue; if(allow && !allow.includes(b.id)) continue;
     const d=Math.hypot(wx-b.x,wy-b.y);
     if(d<bestD){ best={body:b,wp:[b.x,b.y],kind:'centre'}; bestD=d; }
     const de=bodyEdgeDist(b,wx,wy);
@@ -290,14 +319,22 @@ function pickHandle(wx,wy){
 function applyHandle(ad, wx, wy){
   const con=ad.con;
   if(con.type==='pin'){
+    // A vessel-interior endpoint (constraints.js §06.2d) has no body/off of
+    // its own to reposition this way -- not drag-rebindable via this
+    // handle, so just leave it be rather than dereference a nonexistent
+    // body.
+    if(con.a.vesselId!=null || con.b.vesselId!=null) return;
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     const s=snapAnchor(wx,wy,[A.id,B.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
     con.a.off=offOf(A,P); con.b.off=offOf(B,P);
   } else if(con.type==='rod'||con.type==='slot'){
     // Snap to a body if one is under/near the cursor; otherwise the end
-    // re-binds to the background at the raw world point.
+    // re-binds to the background at the raw world point. Rebinding always
+    // clears any stale vesselId from a previous vessel-interior attachment
+    // (constraints.js §06.2d), since epFrame/epWorld check that field first.
     const s=snapAnchor(wx,wy); lastSnap=s;
     const ep = ad.which==='A'? con.a : con.b;
+    delete ep.vesselId;
     if(s){ ep.id=s.body.id; ep.off=offOf(s.body,s.wp); }
     else { const bi=pickBody(wx,wy);
       if(bi>=0){ ep.id=bodies[bi].id; ep.off=offOf(bodies[bi],[wx,wy]); }
@@ -338,6 +375,7 @@ function applyHandle(ad, wx, wy){
       // literal current distance the way a rod's `len` is.
       const s=snapAnchor(wx,wy); lastSnap=s;
       const ep = ad.which==='A'? con.a : con.b;
+      delete ep.vesselId;
       if(s){ ep.id=s.body.id; ep.off=offOf(s.body,s.wp); }
       else { const bi=pickBody(wx,wy);
         if(bi>=0){ ep.id=bodies[bi].id; ep.off=offOf(bodies[bi],[wx,wy]); }
@@ -352,17 +390,27 @@ function scaleOffOnBody(ep, bodyId, ratio){
   if(ep && ep.id===bodyId && ep.off) ep.off=[ep.off[0]*ratio, ep.off[1]*ratio];
 }
 // Remove a gas and everything that exists only because of it: its hidden
-// piston<->cylinder prismatic link (tools.js §13.5, tagged with gasLink) and
-// any heat/flow interaction that names it -- otherwise those would dangle,
-// referencing a gasId nothing resolves to. Shared by the gas delete-tool,
-// the inspector's own "Delete gas" button, and the body-deletion cascade
-// below (a gas loses its physical meaning entirely once either of its two
-// boundary bodies is gone).
+// piston<->cylinder prismatic link (tools.js §13.5, tagged with gasLink),
+// any heat/flow interaction that names it, any rod/pin/spring endpoint
+// anchored to it (constraints.js §06.2d's {vesselId,...} shape), and its
+// auto-managed head/cap bodies -- those are synthetic (hidden from the
+// player as separate bodies, geometry.js/tools.js), so they have no
+// standalone existence once the vessel that owns them is gone. Shared by
+// the gas delete-tool, the inspector's own "Delete gas" button, and the
+// body-deletion cascade (a gas loses its physical meaning entirely once
+// either of its two boundary bodies is gone).
 function purgeGas(g){
   gases=gases.filter(x=>x!==g);
-  constraints=constraints.filter(c=>!(c.hidden && c.gasLink===g.id));
+  constraints=constraints.filter(c=>!(c.hidden && c.gasLink===g.id) && c.a.vesselId!==g.id && !(c.b&&c.b.vesselId===g.id));
+  springs=springs.filter(s=>s.a.vesselId!==g.id && !(s.b&&s.b.vesselId===g.id));
   heatInteractions=heatInteractions.filter(h=>h.gasId!==g.id);
   flowInteractions=flowInteractions.filter(f=>f.gasId!==g.id);
+  const synthIds=[g.piston&&g.piston.id, g.head&&g.head.id].filter(id=>id!=null);
+  for(const id of synthIds){ const b=bodies.find(x=>x.id===id); if(b && b.synthetic){
+    heatInteractions=heatInteractions.filter(h=>h.bodyId!==id);
+    flowInteractions=flowInteractions.filter(f=>f.bodyId!==id);
+    bodies=bodies.filter(x=>x!==b);
+  } }
 }
 // Resize the selected body by dragging its rim (§13.5/§13.6): every control
 // point anchored on it -- pin/rod/slot/knife offsets, gas cylinder/head
@@ -459,8 +507,8 @@ function applyBodyResize(rd, wx, wy){
 const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
 let clickArmed=false;   // non-select tools: the tap-committed click (§13.5/§13.7)
-let anchorDrag=null, lastSnap=null, resizeDrag=null;
-function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; clickArmed=false; }
+let anchorDrag=null, lastSnap=null, resizeDrag=null, vesselDrag=null;
+function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; vesselDrag=null; clickArmed=false; }
 
 // `hover` highlights whatever body/interaction sits under the cursor when it
 // isn't already selected; `hoverHandle` highlights a control point of the
@@ -507,9 +555,16 @@ function updateHover(wx,wy){
     const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
     return;
   }
-  if(tool==='pin'||tool==='rod'||tool==='slot'||tool==='cable'||tool==='spring'){
+  if(tool==='slot'||tool==='cable'){
     // these tools attach to a snapped anchor (body centre/edge) or a bare body
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
+    return;
+  }
+  if(tool==='pin'||tool==='rod'||tool==='spring'){
+    // as above, but a vessel (any point on it, interior included) is also a
+    // valid target once no ordinary body/snap answers (constraints.js §06.2d)
+    const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; return; }
+    const gi=pickGas(wx,wy); if(gi>=0) hover=gases[gi];
     return;
   }
   if(tool==='belt'||tool==='cvt'){
@@ -524,11 +579,13 @@ function updateHover(wx,wy){
     return;
   }
   if(tool==='heat'||tool==='flow'){
-    // first click needs a solid body; the second picks the gas (or empty
-    // space/background) it pairs that body with -- spec: "This interaction
-    // must have a solid body as one participant, and either a gas or the
-    // background as the other".
-    if(!pending){ const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi]; return; }
+    // first click needs a solid body (or a point on a vessel, which
+    // resolves to whichever real body -- head or cap -- it's nearer); the
+    // second picks the gas (or empty space/background) it pairs that body
+    // with -- spec: "This interaction must have a solid body as one
+    // participant, and either a gas or the background as the other".
+    if(!pending){ const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
+      const gi=pickGas(wx,wy); if(gi>=0) hover=gases[gi]; return; }
     const gsi=pickGas(wx,wy); if(gsi>=0) hover=gases[gsi];
     return;
   }
@@ -608,7 +665,11 @@ cv.addEventListener('pointerdown',e=>{
     const fii=pickFlowInteraction(wx,wy);
     if(fii>=0){ selectFlowInteraction(fii); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const gsi=pickGas(wx,wy);
-    if(gsi>=0){ selectGas(gsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    if(gsi>=0){ selectGas(gsi); const g=gases[gsi];
+      if(!sim.running){ vesselDrag={g, wx, wy}; }
+      else if(g.piston){ const ci=bodyIndex(g.piston.id); grab={bi:ci, off:offOf(bodies[ci],[wx,wy])}; }
+      else { panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; }
+      return; }
     const cbi=pickCable(wx,wy);
     if(cbi>=0){ selectCable(cbi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const spi=pickSpring(wx,wy);
@@ -707,27 +768,43 @@ function runToolClick(wx,wy){
     const yLo=Math.min(bodyPreview.y0,bodyPreview.y1), yHi=Math.max(bodyPreview.y0,bodyPreview.y1);
     bodyPreview=null;
     const plateHH=Math.min(0.06, boxH*0.12);               // each plate's own half-thickness
+    // Both plates are synthetic: real bodies (mass, gravity, normal physics)
+    // for the solver's sake, but hidden from the player as separate bodies
+    // -- drawVessel (render.js) paints the whole thing as one rectangle,
+    // and pickBody/snapAnchor skip them (tools.js). The cap's own mass is
+    // overwritten immediately below to the gas's mass/3 effective inertia
+    // (geometry.js syncVesselCapMass) rather than its plate-geometry mass.
     const headBody=makeRectBody(cx, yLo+plateHH, bore/2, plateHH, false);
     const pistonBody=makeRectBody(cx, yHi-plateHH, bore/2, plateHH, false);
+    headBody.synthetic=true; pistonBody.synthetic=true;
     bodies.push(headBody, pistonBody);
     const L=Math.max(boxH-4*plateHH, 0.1);
     const head={id:headBody.id, off:[0,plateHH], dir:[0,1]};
     const piston={id:pistonBody.id, off:[0,-plateHH]};
-    const T=sim.bg.T, gamma=sim.bg.gamma, n=Math.max(sim.bg.P*bore*L/T, 1e-6);
-    const g={kind:'gas', id:uid++, head, piston, bore, n, T, gamma, sel:false};
+    const T=sim.bg.T, gamma=sim.bg.gamma, mass=Math.max(sim.bg.P*bore*L/T, 1e-6);
+    const g={kind:'gas', id:uid++, head, piston, bore, mass, T, gamma, lockedField:'P', sel:false};
     const link=makeSlotCon({id:pistonBody.id,off:piston.off},{id:headBody.id,off:head.off},true,true);
     link.hidden=true; link.gasLink=g.id;
     constraints.push(link);
     gases.push(g);
+    syncVesselCapMass(g);
     saveState();
     return;
   }
   if(tool==='heat' || tool==='flow'){
     // click a solid body, then click a gas (or empty/background) -- spec:
     // "This interaction must have a solid body as one participant, and
-    // either a gas or the background as the other participant."
-    if(!pending){ const bi=pickBody(wx,wy); if(bi<0) return;
-      pending={interaction:tool, bodyId:bodies[bi].id, wp:[bodies[bi].x,bodies[bi].y]}; return; }
+    // either a gas or the background as the other participant." A click on
+    // a vessel resolves to whichever real (if synthetic) body -- head or
+    // cap -- is nearer, so any point on the vessel is a valid first click.
+    if(!pending){
+      const bi=pickBody(wx,wy);
+      if(bi>=0){ pending={interaction:tool, bodyId:bodies[bi].id, wp:[bodies[bi].x,bodies[bi].y]}; return; }
+      const gi=pickGas(wx,wy);
+      if(gi>=0){ const bid=pickVesselBody(gases[gi],wx,wy); if(bid==null) return;
+        const b=bodies.find(x=>x.id===bid); pending={interaction:tool, bodyId:bid, wp:[b.x,b.y]}; return; }
+      return;
+    }
     const bodyId=pending.bodyId; pending=null;
     const gsi=pickGas(wx,wy); const gasId = gsi>=0 ? gases[gsi].id : null;
     const rec={kind:tool, id:uid++, bodyId, gasId, k:2, sel:false};
@@ -787,44 +864,55 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='pin'){
-    // FIRST pick -- snapped anchor on body A; pending.wp is the pivot world point
-    if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
-      pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
-    const Aid=pending.id, Aoff=pending.off;
+    // FIRST pick -- snapped anchor on body A (or a vessel-interior point),
+    // pending.wp is the pivot world point
+    if(!pending){ const t=anchorOrVesselTarget(wx,wy); if(!t) return;
+      pending={ep:epFromAnchorTarget(t), wp: t.kind==='vessel'?[wx,wy]:t.wp}; return; }
+    const Aep=pending.ep;
     // the second click only *names* body B -- click any part of it, including
-    // where A covers it -- and B is anchored at the first pivot
-    const bi=pickBodyExcept(wx,wy,Aid);
-    const Bbody = bi>=0 ? bodies[bi] : (()=>{ const s=snapAnchor(wx,wy); return (s&&s.body.id!==Aid)?s.body:null; })();
-    if(!Bbody || Bbody.id===Aid) return;   // nothing indicated -- keep the pivot and wait
-    const Boff = offOf(Bbody, pending.wp); // place B's anchor at the first pivot
-    constraints.push({type:'pin', a:{id:Aid,off:Aoff}, b:{id:Bbody.id,off:Boff}, sel:false});
+    // where A covers it -- and B is anchored at the first pivot. A vessel is
+    // tried only once no ordinary body/snap answers, and only if it isn't
+    // the same vessel A is already anchored to.
+    let Bep=null;
+    const bi = Aep.id!=null ? pickBodyExcept(wx,wy,Aep.id) : pickBody(wx,wy);
+    if(bi>=0){ Bep={id:bodies[bi].id, off:offOf(bodies[bi],pending.wp)}; }
+    else { const s=snapAnchor(wx,wy); if(s && s.body.id!==Aep.id) Bep={id:s.body.id, off:offOf(s.body,pending.wp)}; }
+    if(!Bep){ const gi=pickGas(wx,wy);
+      if(gi>=0 && gases[gi].id!==Aep.vesselId) Bep=vesselEndpointAt(gases[gi], pending.wp[0], pending.wp[1]); }
+    if(!Bep) return;   // nothing indicated -- keep the pivot and wait
+    if(Aep.id!=null && Bep.id===Aep.id) return;
+    constraints.push({type:'pin', a:Aep, b:Bep, sel:false});
     pending=null; saveState();
     return;
   }
   if(tool==='rod'){
     // Each end snaps to a body if one is under/near the click, else attaches
-    // to the background at the raw world point (id:null).
-    if(!pending){ const t=anchorTarget(wx,wy);
-      pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+    // to the background at the raw world point (id:null), or -- failing
+    // both -- a vessel-interior point (constraints.js §06.2d).
+    if(!pending){ const t=anchorOrVesselTarget(wx,wy);
+      pending = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
       return; }
-    const t=anchorTarget(wx,wy);
-    const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
-    const Aep={id:pending.id, off:pending.off};
-    if(Aep.id==null && Bep.id==null) return;      // a rod needs at least one real body -- keep pending, wait for a better second click
+    const t=anchorOrVesselTarget(wx,wy);
+    const Bep = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
+    const Aep=pending;
+    if((Aep.id==null&&Aep.vesselId==null) && (Bep.id==null&&Bep.vesselId==null)) return; // a rod needs at least one real target -- keep pending, wait for a better second click
     if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself -- ditto
     pending=null;
     // A rod touching the background defaults to both ends welded -- a rigid
     // strut out of the wall -- since that's the anchoring use case; the user
-    // can tap either end afterward to free it into a pin.
-    const bg = Aep.id==null || Bep.id==null;
-    constraints.push(makeRodCon(Aep, Bep, bg, bg));
+    // can tap either end afterward to free it into a pin. Never welds a
+    // vessel-interior end (no rotation of its own to lock to).
+    const bg = (Aep.id==null&&Aep.vesselId==null) || (Bep.id==null&&Bep.vesselId==null);
+    constraints.push(makeRodCon(Aep, Bep, bg&&Aep.vesselId==null, bg&&Bep.vesselId==null));
     saveState();
     return;
   }
   if(tool==='slot'){
     // Two clicks, exactly like rod: each end snaps to a body if one is
     // under/near the click, else attaches to the background. The rail
-    // direction is implied by the two points' positions at creation.
+    // direction is implied by the two points' positions at creation. Slot
+    // has no vessel-interior support (constraints.js §06.2d's scoping note
+    // -- a prismatic lock needs a real body's rotation).
     if(!pending){ const t=anchorTarget(wx,wy);
       pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
       return; }
@@ -844,17 +932,17 @@ function runToolClick(wx,wy){
   }
   if(tool==='spring'){
     // Two clicks, exactly like rod: each end snaps to a body if one is
-    // under/near the click, else attaches to the background. Rest length
-    // defaults to the length at creation (makeSpringCon, constraints.js
-    // §06.6) -- no weld concept here, a spring only ever pulls/pushes along
-    // its own line.
-    if(!pending){ const t=anchorTarget(wx,wy);
-      pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+    // under/near the click, else attaches to the background, or -- failing
+    // both -- a vessel-interior point. Rest length defaults to the length
+    // at creation (makeSpringCon, constraints.js §06.6) -- no weld concept
+    // here, a spring only ever pulls/pushes along its own line.
+    if(!pending){ const t=anchorOrVesselTarget(wx,wy);
+      pending = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
       return; }
-    const t=anchorTarget(wx,wy);
-    const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
-    const Aep={id:pending.id, off:pending.off};
-    if(Aep.id==null && Bep.id==null) return;      // a spring needs at least one real body -- keep pending, wait for a better second click
+    const t=anchorOrVesselTarget(wx,wy);
+    const Bep = t ? epFromAnchorTarget(t) : {id:null, off:[wx,wy]};
+    const Aep=pending;
+    if((Aep.id==null&&Aep.vesselId==null) && (Bep.id==null&&Bep.vesselId==null)) return; // a spring needs at least one real target -- keep pending, wait for a better second click
     if(Aep.id!=null && Bep.id===Aep.id) return;    // can't spring a body to itself -- ditto
     pending=null;
     springs.push(makeSpringCon(Aep, Bep));
@@ -902,12 +990,25 @@ cv.addEventListener('pointermove',e=>{
   if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
   if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
 
-  if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; hoverSnap=null; }
+  if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab||vesselDrag){ hover=null; hoverHandle=null; hoverSnap=null; }
   else updateHover(mouseWorld[0],mouseWorld[1]);
   if(tool==='select') cv.style.cursor = resizeDrag ? 'grabbing' : (hoverHandle && hoverHandle.kind==='resize') ? 'grab' : 'default';
 
   if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
   if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
+  if(vesselDrag){
+    // Translate the whole vessel rigidly (head and cap by the identical
+    // world-space delta, so the axial separation -- and sepRate -- are
+    // untouched), the edit-mode counterpart of an ordinary body's pose drag.
+    const dx=mouseWorld[0]-vesselDrag.wx, dy=mouseWorld[1]-vesselDrag.wy;
+    vesselDrag.wx=mouseWorld[0]; vesselDrag.wy=mouseWorld[1];
+    const g=vesselDrag.g;
+    if(g.head.id!=null){ const hb=bodies[bodyIndex(g.head.id)]; if(hb && !hb.static){ hb.x+=dx; hb.y+=dy; } }
+    if(g.piston){ const cb=bodies[bodyIndex(g.piston.id)]; if(cb){ cb.x+=dx; cb.y+=dy; } }
+    projectPositions(8);
+    saveState();
+    return;
+  }
   if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
   if(bodyPreview){
     if(bodyPreview.shape==='rect'){ bodyPreview.x1=mouseWorld[0]; bodyPreview.y1=mouseWorld[1]; }
@@ -979,7 +1080,7 @@ function endPointer(e){
   }
   clickArmed=false;
   if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
-  drag=null; grab=null; downScreen=null;
+  drag=null; grab=null; vesselDrag=null; downScreen=null;
 }
 cv.addEventListener('pointerup',endPointer);
 cv.addEventListener('pointercancel',endPointer);

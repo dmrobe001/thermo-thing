@@ -40,6 +40,50 @@ function pickRotSpring(wx,wy){
   for(let i=rotSprings.length-1;i>=0;i--){ if(rotSpringHit(rotSprings[i],wx,wy)) return i; }
   return -1; }
 
+// ---- §14.1b · vessel field lock/recompute ----
+// The inspector's 5-field radio group (T, P, bore, length, mass -- gamma
+// has no radio, it's never derived) implements a plain calculator
+// convenience: P·bore·length = mass·T (R=1) ties the five, so with any four
+// pinned the fifth follows. This is purely inspector/UI bookkeeping --
+// physics.js never reads `lockedField`; heat/flow interactions and the
+// vessel's own dynamics keep driving T/mass/length exactly as before,
+// completely independent of which field is "locked". P itself is never
+// stored anywhere (same convention as before this redesign): it's always
+// read live off the other four via the equation.
+function vesselLiveFields(g){
+  const f=gasFrame(g);
+  return { T:g.T, P:g.mass*g.T/(g.bore*f.xc), bore:g.bore,
+           length: g.piston?f.x:g.len, mass:g.mass };
+}
+// Commit an edit to one of the four *non-locked* fields: store it for real
+// (P is the one field with nothing to store), then recompute the locked
+// field from the equation using the other four's now-current values.
+function commitVesselFieldEdit(g, editedKey, newValue){
+  const lf=g.lockedField||'P';
+  const cur=vesselLiveFields(g); cur[editedKey]=newValue;
+  if(editedKey==='T') g.T=Math.max(newValue,1e-4);
+  else if(editedKey==='bore') g.bore=Math.max(newValue,0.05);
+  else if(editedKey==='mass'){ g.mass=Math.max(newValue,1e-6); syncVesselCapMass(g); }
+  else if(editedKey==='length') setVesselLength(g,Math.max(newValue,0.05));
+  if(lf===editedKey) return; // the locked field's own input is disabled; defensive only
+  const {T,P,bore,length,mass}=cur;
+  if(lf==='T') g.T=Math.max(P*bore*length/mass,1e-4);
+  else if(lf==='bore') g.bore=Math.max(mass*T/(P*length),0.05);
+  else if(lf==='length') setVesselLength(g,Math.max(mass*T/(P*bore),0.05));
+  else if(lf==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
+}
+// Switch which field is locked, immediately recomputing the newly-locked
+// one from the other four's current values (so the switch itself never
+// leaves an inconsistent reading).
+function relockVesselField(g, newLockedField){
+  g.lockedField=newLockedField;
+  const {T,P,bore,length,mass}=vesselLiveFields(g);
+  if(newLockedField==='T') g.T=Math.max(P*bore*length/mass,1e-4);
+  else if(newLockedField==='bore') g.bore=Math.max(mass*T/(P*length),0.05);
+  else if(newLockedField==='length') setVesselLength(g,Math.max(mass*T/(P*bore),0.05));
+  else if(newLockedField==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
+}
+
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, gas, cable, spring, rotational
 // spring, or the empty bench.
@@ -161,32 +205,42 @@ function renderInspector(){
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
   } else if(selGas){
     const g=selGas; const hasPiston=!!g.piston;
+    const lf=g.lockedField||'P';
+    const live=vesselLiveFields(g);
+    const FIELDS=[['T','temp T',0.05,0.01],['P','pressure P',0.05,0],
+      ['bore','bore',0.05,0.05],['length','length',0.05,0.05],['mass','mass',0.05,1e-6]];
+    const fieldRow=([key,label,step,min])=>{
+      const checked=lf===key?'checked':''; const disabled=lf===key?'disabled':'';
+      return `<div class="field">
+        <input type="radio" name="g_lock" class="radiolock" id="g_lock_${key}" value="${key}" ${checked} style="margin-right:6px">
+        <span class="lab">${label}</span>
+        <input class="numin" type="number" step="${step}" min="${min}" id="g_${key}" value="${live[key].toFixed(3)}" ${disabled}>
+      </div>`;
+    };
     p.innerHTML=`
-      <h3>Gas</h3><p class="sub">${hasPiston?'vessel + piston · ':'fixed vessel · '}P = nT / V</p>
-      <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">pressure P</span><span class="val" id="g_P">--</span></div>
-        <div class="field"><span class="lab">volume V</span><span class="val" id="g_V">--</span></div>
-        <div class="field"><span class="lab">temp T</span><span class="val" id="g_T">--</span></div>
-        <div class="field"><span class="lab">heat+flow Q_dot</span><span class="val" id="g_Q">--</span></div>
+      <h3>Gas vessel</h3><p class="sub">${hasPiston?'vessel + piston · ':'fixed vessel · '}P·bore·length = mass·T</p>
+      <div class="card"><div class="cardhead">properties</div>
+        ${FIELDS.map(fieldRow).join('')}
+        <div class="field"><span class="lab" style="margin-left:22px">gamma</span><input class="numin" type="number" step="0.01" min="1.01" id="g_gamma" value="${g.gamma.toFixed(3)}"></div>
+        <p class="muted" style="margin:8px 0 0">The radio marks which field the sim derives from the other four via the ideal gas law; its box is disabled and always shows the live value. ${hasPiston?'The moving wall’s own inertia is exactly mass/3 (DEVELOPMENT.md §6.1), not an independently-set plate mass.':'No movable wall: length is a fixed constant here.'}</p>
       </div>
-      <div class="card"><div class="cardhead">gas</div>
-        <div class="field"><span class="lab">amount n</span><span class="val" id="g_nL">${g.n.toFixed(2)}</span></div>
-        <input type="range" id="g_n" min="0.1" max="10" step="0.1" value="${g.n}" style="width:100%">
-        <div class="field"><span class="lab">gamma (index)</span><span class="val" id="g_gL">${g.gamma.toFixed(2)}</span></div>
-        <input type="range" id="g_g" min="1.05" max="1.7" step="0.01" value="${g.gamma}" style="width:100%">
-        <div class="field"><span class="lab">bore A</span><span class="val" id="g_bL">${g.bore.toFixed(2)}</span></div>
-        <input type="range" id="g_b" min="0.3" max="3" step="0.05" value="${g.bore}" style="width:100%">
-        ${hasPiston?'':`<div class="field"><span class="lab">length</span><span class="val" id="g_lL">${g.len.toFixed(2)}</span></div>
-        <input type="range" id="g_l" min="0.1" max="5" step="0.05" value="${g.len}" style="width:100%">`}
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field"><span class="lab">heat+flow Q_dot</span><span class="val" id="g_Q">--</span></div>
         <p class="muted" style="margin:8px 0 0">${hasPiston
           ?'The movable wall feels internal pressure against the background’s -- add heat/flow interactions (their own tools) to couple this gas to another vessel or the background.'
           :'No movable wall: a fixed-volume vessel, only useful via heat/flow interactions elsewhere.'}</p>
       </div>
       <button class="del" id="g_del">Delete gas</button>`;
-    const bind=(id,lab,key,fix)=>{ const el=document.getElementById(id);
-      el.oninput=ev=>{ g[key]=parseFloat(ev.target.value); document.getElementById(lab).textContent=g[key].toFixed(fix); saveState(); }; };
-    bind('g_n','g_nL','n',2); bind('g_g','g_gL','gamma',2); bind('g_b','g_bL','bore',2);
-    if(!hasPiston) bind('g_l','g_lL','len',2);
+    for(const [key] of FIELDS){
+      document.getElementById('g_lock_'+key).onchange=()=>{ relockVesselField(g,key); renderInspector(); saveState(); };
+      if(lf!==key) document.getElementById('g_'+key).onchange=ev=>{
+        const v=parseFloat(ev.target.value);
+        if(isFinite(v)) commitVesselFieldEdit(g,key,v);
+        renderInspector(); saveState(); };
+    }
+    document.getElementById('g_gamma').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>1.001) g.gamma=v;
+      renderInspector(); saveState(); };
     document.getElementById('g_del').onclick=()=>{ purgeGas(g); clearSelection(); saveState(); };
   } else if(selHeat || selFlow){
     const it=selHeat||selFlow; const isHeat=!!selHeat;
@@ -319,16 +373,24 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); } }
-  if(selGas){ const g=selGas; const f=gasFrame(g);
-    // Live from n/T/bore/geometry, not the physics-cached g._P (§08.1 only
-    // refreshes it on a substep, so paused -- or an edit before the next
-    // substep runs -- would otherwise keep showing the pre-edit pressure).
-    const P=g.n*g.T/(g.bore*f.xc);
-    const eP=document.getElementById('g_P'); if(eP){ eP.textContent=P.toFixed(3);
-      document.getElementById('g_V').textContent=(g.bore*f.xc).toFixed(3);
-      document.getElementById('g_T').textContent=g.T.toFixed(3);
-      document.getElementById('g_Q').textContent=(g._Q||0).toFixed(3); }
-    if(!g.piston) setLive('g_l',g.len); }
+  if(selGas){ const g=selGas;
+    // Live from mass/T/bore/geometry, not the physics-cached g._P (§08.1
+    // only refreshes it on a substep, so paused -- or an edit before the
+    // next substep runs -- would otherwise keep showing the pre-edit
+    // pressure). Every field refreshes -- the locked one always (it's a
+    // pure readout), the other four only while not focused (setLive), so
+    // physics-driven state (T via heat exchange, mass via flow, length via
+    // the piston's own dynamics) stays visible without fighting the
+    // player's own keystrokes mid-edit.
+    const eQ=document.getElementById('g_Q');
+    if(eQ){
+      const live=vesselLiveFields(g);
+      for(const key of ['T','P','bore','length','mass']){
+        const el=document.getElementById('g_'+key); if(!el) continue;
+        if(el.disabled) el.value=live[key].toFixed(3); else setLive('g_'+key, live[key].toFixed(3));
+      }
+      eQ.textContent=(g._Q||0).toFixed(3);
+    } }
   if(selHeat||selFlow){ const it=selHeat||selFlow; const body=bodies[bodyIndex(it.bodyId)];
     const gas = it.gasId!=null ? gases.find(x=>x.id===it.gasId) : null;
     const el=document.getElementById('i_area');

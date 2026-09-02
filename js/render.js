@@ -5,7 +5,7 @@
 //    §11.1  render            (per-frame scene orchestrator; sizing + draw order)
 //    §11.2  background        (drawGrid, drawAxes)
 //    §11.3  bodies            (drawBody, jointDot)
-//    §11.4  gas & cable       (drawCable, drawGas, drawGasForce)
+//    §11.4  gas & cable       (drawCable, drawVessel, drawGasForce)
 //    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
 //    §11.4c heat & flow overlays (drawHeatInteraction, drawFlowInteraction)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
@@ -29,8 +29,11 @@ function render(){
   // paint before smaller ones so a small body nested against/inside a big
   // one is never hidden by it (a sort copy -- `bodies` itself stays in
   // creation order, which pick/hit-testing still relies on).
-  for(const b of [...bodies].sort((p,q)=>bodyExtentR(q)-bodyExtentR(p))) drawBody(b);
-  for(const g of gases) drawGas(g);
+  // Vessel head/cap bodies (synthetic:true, geometry.js/tools.js) are real
+  // physics bodies but never painted on their own -- drawVessel below owns
+  // the whole vessel's look, so the plain body loop skips them.
+  for(const b of [...bodies].filter(b=>!b.synthetic).sort((p,q)=>bodyExtentR(q)-bodyExtentR(p))) drawBody(b);
+  for(const g of gases) drawVessel(g);
   for(const cb of cables) drawCable(cb);
   for(const sp of springs) drawSpring(sp);
   for(const rs of rotSprings) drawRotSpring(rs);
@@ -153,7 +156,7 @@ function drawEndMarker(x,y,locked,isBackground,col){
   }
 }
 
-// ---- §11.4 · gas & cable (drawCable, drawGas, drawGasForce) ----
+// ---- §11.4 · gas & cable (drawCable, drawVessel, drawGasForce) ----
 function drawCable(cb){
   const f=cableFrame(cb); if(!f)return;
   const lamMag = cb._lam&&cb._lam.length ? Math.hypot(...cb._lam) : 0;
@@ -188,35 +191,30 @@ function drawCable(cb){
     ctx.strokeStyle=handleHover?'#8fd0ff':col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ax2,ay2,rad,0,Math.PI*2); ctx.stroke();
   }
 }
-function drawGas(g){
+// Cool->hot hue ramp for a vessel's interior tint -- driven by temperature
+// alone (spec: "the interior is coloured according to the gas temperature"),
+// not by pressure the way the old drawGas's fill alpha was.
+function tempColor(T, alpha){
+  const t=Math.max(0, Math.min(1, (T-0.3)/2.2));
+  const hue=220-t*220; // 220=blue (cold) -> 0=red (hot)
+  return `hsla(${hue},70%,55%,${alpha})`;
+}
+function drawVessel(g){
   const f=gasFrame(g); const sel=g.sel; const hoverOn=hover===g;
   const nrm=[-f.dW[1],f.dW[0]]; const hw=g.bore*0.5;
   const H1=[f.hx+nrm[0]*hw, f.hy+nrm[1]*hw], H2=[f.hx-nrm[0]*hw, f.hy-nrm[1]*hw];
   const P1=[f.pax+nrm[0]*hw, f.pay+nrm[1]*hw], P2=[f.pax-nrm[0]*hw, f.pay-nrm[1]*hw];
-  // Always live from n/T/bore/geometry, never the physics-cached g._P -- that
-  // cache only refreshes on a substep, so while paused (or right after an
-  // inspector edit to n/bore before the sim next runs) it would otherwise
-  // keep showing the pressure from before the edit.
-  const P=g.n*g.T/(g.bore*f.xc);
-  // fill tinted by pressure, hue warmed by temperature
-  const a=Math.max(0.05, Math.min(0.55, P*0.03));
-  const warm=Math.max(0, Math.min(1, (g.T-0.4)/2));
   ctx.beginPath();
   [H1,P1,P2,H2].forEach((p,i)=>{ const [X,Y]=w2s(p[0],p[1]); i?ctx.lineTo(X,Y):ctx.moveTo(X,Y); });
   ctx.closePath();
-  ctx.fillStyle=`rgba(${Math.round(210+warm*40)},${Math.round(150-warm*70)},${Math.round(90-warm*50)},${a})`;
+  ctx.fillStyle=tempColor(g.T, 0.4);
   ctx.fill();
-  // cylinder walls + closed end
-  const col=sel?'#5aa9f0':hoverOn?'#8fc4f7':'#8a94a6'; ctx.strokeStyle=col; ctx.lineWidth=2;
-  const ext=[f.dW[0]*0.25, f.dW[1]*0.25];
-  const walls=[[H1,[P1[0]+ext[0],P1[1]+ext[1]]],[H2,[P2[0]+ext[0],P2[1]+ext[1]]]];
-  for(const [q1,q2] of walls){ const [a1,a2]=w2s(q1[0],q1[1]), [b1,b2]=w2s(q2[0],q2[1]);
-    ctx.beginPath();ctx.moveTo(a1,a2);ctx.lineTo(b1,b2);ctx.stroke(); }
-  const [hc1,hc2]=w2s(H1[0],H1[1]), [hd1,hd2]=w2s(H2[0],H2[1]);
-  ctx.beginPath();ctx.moveTo(hc1,hc2);ctx.lineTo(hd1,hd2);ctx.stroke();
-  // piston face
-  const [pc1,pc2]=w2s(P1[0],P1[1]), [pd1,pd2]=w2s(P2[0],P2[1]);
-  ctx.lineWidth=3.5;ctx.beginPath();ctx.moveTo(pc1,pc2);ctx.lineTo(pd1,pd2);ctx.stroke();
+  // One uniform rectangle outline -- head-cap, piston-cap and the two long
+  // walls all read as ordinary body edges (no distinguished "cap"), same
+  // line-weight/selection-color convention drawBody uses for a plain rect.
+  const col=sel?'#5aa9f0':hoverOn?'#8fc4f7':'#7c8798';
+  ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:hoverOn?2:1.4;
+  ctx.stroke();
 }
 // ---- §11.4c · heat & flow interaction overlays ----
 // Each interaction couples one body to one gas (or the background,
@@ -258,7 +256,7 @@ function drawFlowInteraction(fi){
   drawInteractionLine(ep, sel?'#5aa9f0':hoverOn?'#8fc4f7':'#5ac2e0');
 }
 function drawGasForce(g){
-  const f=gasFrame(g); const P=g.n*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
+  const f=gasFrame(g); const P=g.mass*g.T/(g.bore*f.xc); const mag=P*g.bore; if(mag<1e-6)return;
   sim.forceRef=Math.max(sim.forceRef*0.985, mag);
   const px=58*mag/sim.forceRef; const [sx,sy]=w2s(f.pax,f.pay);
   const ex=sx+f.dW[0]*px, ey=sy-f.dW[1]*px;
