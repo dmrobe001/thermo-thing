@@ -6,16 +6,17 @@
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
 // ---- §14.1 · selection state ----
-let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null;
+let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null, selInteraction=null;
 function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); cables.forEach(c=>c.sel=false);
-  springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false);
-  selBody=null; selConstraint=null; selCable=null; selSpring=null; selRotSpring=null;
+  springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false); interactions.forEach(i=>i.sel=false);
+  selBody=null; selConstraint=null; selCable=null; selSpring=null; selRotSpring=null; selInteraction=null;
   renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
 function selectSpring(i){ clearSelection(); springs[i].sel=true; selSpring=springs[i]; renderInspector(); }
 function selectRotSpring(i){ clearSelection(); rotSprings[i].sel=true; selRotSpring=rotSprings[i]; renderInspector(); }
+function selectInteraction(i){ clearSelection(); interactions[i].sel=true; selInteraction=interactions[i]; renderInspector(); }
 function pickCable(wx,wy){
   for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
   return -1; }
@@ -107,6 +108,7 @@ function renderVesselInspector(v){
     springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
     rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
     cables=cables.filter(c=>c.spool.id!==id && c.tether.id!==id);
+    dropInteractionsOn(id);
     bodies=bodies.filter(x=>x!==v); clearSelection(); saveState(); };
 }
 
@@ -169,6 +171,7 @@ function renderInspector(){
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
+      dropInteractionsOn(id);
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
@@ -230,6 +233,32 @@ function renderInspector(){
       document.getElementById('f_lockB').onchange=ev=>{ setSlotLock(c,'B',ev.target.checked); renderInspector(); saveState(); };
     }
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
+  } else if(selInteraction){
+    const it=selInteraction, isHeat=it.type==='heat';
+    const far = it.vessel.id==null ? 'background' : ('vessel '+it.vessel.id);
+    // How many *other* interactions of the same kind sit on this body: a lone one is
+    // inert by design, and saying so here is the difference between "nothing is
+    // happening" reading as a bug and reading as the rule.
+    const partners = interactions.filter(x=>x!==it && x.type===it.type && x.body.id===it.body.id).length;
+    p.innerHTML=`
+      <h3>${isHeat?'Heat':'Mass-flow'} interaction</h3>
+      <p class="sub">body ${it.body.id} &harr; ${far}</p>
+      <div class="card"><div class="cardhead">state</div>
+        <div class="field"><span class="lab">contact area</span><span class="val" id="i_area">--</span></div>
+        <div class="field force"><span class="lab">${isHeat?'heat rate in':'mass rate in'}</span><span class="val" id="i_rate">--</span></div>
+        <div class="field"><span class="lab">partners on body</span><span class="val" id="i_pair">${partners}</span></div>
+      </div>
+      <div class="card"><div class="cardhead">${isHeat?'conductivity':'flow conductance'}</div>
+        <div class="field"><span class="lab">k</span><input class="numin" type="number" step="${isHeat?'50':'1e-6'}" min="0" id="i_k" value="${it.k}"></div>
+        <p class="muted" style="margin:8px 0 0">${isHeat
+          ? 'Heat transfer coefficient, W/(m&sup2;&middot;K). Rate = k_eff &middot; area &middot; (T_far &minus; T_near), solved in closed form over the substep, so it approaches equilibrium exponentially and can never overshoot it at any step size.'
+          : 'Flow conductance, kg/(s&middot;m&sup2;&middot;Pa). Rate = k_eff &middot; area &middot; (P_far &minus; P_near) -- the same closed-form relaxation with pressure and mass in place of temperature and capacity. Gas that crosses carries its source&rsquo;s enthalpy, so the emptying side cools along its own isentrope.'}</p>
+        <p class="muted" style="margin:8px 0 0">Two interactions of the same kind on the same body are a <em>pair</em>: that body is the wall between what they each name, and the rate uses their k&rsquo;s in series and the smaller of the two contact areas. One on its own moves nothing.</p>
+      </div>
+      <button class="del" id="i_del">Delete interaction</button>`;
+    document.getElementById('i_k').onchange=ev=>{ const v=parseFloat(ev.target.value);
+      if(isFinite(v)&&v>=0) it.k=v; renderInspector(); saveState(); };
+    document.getElementById('i_del').onclick=()=>{ interactions=interactions.filter(x=>x!==it); clearSelection(); saveState(); };
   } else if(selCable){
     const cb=selCable;
     p.innerHTML=`
@@ -300,11 +329,13 @@ function renderInspector(){
           <button data-ex="cable">Cable ratchet</button>
           <button data-ex="gasspring">Gas spring (vessel on ground)</button>
           <button data-ex="spinvessel">Spinning vessel (free)</button>
+          <button data-ex="heatpair">Heat exchange (two vessels)</button>
+          <button data-ex="flowpair">Gas flow (two vessels)</button>
           <button data-ex="clear">Clear bench</button>
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/g/k/v/c/q tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/f/g/h/k/v/c/q tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
   }
@@ -361,6 +392,20 @@ function updateInspectorLive(){
     if(eF){ eF.textContent=Math.abs(sp.k*(sp.restLen-L)).toFixed(3);
       document.getElementById('sp_L').textContent=L.toFixed(3);
       setLive('sp_rest',sp.restLen.toFixed(3)); setLive('sp_k',sp.k.toFixed(2)); } }
+  if(selInteraction){ const it=selInteraction;
+    const ea=document.getElementById('i_area');
+    if(ea){
+      const bi=bodyIndex(it.body.id), vi=it.vessel.id!=null?bodyIndex(it.vessel.id):-1;
+      // The background has no outline, so its side imposes no area limit -- what the
+      // panel shows is this interaction's OWN contact patch, which is the half of the
+      // pair's min() the player can actually change by sliding the body.
+      const area = (bi>=0 && vi>=0) ? contactArea(bodies[bi],bodies[vi]) : (bi>=0 ? Infinity : 0);
+      ea.textContent = isFinite(area) ? area.toFixed(4) : 'unbounded';
+      const r=it._rate||0;
+      document.getElementById('i_rate').textContent =
+        it.type==='heat' ? r.toFixed(2)+' W' : r.toExponential(2)+' kg/s';
+      setLive('i_k', it.k);
+    } }
   if(selRotSpring){ const rs=selRotSpring;
     const rel=rotSpringRelAngle(rs);
     const eT=document.getElementById('rs_T');

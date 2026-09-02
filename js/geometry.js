@@ -5,6 +5,7 @@
 //    §05.1  rotation & rigid-body point math
 //    §05.2  body factory (mass/inertia from radius)
 //    §05.2d gas vessels (the fourth coordinate, its inertia, and the gas state)
+//    §05.2e convex polygon overlap (body<->vessel contact area, §08.0b's rate law)
 //    §05.3  world<->screen transforms
 // ============================================================================
 
@@ -119,6 +120,22 @@ function vesselCapArea(v){ return v.bore*VESSEL_DEPTH; }
 function gasP(v){ return v.gas.kap*Math.pow(vesselVol(v), -v.gas.gamma); }
 function gasT(v){ const V=vesselVol(v); return v.gas.mass>1e-15 ? gasP(v)*V/(v.gas.mass*v.gas.Rs) : 0; }
 function gasU(v){ return gasP(v)*vesselVol(v)/(v.gas.gamma-1); }
+// Heat capacity at constant volume of the sealed gas, J/K. U = C*T *exactly*
+// (U = P*V/(gamma-1) = mass*Rs*T/(gamma-1)), which is what lets the heat pass of
+// §08.0b relax temperatures and read the energy it moved straight off them.
+function gasC(v){ return v.gas.mass*v.gas.Rs/(v.gas.gamma-1); }
+// Specific enthalpy, J/kg -- cp*T. What a kilogram of this gas carries with it when
+// it crosses a port into another vessel: its internal energy plus the flow work the
+// gas behind it does pushing it out (VESSEL.md §V.10).
+function gasEnthalpy(v){ return v.gas.gamma*v.gas.Rs*gasT(v)/(v.gas.gamma-1); }
+// Inverse of gasU: set the adiabat invariant so the gas holds internal energy U at
+// the current volume. The exchange pass works in energy, not temperature, on the
+// receiving side of a mass transfer -- what arrives is a quantity of energy, and the
+// temperature it implies depends on the mass that arrived with it.
+function setVesselGasU(v,U){
+  const V=vesselVol(v);
+  v.gas.kap = Math.max(U,0)*(v.gas.gamma-1)*Math.pow(V, v.gas.gamma-1);
+}
 // Atmospheric potential: the work the background does at the caps' outer faces,
 // held as a potential (P_bg * V) rather than accumulated as flow work. Being a state
 // function is the whole point -- an accumulated term has to be told which substeps
@@ -216,6 +233,63 @@ function epOffOf(b, wx, wy){
 // offset of a material point from the vessel's centre. Both feed the endpoint
 // Jacobian: d(world point)/d(len) = f * axis.
 function vesselAxis(v){ return [-Math.sin(v.th), Math.cos(v.th)]; }
+
+// ---- §05.2e · convex polygon overlap (body<->vessel contact area) ----
+// The contact area between a solid body's outline and a vessel's rectangle is the
+// rate-law input for every heat/mass interaction (physics.js §08.0b) -- and the ONLY
+// place in the engine where two bodies' outlines are compared at all. It is not
+// collision: nothing here produces a force, and the sandbox's "nothing interacts
+// unless the player says it does" invariant is untouched, because the test only ever
+// runs on the explicitly-paired objects an interaction names.
+//
+// A body's outline as a world-space convex polygon: a rectangle's (or a vessel's --
+// rectLike covers both) four corners, or a circle approximated by a 20-gon, which is
+// under 2% low on area and cheap to clip.
+function bodyPolygon(b){
+  if(rectLike(b)){
+    return [[-b.hw,-b.hh],[b.hw,-b.hh],[b.hw,b.hh],[-b.hw,b.hh]]
+      .map(o=>{ const [wx,wy]=worldPt(b,o); return [wx,wy]; });
+  }
+  const N=20, pts=[];
+  for(let i=0;i<N;i++){ const a=i/N*Math.PI*2; pts.push([b.x+b.r*Math.cos(a), b.y+b.r*Math.sin(a)]); }
+  return pts;
+}
+// Signed shoelace area (positive iff `poly` is wound CCW); |.| is the plain area.
+function polySignedArea(poly){ let s=0; for(let i=0;i<poly.length;i++){
+  const [x1,y1]=poly[i], [x2,y2]=poly[(i+1)%poly.length]; s+=x1*y2-x2*y1; } return s*0.5; }
+function polyArea(poly){ return Math.abs(polySignedArea(poly)); }
+// Point where segment p1->p2 crosses line a->b (used only inside clipPoly, where the
+// crossing is already known to exist).
+function segIntersect(p1,p2,a,b){
+  const d1x=p2[0]-p1[0], d1y=p2[1]-p1[1], d2x=b[0]-a[0], d2y=b[1]-a[1];
+  const denom=d1x*d2y-d1y*d2x;
+  const t = Math.abs(denom)<1e-12 ? 0 : ((a[0]-p1[0])*d2y-(a[1]-p1[1])*d2x)/denom;
+  return [p1[0]+t*d1x, p1[1]+t*d1y];
+}
+// Sutherland-Hodgman: clip `subject` (any winding, possibly empty) against convex
+// polygon `clip` (any winding -- normalized to CCW here so the inside-test sign is
+// fixed regardless of how the caller wound it).
+function clipPoly(subject, clipIn){
+  if(subject.length===0) return [];
+  const clip = polySignedArea(clipIn)>=0 ? clipIn : [...clipIn].reverse();
+  let output=subject;
+  for(let i=0;i<clip.length && output.length;i++){
+    const A=clip[i], B=clip[(i+1)%clip.length];
+    const ex=B[0]-A[0], ey=B[1]-A[1];
+    const input=output; output=[];
+    for(let j=0;j<input.length;j++){
+      const cur=input[j], prev=input[(j-1+input.length)%input.length];
+      const curIn  = ex*(cur[1]-A[1])-ey*(cur[0]-A[0]) >= 0;
+      const prevIn = ex*(prev[1]-A[1])-ey*(prev[0]-A[0]) >= 0;
+      if(curIn){ if(!prevIn) output.push(segIntersect(prev,cur,A,B)); output.push(cur); }
+      else if(prevIn){ output.push(segIntersect(prev,cur,A,B)); }
+    }
+  }
+  return output;
+}
+// The overlap area, in m^2 (times the implicit 1 m depth, so it reads directly as
+// the wall area the exchange crosses).
+function contactArea(b,v){ return polyArea(clipPoly(bodyPolygon(b), bodyPolygon(v))); }
 
 // ---- §05.2b · shape-generic body geometry ----
 // A handful of pure functions any picking/snapping/rendering code can call

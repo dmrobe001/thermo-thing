@@ -25,12 +25,14 @@ const TOOLS=[
   {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
   {id:'spring',key:'8',tip:'Linear spring (8)',svg:'<circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="6" r="2.4"/><path d="M7 16.5l2-3 3 6 3-6 2 3"/>'},
   {id:'rotspring',key:'9',tip:'Rotational spring (9)',svg:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 11a1 1 0 1 0 1 1"/>'},
+  {id:'heat',key:'h',tip:'Heat interaction (h)',svg:'<path d="M8 3c-2 3 1 3-1 6-2 3 1 5 2 5 2 0 3-2 2-4 2 1 3 3 1 6-3 2-6 0-6-3 0-2 1-3 2-5-1-1-1-3 0-5z"/>'},
+  {id:'flow',key:'f',tip:'Mass-flow interaction (f)',svg:'<path d="M4 12c3-4 6 4 9 0M4 8c3-4 6 4 9 0M4 16c3-4 6 4 9 0"/><path d="M17 8l3 4-3 4"/>'},
   {id:'delete',key:'7',tip:'Delete (7)',svg:'<path d="M6 7h12M9 7V5h6v2M8 7l1 12h6l1-12"/>'},
 ];
 let tool='select';
 const rail=document.getElementById('rail');
 TOOLS.forEach((t,i)=>{
-  if(i===1||i===4||i===11){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
+  if(i===1||i===4||i===11||i===13||i===15){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
   const el=document.createElement('button');el.className='tool';el.dataset.id=t.id;
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
@@ -92,6 +94,27 @@ function pickConstraint(wx,wy){
 }
 function cableHit(cb,wx,wy){ const tol=10/cam.scale; const f=cableFrame(cb); if(!f) return false;
   return distSeg(wx,wy,f.T[0],f.T[1],f.Qx,f.Qy)<=tol; }
+// Heat/mass interaction hit test, shared by both kinds -- the same dashed segment
+// render.js §11.4c draws, from the mediating body's centre to the vessel's (or a
+// short stub toward the background).
+function interactionHit(it,wx,wy){ const tol=12/cam.scale; const ep=interactionEndpoints(it); if(!ep) return false;
+  return distSeg(wx,wy,ep.p0[0],ep.p0[1],ep.p1[0],ep.p1[1])<=tol; }
+function pickInteraction(wx,wy){
+  for(let i=interactions.length-1;i>=0;i--){ if(interactionHit(interactions[i],wx,wy)) return i; }
+  return -1; }
+// Topmost vessel under the cursor, or -1 -- the second pick of an interaction tool.
+// Missing it means "the background", which is a deliberate target, not a miss.
+function pickVessel(wx,wy){
+  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i];
+    if(b.shape==='vessel' && bodyContains(b,wx,wy)) return i; }
+  return -1; }
+// Every interaction that names body `id` on EITHER side -- as the mediating body or
+// as the vessel -- dies with it. Called from every body-deletion path (this file's
+// delete tool, inspector.js §14.2/§14.2b, transport.js §16.4), the same way each of
+// those already drops the constraints/springs/cables that named it.
+function dropInteractionsOn(id){
+  interactions=interactions.filter(it=>it.body.id!==id && it.vessel.id!==id);
+}
 // spring / rotSpring hit tests, same role as cableHit above -- springs
 // live in their own arrays (constraints.js §06.6), not `constraints`, so they
 // get their own pick path (pickSpring/pickRotSpring, inspector.js §14.1)
@@ -454,6 +477,7 @@ function updateHover(wx,wy){
     const cbi=pickCable(wx,wy); if(cbi>=0){ if(!cables[cbi].sel) hover=cables[cbi]; return; }
     const spi=pickSpring(wx,wy); if(spi>=0){ if(!springs[spi].sel) hover=springs[spi]; return; }
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ if(!rotSprings[rsi].sel) hover=rotSprings[rsi]; return; }
+    const ii=pickInteraction(wx,wy); if(ii>=0){ if(!interactions[ii].sel) hover=interactions[ii]; return; }
     const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
     return;
   }
@@ -463,6 +487,7 @@ function updateHover(wx,wy){
     const cbi=pickCable(wx,wy); if(cbi>=0){ hover=cables[cbi]; return; }
     const spi=pickSpring(wx,wy); if(spi>=0){ hover=springs[spi]; return; }
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ hover=rotSprings[rsi]; return; }
+    const ii=pickInteraction(wx,wy); if(ii>=0){ hover=interactions[ii]; return; }
     const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
     return;
   }
@@ -480,6 +505,14 @@ function updateHover(wx,wy){
   }
   if(tool==='knife'||tool==='rotspring'){
     const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
+    return;
+  }
+  if(tool==='heat'||tool==='flow'){
+    // First pick is the mediating body (any body), second is the vessel it couples
+    // through that body -- or empty space, which reads as the background. Highlight
+    // whichever of the two the current click would take.
+    if(!pending){ const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi]; return; }
+    const vi=pickVessel(wx,wy); if(vi>=0) hover=bodies[vi];
     return;
   }
   // 'body'/'rectbody' tools have no existing element to highlight -- their
@@ -559,6 +592,8 @@ cv.addEventListener('pointerdown',e=>{
     if(spi>=0){ selectSpring(spi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const rsi=pickRotSpring(wx,wy);
     if(rsi>=0){ selectRotSpring(rsi); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
+    const ii=pickInteraction(wx,wy);
+    if(ii>=0){ selectInteraction(ii); panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ selectBody(bi);
       if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
@@ -620,6 +655,23 @@ function runToolClick(wx,wy){
     selectBody(bodies.length-1); saveState();
     return;
   }
+  if(tool==='heat' || tool==='flow'){
+    // Two clicks: the mediating BODY first, then the VESSEL it is to couple through
+    // that body -- or empty space, which names the background (sim.bg). One
+    // interaction on its own moves nothing; it takes a second one on the same body,
+    // naming the far side, to make a pair (physics.js §08.0b). That is deliberate:
+    // the body is a wall, and a wall with only one side against something is not a
+    // path. Placing the pair is two runs of this tool.
+    if(!pending){ const bi=pickBody(wx,wy); if(bi<0) return;
+      pending={interaction:tool, bodyId:bodies[bi].id, wp:[bodies[bi].x,bodies[bi].y]}; return; }
+    const bodyId=pending.bodyId; pending=null;
+    const vi=pickVessel(wx,wy);
+    const vesselId = vi>=0 ? bodies[vi].id : null;
+    if(vesselId===bodyId) return;                 // a body cannot be its own far side
+    interactions.push({id:uid++, type:tool, body:{id:bodyId}, vessel:{id:vesselId}, k:tool==='heat'?1000:1e-5, sel:false});
+    selectInteraction(interactions.length-1); saveState();
+    return;
+  }
   if(tool==='delete'){
     // interactions take priority over bodies (updateHover, §13.4, mirrors
     // this order) -- a constraint/cable coincident with a body is what most
@@ -628,11 +680,13 @@ function runToolClick(wx,wy){
     const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); return; }
     const spi=pickSpring(wx,wy); if(spi>=0){ springs.splice(spi,1); clearSelection(); saveState(); return; }
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ rotSprings.splice(rsi,1); clearSelection(); saveState(); return; }
+    const ii=pickInteraction(wx,wy); if(ii>=0){ interactions.splice(ii,1); clearSelection(); saveState(); return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ const id=bodies[bi].id;
       constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
+      dropInteractionsOn(id);
       bodies.splice(bi,1); clearSelection(); saveState(); }
     return;
   }

@@ -13,14 +13,20 @@ let saved=null;
 // A vessel's snapshot carries its fourth coordinate and rate (len/vlen) plus the gas
 // state sealed inside it: the adiabat invariant and the gas mass. Without those,
 // Reset would restore the geometry but leave the gas wherever the run left it --
-// silently changing the scene's energy every time the player pressed R.
+// silently changing the scene's energy every time the player pressed R. sim.bathQ --
+// the running total a background interaction has drawn from the bath (physics.js
+// §08.0b) -- goes with them for the same reason: it is the ledger's counterweight to
+// exactly that gas state, so restoring one without the other would make the total
+// jump by whatever the run had exchanged.
 function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w,
     len:b.len, vlen:b.vlen, kap:b.gas&&b.gas.kap, gm:b.gas&&b.gas.mass, mShell:b.mShell})),
-  cSA:cables.map(c=>c.spoolAngle) }; }
+  bathQ:sim.bathQ, cSA:cables.map(c=>c.spoolAngle) }; }
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
   if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0;
     if(b.shape==='vessel'){ b.len=s.len; b.vlen=s.vlen||0; b._vlen0=b.vlen;
       b.gas.kap=s.kap; b.gas.mass=s.gm; b.mShell=s.mShell; refreshVessel(b); } } }
+  sim.bathQ=saved.bathQ||0;
+  interactions.forEach(it=>{ it._rate=0; });
   // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
   // pose, so a reference accumulated across possibly many turns of prior
@@ -65,10 +71,12 @@ window.addEventListener('keydown',e=>{
       constraints=constraints.filter(c=>c.a.id!==id&&!(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id&&!(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
+      dropInteractionsOn(id);
       bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}
       else if(selConstraint){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); }
       else if(selSpring){ springs=springs.filter(s=>s!==selSpring); clearSelection(); saveState(); }
-      else if(selRotSpring){ rotSprings=rotSprings.filter(s=>s!==selRotSpring); clearSelection(); saveState(); } }
+      else if(selRotSpring){ rotSprings=rotSprings.filter(s=>s!==selRotSpring); clearSelection(); saveState(); }
+      else if(selInteraction){ interactions=interactions.filter(x=>x!==selInteraction); clearSelection(); saveState(); } }
   else { const t=TOOLS.find(t=>t.key===e.key); if(t) setTool(t.id); }
 });
 

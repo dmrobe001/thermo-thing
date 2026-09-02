@@ -8,7 +8,11 @@ function loadExample(kind){
   // springs/rotSprings are cleared alongside the rest: leaving them behind would
   // leave force elements pointing at body ids the new scene has reused or dropped,
   // which epFrame resolves to a missing body.
-  bodies=[];constraints=[];cables=[];springs=[];rotSprings=[];uid=1;clearSelection();eHist.length=0;
+  bodies=[];constraints=[];cables=[];springs=[];rotSprings=[];interactions=[];uid=1;clearSelection();eHist.length=0;
+  // The bath's running total (state.js sim.bathQ) belongs to the scene that spent it,
+  // not to the next one -- leaving it standing would open every fresh bench with a
+  // nonzero ledger row and an offset total.
+  sim.bathQ=0;
   // uid restarts at 1 above, so a fresh scene's bodies can reuse ids a prior
   // scene's islands used as their ENERGY_BANK key (physics.js §08.6) --
   // clear it so a stale banked correction can never leak into an unrelated
@@ -71,6 +75,55 @@ function loadExample(kind){
     sim.gravity=false; if(gc) gc.checked=false;
     const v=makeVessel(0,2.6,0.4,1.0,false); bodies.push(v);
     v.w=9.0;
+  }
+  else if(kind==='heatpair'){
+    // A hot reservoir warming a working vessel through a fixed plate. Nothing here is
+    // a "heat exchanger" primitive: the plate is an ordinary static rectangle, and
+    // what couples the two gases is a PAIR of heat interactions sharing it
+    // (physics.js §08.0b). The rate is their conductivities in series times the
+    // SMALLER of the two plate-to-vessel contact areas, so dragging a vessel half off
+    // the plate visibly halves it.
+    //
+    // The reservoir is length-locked -- VESSEL.md §V.8's reservoir, a vessel whose
+    // fourth coordinate is frozen the way `static` freezes the other three -- so it
+    // stores heat without storing work, and only its temperature tint moves. The
+    // working vessel is held by a rod welded at both ends to its own MID-WALL, the
+    // material point f = 0 whose length column is zero (§V.5): its pose is fixed and
+    // its length entirely free. So the heat crossing the plate comes out as
+    // extension, against the atmosphere -- heat turning into mechanical work, with
+    // nothing in the scene that knows what a heat engine is.
+    //
+    // Both sides start mechanically balanced, so the vessel walks out quasi-statically
+    // (its gas-spring period is a fraction of a second, the thermal time constant a
+    // few seconds) instead of ringing. Total energy holds flat throughout: with the
+    // geometry frozen during the pass the two dU are equal and opposite exactly.
+    sim.gravity=false; if(gc) gc.checked=false;
+    const plate=makeRectBody(0,2.6,1.25,0.12,true); bodies.push(plate);
+    const res=makeVessel(-1.25,2.6,0.55,1.8,false); bodies.push(res);
+    res.lenLock=true; setVesselGasMT(res, res.gas.mass, 800); refreshVessel(res);
+    const work=makeVessel(1.15,2.6,0.9,0.9,false); bodies.push(work);
+    constraints.push(makeRodCon({id:null,off:[1.15,1.75]},{id:work.id,off:[0,0]},true,true));
+    for(const v of [res,work])
+      interactions.push({id:uid++, type:'heat', body:{id:plate.id}, vessel:{id:v.id}, k:2000, sel:false});
+  }
+  else if(kind==='flowpair'){
+    // The mass-transfer counterpart, in the same layout: a pressurized length-locked
+    // reservoir feeding a free vessel through a port body, with a pair of FLOW
+    // interactions on it. Gas crosses until the pressures match, carrying its
+    // source's enthalpy with it, so the emptying side cools along its own isentrope
+    // while the filling side heats -- both visible directly in the temperature tint.
+    // The receiving vessel simply extends: its own pressure is pinned near ambient by
+    // the atmosphere on the far side of its cap, so almost all of what arrives shows
+    // up as volume. That is a pneumatic actuator, assembled from a reservoir, a port
+    // and an anchor, with no actuator primitive anywhere.
+    sim.gravity=false; if(gc) gc.checked=false;
+    const port=makeRectBody(0,2.6,1.25,0.12,true); bodies.push(port);
+    const res=makeVessel(-1.25,2.6,0.55,1.8,false); bodies.push(res);
+    res.lenLock=true; setVesselGasPT(res, 2.4*sim.bg.P, sim.bg.T); refreshVessel(res);
+    const work=makeVessel(1.15,2.6,0.9,0.9,false); bodies.push(work);
+    constraints.push(makeRodCon({id:null,off:[1.15,1.75]},{id:work.id,off:[0,0]},true,true));
+    for(const v of [res,work])
+      interactions.push({id:uid++, type:'flow', body:{id:port.id}, vessel:{id:v.id}, k:3e-5, sel:false});
   }
   else if(kind==='cable'){ const S=makeBody(0,4.6,0.4,true); bodies.push(S); const m=dy(0.9,4.4,0.32);
     const dvx=m.x-S.x, dvy=m.y-S.y; const d=Math.hypot(dvx,dvy);
