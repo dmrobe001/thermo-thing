@@ -94,8 +94,33 @@ function pickConstraint(wx,wy){
 }
 // per-gas / per-cable hit tests, mirroring pickGas/pickCable (inspector.js
 // §14.1) -- used the same way, to test one specific already-selected object.
-function gasHit(g,wx,wy){ const tol=12/cam.scale; const f=gasFrame(g);
-  return distSeg(wx,wy,f.hx,f.hy,f.pax,f.pay)<=tol; }
+// The whole piston area is the gas's target, not just its interior gas
+// column: axially from the head's inner face out through the *far* side of
+// the piston body (the body is drawn on top of the gas rectangle, render.js
+// §11.4 drawGas, so a click on it should still reach the gas it belongs to),
+// laterally across the full bore. Only the head stays excluded, matching
+// "except for the head" -- selecting or pointing a heat/flow interaction at
+// the head still targets that body.
+function gasHit(g,wx,wy){
+  const f=gasFrame(g);
+  const nrm=[-f.dW[1],f.dW[0]], hw=g.bore*0.5;
+  const dx=wx-f.hx, dy=wy-f.hy;
+  const s=dx*f.dW[0]+dy*f.dW[1], t=dx*nrm[0]+dy*nrm[1];
+  if(Math.abs(t)>hw) return false;
+  let sMax=f.x;
+  if(f.A){
+    // The piston's own far face/rim along the gas axis -- a rect plate's
+    // offset reflected through its centre (the offset already reaches the
+    // *near* face, by construction, tools.js §13.5/§06.2), or a circular
+    // piston's radius past its centre.
+    const A=f.A;
+    let ox,oy;
+    if(A.shape==='rect'){ [ox,oy]=worldPt(A,[-g.piston.off[0],-g.piston.off[1]]); }
+    else { ox=A.x+f.dW[0]*A.r; oy=A.y+f.dW[1]*A.r; }
+    sMax=(ox-f.hx)*f.dW[0]+(oy-f.hy)*f.dW[1];
+  }
+  return s>=0 && s<=sMax;
+}
 // heat/flow interaction hit test, shared by both kinds -- the same dashed
 // line render.js §11.4c draws (body centre -> gas centroid, or a short stub
 // toward the background).
@@ -250,7 +275,12 @@ function pickHandle(wx,wy){
     for(const h of conHandles(selObj)){
       if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:selObj,which:h.which,
         ci:(selConstraint===selObj?constraints:springs).indexOf(selObj), arr:arrOf(selObj)}; } }
-  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i]; if(con===selObj) continue;
+  // A gas's hidden piston<->cylinder link (tools.js §13.5) is never itself
+  // selectable (pickConstraint skips it too) -- its endpoint sits right at
+  // the piston's inner face, so without this skip a click there would be
+  // hijacked into dragging that invisible constraint instead of reaching the
+  // piston body/gas underneath it.
+  for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i]; if(con===selObj || con.hidden) continue;
     for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,ci:i,arr:'constraints'}; } }
   for(let i=springs.length-1;i>=0;i--){ const sp=springs[i]; if(sp===selObj) continue;
     for(const h of conHandles(sp)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:sp,which:h.which,ci:i,arr:'springs'}; } }
