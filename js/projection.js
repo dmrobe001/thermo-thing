@@ -22,6 +22,15 @@
 const DRAG_SOFT_ALPHA = 1;
 function projectPositions(iters, extra){
   const cons = (extra && extra.length) ? constraints.concat(extra) : constraints;
+  const N=bodies.length;
+  // A vessel-interior endpoint (a rod/pin/spring attached inside a moving
+  // piston, or the gasmount constraint itself) can carry a column into the
+  // extended per-vessel sepRate coordinate space (indices N..N+V-1,
+  // geometry.js §05.2d) alongside ordinary body columns -- coordInvM/
+  // coordApplyPos dispatch on idx<N to the exact bodies[]/invMdiag path used
+  // before this rearchitecture, so this is a no-op change for every row
+  // built only from plain bodies.
+  const vlist = vesselCoordList().list;
   for(let it=0; it<iters; it++){
     const rows=[]; for(const con of cons){ for(const r of rowsFor(con)) if(!r.nh) rows.push(r); }
     const m=rows.length; if(!m) return;
@@ -31,7 +40,7 @@ function projectPositions(iters, extra){
     const Kt=[]; for(let i=0;i<m;i++) Kt.push(new Array(m).fill(0));
     for(let i=0;i<m;i++){
       for(let j=i;j<m;j++){ let s=0;
-        for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue; const im=invMdiag(bodies[bi]);
+        for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue; const im=coordInvM(bi,N,vlist);
           s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
         Kt[i][j]=s; Kt[j][i]=s; }
       if(rows[i].soft) Kt[i][i]+=Kt[i][i]*DRAG_SOFT_ALPHA;
@@ -40,8 +49,7 @@ function projectPositions(iters, extra){
     const rhs=rows.map(r=>-r.C);
     const lam=solveLinear(Kt,rhs,m);
     for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
-      for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.x+=b.invM*c[1]*li; b.y+=b.invM*c[2]*li; b.th+=b.invI*c[3]*li; } }
+      for(const c of rows[i].cols) coordApplyPos(c[0],N,vlist,c[1],c[2],c[3],li); }
   }
 }
 // ---- §09.2 · conMaxC ----

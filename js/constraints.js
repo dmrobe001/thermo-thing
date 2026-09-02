@@ -10,8 +10,8 @@
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
 //    §06.2  gasFrame   (cylinder geometry for the gas force element, §08.1/§08.5)
-//    §06.2b gasStopRow (Jacobian/C for the gas's minimum-volume floor, consumed
-//           as a standalone elastic impulse by physics.js §08.3, not a row here)
+//    §06.2d vesselPointCoeffs/epFrame (vessel-interior endpoints)
+//    §06.2e gasmount   (the vessel's own rigid mount to its head frame)
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -159,75 +159,52 @@ function slotRailAngle(con){
 // the signed axial length; xc is x softened with a floor (GAS_MIN_X) purely
 // so P=nT/V and V=bore*x never divide by/report zero -- it is a formula
 // safety net, not what keeps the piston from actually reaching it. That job
-// belongs to gasStopRow below: without a real geometric stop, a fast piston
-// can cross GAS_MIN_X within a single substep, after which xc plateaus (P
-// stops rising the way a real gas's would) while x keeps shrinking --
-// decoupling the mechanism's real position/KE from the gas's own V/U
-// bookkeeping and showing up as energy loss (physics.js §08.6's comment on
-// the stop row has the full account). Everything else (drawGas, gasPolygon,
-// the piston force) is unchanged by which case this is.
+// belongs to the trivial 1-DOF elastic reflection physics.js §08.3 applies
+// directly to g.sep/g.sepRate: without it, a fast piston can cross GAS_MIN_X
+// within a single substep, after which xc plateaus (P stops rising the way a
+// real gas's would) while x keeps shrinking -- decoupling the mechanism's
+// real position/KE from the gas's own V/U bookkeeping and showing up as
+// energy loss. Everything else (drawGas, gasPolygon, the piston force) is
+// unchanged by which case this is.
 const GAS_MIN_X = 0.03;
 function gasFrame(g){
-  let hx,hy,dW,B=null,ib=-1,hrx=0,hry=0;
+  let hx,hy,dW,B=null,ib=-1;
   if(g.head.id!=null){ ib=bodyIndex(g.head.id); B=bodies[ib];
-    const [x,y,rx,ry]=worldPt(B,g.head.off); hx=x;hy=y;hrx=rx;hry=ry;
+    const [x,y]=worldPt(B,g.head.off); hx=x;hy=y;
     dW=R(B.th,g.head.dir[0],g.head.dir[1]); }
   else { hx=g.head.off[0]; hy=g.head.off[1]; dW=[g.head.dir[0],g.head.dir[1]]; }
   const dl=Math.hypot(dW[0],dW[1])||1; dW=[dW[0]/dl,dW[1]/dl];
-  let A=null, ia=-1, pax,pay,prx=0,pry=0,x;
+  // The piston's true axial separation is now the vessel's own stored
+  // scalar coordinate (g.sep, a genuine solver DOF -- physics.js §08.1/§08.3),
+  // not a difference of two body positions. `A` (the static, kinematically-
+  // slaved marker body geometry.js keeps at the true cap point) and `comIdx`
+  // (the real COM body) are kept for picking/overlap/force-application call
+  // sites that only need a polygon or the actual dynamical body, never for
+  // deriving x itself.
+  let A=null, ia=-1, comIdx=-1, pax,pay,x;
   if(g.piston){ ia=bodyIndex(g.piston.id); A=bodies[ia];
-    const [px,py,rx,ry]=worldPt(A,g.piston.off); pax=px;pay=py;prx=rx;pry=ry;
-    x=(pax-hx)*dW[0]+(pay-hy)*dW[1];
+    comIdx=bodyIndex(g.com.id);
+    x=g.sep;
+    pax=hx+dW[0]*x; pay=hy+dW[1]*x;
   } else {
     x=g.len; pax=hx+dW[0]*x; pay=hy+dW[1]*x;
   }
-  return {A,ia,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,GAS_MIN_X)};
+  return {A,ia,comIdx,pax,pay,B,ib,hx,hy,dW,x,xc:Math.max(x,GAS_MIN_X)};
 }
 // Midpoint of a gas's rectangle -- a cheap stand-in for its centroid, used
 // only for drawing/hit-testing heat/flow interactions (render.js §11.4c,
 // tools.js §13.2), never for physics.
 function gasCentroid(g){ const f=gasFrame(g); return [(f.hx+f.pax)/2,(f.hy+f.pay)/2]; }
 
-// ---- §06.2b · gasStopRow ----
-// Jacobian (cols) and position error (C=x-GAS_MIN_X) for the geometric floor
-// that keeps a gas's *true* axial separation x from compressing past
-// GAS_MIN_X, so gasFrame's own xc clamp above never actually has to bind in
-// practice -- the geometric stop, not the softened pressure formula, is what
-// arrests the piston. Same Jacobian shape as a rod's axial row (rowsFor's
-// 'rod' branch below), built from gasFrame's own dW/prx,pry/hrx,hry instead
-// of a freshly computed unit vector: the gas's hidden prismatic joint
-// (DEVELOPMENT.md §6.1) already confines relative motion to that one axis,
-// so a single row suffices here exactly as it does for the pressure force
-// itself (physics.js §08.1). Only meaningful for a real movable piston -- a
-// fixed-length vessel (g.piston===null) has no motion to stop, and callers
-// gate on that before calling this.
-//
-// This is *not* pushed through the ordinary Schur-complement rows the way
-// the cable's own end-stop (§06.3) is -- physics.js §08.3's comment where
-// this is consumed has the reasoning: those rows all share one Baumgarte
-// target that's wrong for an energy-conserving stop, so this row's cols/C
-// instead feed a standalone elastic-reflection impulse there.
-function gasStopRow(g){
-  const f=gasFrame(g);
-  const cols=[];
-  if(f.A) cols.push([f.ia, f.dW[0], f.dW[1], -f.dW[0]*f.pry+f.dW[1]*f.prx]);
-  if(f.B) cols.push([f.ib, -f.dW[0], -f.dW[1], f.dW[0]*f.hry-f.dW[1]*f.hrx]);
-  return { cols, C: f.x-GAS_MIN_X };
-}
-
 // ---- §06.2d · vessel-interior endpoints ----
-// A point *inside* a gas vessel (DEVELOPMENT.md §6.1's "the piston is a
-// single hidden-DOF body" redesign) is a valid rod/pin/spring endpoint, not
-// just the head or cap plate. `frac` is the *material* fraction of the way
-// from head to cap (so the point rides along with the gas as it expands,
-// staying at the same fraction rather than a fixed distance) and `lat` is
-// the fixed lateral offset across the bore. Its velocity follows the same
-// linear-interpolation ramp geometry.js's `syncVesselCapMass` derives the
-// boundary bodies' own mass split from: zero (relative to the head frame)
-// at frac=0, the full head-to-cap relative rate at frac=1.
-//
-//   v_point = v_head_at(frac*sep, lat)
-//           + frac * dW * [ dW . (v_cap_at(cap.off) - v_head_at(sep,0)) ]
+// A point *inside* a gas vessel (DEVELOPMENT.md §6.1's COM+sepRate redesign)
+// is a valid rod/pin/spring endpoint, not just the head or cap plate. `frac`
+// is the *material* fraction of the way from head to cap (so the point rides
+// along with the gas as it expands, staying at the same fraction rather than
+// a fixed distance) and `lat` is the fixed lateral offset across the bore.
+// Its velocity is just the COM's own rigid rotation carried out to that
+// point, plus sepRate's own contribution as the point's signed distance from
+// the COM (in units of sep) changes -- see vesselPointCoeffs below.
 //
 // `mergeCols` sums duplicate body-index entries -- required, not cosmetic:
 // physics.js's Schur assembly builds each row's per-body map with
@@ -254,27 +231,29 @@ function vesselPointCoeffs(v, frac, lat, dirx, diry){
   const f=gasFrame(v);
   frac=Math.max(0,Math.min(1,frac)); lat=lat||0;
   const dW=f.dW;
-  const terms=[];
-  if(f.B){
-    // term 1: head's own rigid motion, carried out to the interior point.
-    const [,,rx1,ry1]=worldPt(f.B,[frac*f.x, lat]);
-    terms.push([[f.ib, dirx, diry, dirx*(-ry1)+diry*rx1]]);
-    if(f.A){
-      // term 2: subtract head's motion at the cap's own attach point, so
-      // only the *relative* (cap-vs-head) rate feeds term 3 below.
-      const k=frac*(dirx*dW[0]+diry*dW[1]);
-      const [,,rx2,ry2]=worldPt(f.B,[f.x,0]);
-      terms.push([[f.ib, -k*dW[0], -k*dW[1], (-k*dW[0])*(-ry2)+(-k*dW[1])*rx2]]);
-      // term 3: the cap's share of that relative rate, at its own offset.
-      terms.push([[f.ia, k*dW[0], k*dW[1], (k*dW[0])*(-f.pry)+(k*dW[1])*(f.prx)]]);
-    }
-  } else if(f.A){
-    // World-anchored head: no head-body terms at all, and nothing moves
-    // relative to the (fixed) frame except the cap's own share.
-    const k=frac*(dirx*dW[0]+diry*dW[1]);
-    terms.push([[f.ia, k*dW[0], k*dW[1], (k*dW[0])*(-f.pry)+(k*dW[1])*(f.prx)]]);
+  if(!v.piston){
+    // Fixed-length vessel: no COM/sepRate coordinate at all -- the interior
+    // point is simply a rigidly-mounted point of whichever body (or the
+    // world) the head names, exactly like a plain body endpoint.
+    if(!f.B) return [];
+    const [,,rx,ry]=worldPt(f.B,[frac*f.x, lat]);
+    return [[f.ib, dirx, diry, dirx*(-ry)+diry*rx]];
   }
-  return mergeCols(terms);
+  // Movable piston: the interior point's motion is now fully determined by
+  // the vessel's own two solver coordinates -- the COM body's ordinary rigid
+  // rotation, plus sepRate's own contribution as this point's signed
+  // distance from the COM (k*sep, in units of sep) changes. No head-body
+  // term at all: unlike the old two-real-body model, the head is only an
+  // external mount (the gasmount constraint) the COM's own motion is
+  // *solved against*, never a frame this point's velocity is measured
+  // relative to.
+  const com=bodies[f.comIdx];
+  const k=frac-0.5; // signed material offset from the COM, in units of sep
+  const [,,rx,ry]=worldPt(com,[k*f.x, lat]);
+  const terms=[[f.comIdx, dirx, diry, dirx*(-ry)+diry*rx]];
+  const sepIdx=vesselCoordList().idxOf.get(v.id);
+  if(sepIdx!=null) terms.push([sepIdx, k*(dirx*dW[0]+diry*dW[1]), 0, 0]);
+  return terms;
 }
 // Resolve any rod/pin/spring endpoint -- a plain body {id,off}, a
 // background point {id:null,off}, or a vessel-interior point
@@ -297,6 +276,26 @@ function epFrame(ep){
   if(ep.id==null) return { wx:ep.off[0], wy:ep.off[1], velCols:()=>[] };
   const idx=bodyIndex(ep.id); const [wx,wy,rx,ry]=worldPt(bodies[idx],ep.off);
   return { wx, wy, velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx]] };
+}
+
+// ---- §06.2e · gasmount constraint ----
+// Replaces the old two-real-body model's hidden `slot` link between head and
+// piston: a vessel's own "head point" (frac=0, lat=0 in vesselPointCoeffs'
+// terms) is pinned to the external head frame's own point -- a 2-row
+// position lock built exactly like `pin`'s (epFrame on each side) -- plus
+// one row locking the COM body's own orientation (which *is* the vessel's
+// axis orientation directly, since the marker/interior points are all
+// derived from it) to the host frame's angle. Always active, no prismatic
+// toggles -- unconditionally rigid, unlike slot's optional locks -- because
+// a vessel's axial DOF now lives entirely in g.sep/g.sepRate, not in any
+// freedom this mount constraint itself allows. Always `hidden:true`
+// (drawn as part of the one vessel rectangle, never as its own visible
+// joint) and tagged `gasLink` so tools.js's purgeGas can find and remove it
+// when the vessel is deleted.
+function makeGasMountCon(g){
+  const com=bodies[bodyIndex(g.com.id)];
+  const hostTh = g.head.id!=null ? bodies[bodyIndex(g.head.id)].th : 0;
+  return { type:'gasmount', gasLink:g.id, hidden:true, restAngle:com.th-hostTh, sel:false };
 }
 
 // ---- §06.3 · cableFrame ----
@@ -505,6 +504,24 @@ function rowsFor(con){
     return [
       { cols: mergeCols([A.velCols(1,0), B.velCols(-1,0)]), C:Cx },
       { cols: mergeCols([A.velCols(0,1), B.velCols(0,-1)]), C:Cy }
+    ];
+  }
+  if(con.type==='gasmount'){
+    // A vessel's own frac=0,lat=0 point (§06.2e) coincides with its external
+    // head frame's point -- same 2-row pin pattern as above -- plus a third
+    // row locking the COM body's own orientation (the vessel's axis
+    // orientation directly) to the host frame's angle.
+    const g=gases.find(gg=>gg.id===con.gasLink);
+    if(!g) return [];
+    const A=epFrame({vesselId:g.id, frac:0, lat:0}), B=epFrame(g.head);
+    const comIdx=bodyIndex(g.com.id);
+    const hostId = g.head.id!=null ? bodyIndex(g.head.id) : -1;
+    const hostTh = hostId>=0 ? bodies[hostId].th : 0;
+    const angCols = hostId>=0 ? [[comIdx,0,0,1],[hostId,0,0,-1]] : [[comIdx,0,0,1]];
+    return [
+      { cols: mergeCols([A.velCols(1,0), B.velCols(-1,0)]), C: A.wx-B.wx },
+      { cols: mergeCols([A.velCols(0,1), B.velCols(0,-1)]), C: A.wy-B.wy },
+      { cols: angCols, C: bodies[comIdx].th - hostTh - con.restAngle }
     ];
   }
   if(con.type==='rod'){

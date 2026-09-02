@@ -401,11 +401,15 @@ function scaleOffOnBody(ep, bodyId, ratio){
 // either of its two boundary bodies is gone).
 function purgeGas(g){
   gases=gases.filter(x=>x!==g);
-  constraints=constraints.filter(c=>!(c.hidden && c.gasLink===g.id) && c.a.vesselId!==g.id && !(c.b&&c.b.vesselId===g.id));
+  // gasmount constraints (constraints.js §06.2e) carry no a/b endpoints at
+  // all -- they key off gasLink alone, already handled by the first clause
+  // -- so the a/b vesselId checks below must guard for a's own presence too
+  // (unlike b, which was always optional already).
+  constraints=constraints.filter(c=>!(c.hidden && c.gasLink===g.id) && !(c.a&&c.a.vesselId===g.id) && !(c.b&&c.b.vesselId===g.id));
   springs=springs.filter(s=>s.a.vesselId!==g.id && !(s.b&&s.b.vesselId===g.id));
   heatInteractions=heatInteractions.filter(h=>h.gasId!==g.id);
   flowInteractions=flowInteractions.filter(f=>f.gasId!==g.id);
-  const synthIds=[g.piston&&g.piston.id, g.head&&g.head.id].filter(id=>id!=null);
+  const synthIds=[g.piston&&g.piston.id, g.com&&g.com.id, g.head&&g.head.id].filter(id=>id!=null);
   for(const id of synthIds){ const b=bodies.find(x=>x.id===id); if(b && b.synthetic){
     heatInteractions=heatInteractions.filter(h=>h.bodyId!==id);
     flowInteractions=flowInteractions.filter(f=>f.bodyId!==id);
@@ -667,7 +671,16 @@ cv.addEventListener('pointerdown',e=>{
     const gsi=pickGas(wx,wy);
     if(gsi>=0){ selectGas(gsi); const g=gases[gsi];
       if(!sim.running){ vesselDrag={g, wx, wy}; }
-      else if(g.piston){ const ci=bodyIndex(g.piston.id); grab={bi:ci, off:offOf(bodies[ci],[wx,wy])}; }
+      else if(g.piston){
+        // The piston marker (g.piston) is now static/kinematically-slaved
+        // (geometry.js §05.2d) -- never a valid grab target, since the
+        // solver's own drag force (physics.js §08.1) only ever acts on a
+        // real body. Grab the vessel's own COM body instead, at the
+        // clicked point's lever arm from it -- still a real, physically
+        // meaningful attachment (the COM's own rigid rotation carries that
+        // point along), just without an extra pull on sepRate itself.
+        const ci=bodyIndex(g.com.id); grab={bi:ci, off:offOf(bodies[ci],[wx,wy])};
+      }
       else { panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; }
       return; }
     const cbi=pickCable(wx,wy);
@@ -735,13 +748,15 @@ function runToolClick(wx,wy){
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ rotSprings.splice(rsi,1); clearSelection(); saveState(); return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ const id=bodies[bi].id;
-      constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      // gasmount constraints (constraints.js §06.2e) carry no a/b endpoints
+      // at all, so the a-side check must guard for its own presence too.
+      constraints=constraints.filter(c=>!(c.a&&c.a.id===id) && !(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       // A gas loses its physical meaning entirely once either boundary body
       // (piston or head) is gone -- purge it (and, transitively, whatever
       // referenced it) rather than leave a dangling bodyIndex lookup.
-      for(const g of gases.filter(g=>(g.piston&&g.piston.id===id)||g.head.id===id)) purgeGas(g);
+      for(const g of gases.filter(g=>(g.piston&&g.piston.id===id)||(g.com&&g.com.id===id)||g.head.id===id)) purgeGas(g);
       heatInteractions=heatInteractions.filter(h=>h.bodyId!==id);
       flowInteractions=flowInteractions.filter(f=>f.bodyId!==id);
       bodies.splice(bi,1); clearSelection(); saveState(); }
@@ -767,28 +782,34 @@ function runToolClick(wx,wy){
     const cx=(bodyPreview.x0+bodyPreview.x1)/2;
     const yLo=Math.min(bodyPreview.y0,bodyPreview.y1), yHi=Math.max(bodyPreview.y0,bodyPreview.y1);
     bodyPreview=null;
-    const plateHH=Math.min(0.06, boxH*0.12);               // each plate's own half-thickness
-    // Both plates are synthetic: real bodies (mass, gravity, normal physics)
-    // for the solver's sake, but hidden from the player as separate bodies
-    // -- drawVessel (render.js) paints the whole thing as one rectangle,
-    // and pickBody/snapAnchor skip them (tools.js). Both bodies' own mass
-    // is overwritten immediately below (mass/2 each, since neither end is
-    // privileged here -- geometry.js syncVesselCapMass) rather than their
-    // plate-geometry mass.
+    const plateHH=Math.min(0.06, boxH*0.12);               // head plate's own half-thickness
+    // headBody is a real, synthetic body (mass, gravity, normal physics) for
+    // the solver's sake, but hidden from the player as a separate body --
+    // drawVessel (render.js) paints the whole thing as one rectangle, and
+    // pickBody/snapAnchor skip it (tools.js). comBody is the gas's own
+    // center-of-mass body (the redesigned single-internal-coordinate piston,
+    // DEVELOPMENT.md §6.1) -- also real and synthetic, its mass overwritten
+    // immediately below to the gas's full mass (geometry.js
+    // syncVesselComMass) rather than its plate-geometry mass. capMarker is
+    // static and kinematically slaved (syncVesselMarkers) -- never touched
+    // by the solver, just repositioned each substep -- so heat/flow
+    // attachment, contact-area math and picking keep working unmodified.
     const headBody=makeRectBody(cx, yLo+plateHH, bore/2, plateHH, false);
-    const pistonBody=makeRectBody(cx, yHi-plateHH, bore/2, plateHH, false);
-    headBody.synthetic=true; pistonBody.synthetic=true;
-    bodies.push(headBody, pistonBody);
     const L=Math.max(boxH-4*plateHH, 0.1);
+    const comBody=makeRectBody(cx, yLo+plateHH+L*0.5, bore/2, plateHH, false);
+    const capMarker=makeRectBody(cx, yHi-plateHH, bore/2, plateHH, true);
+    headBody.synthetic=true; comBody.synthetic=true; capMarker.synthetic=true;
+    bodies.push(headBody, comBody, capMarker);
     const head={id:headBody.id, off:[0,plateHH], dir:[0,1]};
-    const piston={id:pistonBody.id, off:[0,-plateHH]};
+    const piston={id:capMarker.id, off:[0,-plateHH]};
+    const com={id:comBody.id};
     const T=sim.bg.T, gamma=sim.bg.gamma, mass=Math.max(sim.bg.P*bore*L/T, 1e-6);
-    const g={kind:'gas', id:uid++, head, piston, bore, mass, T, gamma, lockedField:'P', sel:false};
-    const link=makeSlotCon({id:pistonBody.id,off:piston.off},{id:headBody.id,off:head.off},true,true);
-    link.hidden=true; link.gasLink=g.id;
-    constraints.push(link);
+    const g={kind:'gas', id:uid++, head, piston, com, bore, mass, T, gamma, sep:L, sepRate:0, lockedField:'P', sel:false};
+    const mount=makeGasMountCon(g);
+    constraints.push(mount);
     gases.push(g);
-    syncVesselCapMass(g);
+    syncVesselComMass(g);
+    syncVesselMarkers(g);
     saveState();
     return;
   }
@@ -1001,30 +1022,28 @@ cv.addEventListener('pointermove',e=>{
   if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
   if(vesselDrag){
     // The edit-mode counterpart of an ordinary body's pose drag. When the
-    // head end is a real (free) body, translate head and cap by the
-    // identical world-space delta -- a pure rigid shift that leaves the
-    // hidden prismatic's own rows already exactly satisfied (the axial
-    // separation and sepRate are untouched), no different from picking up
-    // the whole assembly. When the head is world-anchored, there's no
-    // "whole vessel" to translate at all -- only the cap can move, and
-    // only along the fixed axis (extend/compress), like dragging the
-    // piston face on a wall-mounted cylinder; projecting the raw delta
-    // onto the axis here (rather than handing an arbitrary 2D delta to
-    // the cap and letting projectPositions claw the lateral part back out)
-    // avoids a large transient lateral error the prismatic's angle-lock
-    // rows can otherwise over-correct through, dragging the axial position
-    // along with it.
+    // head end is a real (free) body, translate head and the vessel's own
+    // COM body (geometry.js §05.2d) by the identical world-space delta -- a
+    // pure rigid shift that leaves the gasmount constraint's own rows
+    // already exactly satisfied (the axial separation and sepRate are
+    // untouched), no different from picking up the whole assembly. When the
+    // head is world-anchored, there's no "whole vessel" to translate at all
+    // -- only the axial separation itself can change, like dragging the
+    // piston face on a wall-mounted cylinder; projecting the raw delta onto
+    // the axis and feeding it through setVesselLength (rather than moving
+    // the now-static piston marker directly, which carries no state of its
+    // own to move) keeps g.sep/the COM body the authoritative source of
+    // truth.
     const dx=mouseWorld[0]-vesselDrag.wx, dy=mouseWorld[1]-vesselDrag.wy;
     vesselDrag.wx=mouseWorld[0]; vesselDrag.wy=mouseWorld[1];
     const g=vesselDrag.g;
     if(g.head.id!=null){
       const hb=bodies[bodyIndex(g.head.id)];
       if(hb && !hb.static){ hb.x+=dx; hb.y+=dy; }
-      if(g.piston){ const cb=bodies[bodyIndex(g.piston.id)]; if(cb){ cb.x+=dx; cb.y+=dy; } }
+      if(g.piston){ const com=bodies[bodyIndex(g.com.id)]; if(com){ com.x+=dx; com.y+=dy; syncVesselMarkers(g); } }
     } else if(g.piston){
-      const cb=bodies[bodyIndex(g.piston.id)];
-      if(cb){ const f=gasFrame(g); const along=dx*f.dW[0]+dy*f.dW[1];
-        cb.x+=f.dW[0]*along; cb.y+=f.dW[1]*along; }
+      const f=gasFrame(g); const along=dx*f.dW[0]+dy*f.dW[1];
+      setVesselLength(g, g.sep+along);
     }
     projectPositions(8);
     saveState();

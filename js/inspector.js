@@ -63,14 +63,14 @@ function commitVesselFieldEdit(g, editedKey, newValue){
   const cur=vesselLiveFields(g); cur[editedKey]=newValue;
   if(editedKey==='T') g.T=Math.max(newValue,1e-4);
   else if(editedKey==='bore') g.bore=Math.max(newValue,0.05);
-  else if(editedKey==='mass'){ g.mass=Math.max(newValue,1e-6); syncVesselCapMass(g); }
+  else if(editedKey==='mass'){ g.mass=Math.max(newValue,1e-6); syncVesselComMass(g); syncVesselMarkers(g); }
   else if(editedKey==='length') setVesselLength(g,Math.max(newValue,0.05));
   if(lf===editedKey) return; // the locked field's own input is disabled; defensive only
   const {T,P,bore,length,mass}=cur;
   if(lf==='T') g.T=Math.max(P*bore*length/mass,1e-4);
   else if(lf==='bore') g.bore=Math.max(mass*T/(P*length),0.05);
   else if(lf==='length') setVesselLength(g,Math.max(mass*T/(P*bore),0.05));
-  else if(lf==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
+  else if(lf==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselComMass(g); syncVesselMarkers(g); }
 }
 // Switch which field is locked, immediately recomputing the newly-locked
 // one from the other four's current values (so the switch itself never
@@ -81,7 +81,7 @@ function relockVesselField(g, newLockedField){
   if(newLockedField==='T') g.T=Math.max(P*bore*length/mass,1e-4);
   else if(newLockedField==='bore') g.bore=Math.max(mass*T/(P*length),0.05);
   else if(newLockedField==='length') setVesselLength(g,Math.max(mass*T/(P*bore),0.05));
-  else if(newLockedField==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
+  else if(newLockedField==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselComMass(g); syncVesselMarkers(g); }
 }
 
 // The rate a heat/flow interaction actually participates in is set by the
@@ -167,7 +167,9 @@ function renderInspector(){
     document.getElementById('f_vy').onchange=commitVel;
     document.getElementById('f_w').onchange=commitVel;
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
-      constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      // gasmount constraints (constraints.js §06.2e) carry no a/b endpoints
+      // at all, so the a-side check must guard for its own presence too.
+      constraints=constraints.filter(c=>!(c.a&&c.a.id===id) && !(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };

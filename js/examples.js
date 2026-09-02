@@ -19,32 +19,33 @@ function loadExample(kind){
   // pendulum needs (both ends unwelded, unlike the tool's rigid-strut default).
   const rodBG=(wx,wy,B)=>constraints.push(makeRodCon({id:null,off:[wx,wy]},{id:B.id,off:[0,0]},false,false));
   // A vertical piston vessel in a cylinder (head at headOff, axis +y,
-  // initial length `len`) -- the redesigned single-object piston
-  // (DEVELOPMENT.md §6.1): two synthetic, auto-managed boundary bodies
-  // (hidden from the player as separate bodies, drawn as part of the one
-  // vessel rectangle) linked by the same hidden prismatic a real placement
-  // (tools.js §13.5) would also create, their masses forced to the gas's
-  // own mass/2 each (see geometry.js syncVesselCapMass) rather than an
-  // independently-set plate mass. The head is anchored to the world by a
-  // visible, both-ends-welded rod -- DEVELOPMENT.md §4.1's "how a body is
-  // anchored to the world" (there is no bare world-anchored frame, no
-  // standalone static toggle) -- so every part of this example is
-  // something the player could place and connect with the tool palette,
-  // not a hidden hard-coded anchor with nothing on screen explaining why
-  // the vessel doesn't fall. Shared by the gasspring and heatengine
-  // examples below; returns the vessel, with `g.head.id`/`g.piston.id`
-  // already naming the two (real, if hidden) boundary bodies.
+  // initial length `len`) -- the redesigned single-internal-coordinate
+  // piston (DEVELOPMENT.md §6.1): a real, synthetic COM body (hidden from
+  // the player as a separate body, drawn as part of the one vessel
+  // rectangle) mounted to the head frame by the same `gasmount` constraint
+  // a real placement (tools.js §13.5) would also create, its mass forced to
+  // the gas's own full mass (see geometry.js syncVesselComMass), plus a
+  // static, kinematically-slaved marker body at the true cap point. The
+  // head is anchored to the world by a visible, both-ends-welded rod --
+  // DEVELOPMENT.md §4.1's "how a body is anchored to the world" (there is
+  // no bare world-anchored frame, no standalone static toggle) -- so every
+  // part of this example is something the player could place and connect
+  // with the tool palette, not a hidden hard-coded anchor with nothing on
+  // screen explaining why the vessel doesn't fall. Shared by the gasspring
+  // and heatengine examples below; returns the vessel, with `g.head.id`/
+  // `g.piston.id` already naming the two (real, if hidden) boundary bodies.
   const gasPiston=(headOff,T,mass=5,gamma=1.4,bore=1.0,len=1.0)=>{
     const headBody=makeRectBody(headOff[0], headOff[1], bore/2, 0.06, false);
     headBody.synthetic=true; bodies.push(headBody);
-    const cap=makeRectBody(headOff[0], headOff[1]+len, bore/2, 0.06, false);
-    cap.synthetic=true; bodies.push(cap);
-    const head={id:headBody.id, off:[0,0], dir:[0,1]}, piston={id:cap.id, off:[0,0]};
-    const link=makeSlotCon(piston, head, true, true);
-    const g={kind:'gas', id:uid++, head, piston, bore, mass, gamma, T, lockedField:'P', sel:false};
-    link.hidden=true; link.gasLink=g.id;
-    constraints.push(link); gases.push(g);
-    syncVesselCapMass(g);
+    const comBody=makeRectBody(headOff[0], headOff[1]+len*0.5, bore/2, 0.06, false);
+    comBody.synthetic=true; bodies.push(comBody);
+    const capMarker=makeRectBody(headOff[0], headOff[1]+len, bore/2, 0.06, true);
+    capMarker.synthetic=true; bodies.push(capMarker);
+    const head={id:headBody.id, off:[0,0], dir:[0,1]}, piston={id:capMarker.id, off:[0,0]}, com={id:comBody.id};
+    const g={kind:'gas', id:uid++, head, piston, com, bore, mass, gamma, T, sep:len, sepRate:0, lockedField:'P', sel:false};
+    const mount=makeGasMountCon(g);
+    constraints.push(mount); gases.push(g);
+    syncVesselComMass(g); syncVesselMarkers(g);
     constraints.push(makeRodCon({id:null,off:[headOff[0],headOff[1]-0.4]}, {id:headBody.id,off:[0,0]}, true, true));
     return g;
   };

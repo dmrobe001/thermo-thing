@@ -44,70 +44,112 @@ function refreshInertia(b){
   b.invM=b.static?0:1/b.mass; b.invI=b.static?0:1/b.I;
 }
 function setBodyMass(b,m){ b.mass=m; refreshInertia(b); }
-// A gas vessel's boundary bodies (the "piston is a hidden auxiliary body"
-// redesign, DEVELOPMENT.md §6.1) don't carry an independently-editable
-// structural mass -- their inertia *is* the gas's own, distributed
-// uniformly along the axial span. The exact kinetic energy of a uniform
-// column with material velocity interpolated linearly between the two
-// ends (v1 at the head, v2 at the cap) works out to
-// `mass*(v1^2 + v1*v2 + v2^2)/6` -- a genuinely *coupled* quadratic form
-// (a cross term between the two bodies' velocities) that this engine's
-// block-diagonal per-body mass matrix (DEVELOPMENT.md §3.1) has no way to
-// represent. Two special cases of that exact formula ARE representable as
-// plain per-body masses, and this picks whichever applies:
-//   - head fixed (v1 = 0, e.g. genuinely world-anchored with no body at
-//     all): reduces to `mass*v2^2/6`, i.e. an effective mass of exactly
-//     `mass/3` at the cap alone -- the classic "one end fixed" rod result.
-//   - both ends real bodies (neither is privileged -- nothing in the
-//     physical setup distinguishes "head" from "cap"): dropping only the
-//     cross term and splitting the diagonal evenly, `mass/2` at each end,
-//     is exact in the v1=v2 (rigid, non-stretching) limit -- the gas
-//     translates as one lump of its own total mass, matching a free
-//     island's own COM physics exactly -- and gives both ends identical
-//     inertia when nothing else distinguishes them, unlike a `mass/3`-
-//     only-on-the-cap split (which measurably differs from the head's own
-//     mass and reads as an unphysical amplitude asymmetry the moment the
-//     head is a real, movable body). It overstates the fixed-end limit by
-//     50% (mass/2 vs the exact mass/3) if the head ends up rigidly welded
-//     down (DEVELOPMENT.md §6.1's anchoring pattern) rather than truly
-//     bodiless -- a bounded, accepted approximation, not a growing one.
-// Called once per substep (physics.js §08.0, before islands/preE are
-// snapshotted -- so a mass change from the *previous* substep's flow
-// transfer is already baked into the new energy baseline, not read as
-// drift by §08.6's rescale) and immediately on any inspector edit to the
-// vessel's mass field.
 const EFF_MASS_FLOOR = 1e-6;
-function syncVesselCapMass(v){
+// A gas vessel with a real moving piston (DEVELOPMENT.md §6.1's redesign)
+// is represented, dynamically, by exactly ONE real rigid body -- `v.com`,
+// the gas's own center of mass, mass forced to the gas's full `v.mass` --
+// plus one genuine extra scalar coordinate, `v.sepRate` (rate of change of
+// `v.sep`, the axial separation). This is the *exact* decomposition of a
+// uniformly-distributed gas column's kinetic energy: writing v1/v2 for the
+// head's/cap's own velocity, `mass*(v1^2+v1*v2+v2^2)/6` is a genuinely
+// *coupled* quadratic form (a cross term between the two ends) that no
+// per-body-independent mass split can represent (verified by hand: no
+// fixed split matches both the head-rigidly-fixed and both-ends-free
+// cases at once, since the cap's effective inertia genuinely depends on
+// whether the head is free or constrained -- an earlier version of this
+// file tried `mass/2` each or `mass/3` on the cap alone and got provably
+// wrong accelerations). Substituting center-of-mass/relative coordinates
+// `vc=(v1+v2)/2`, `vr=v2-v1` (`vr` IS sepRate) removes the cross term
+// completely: `KE = (1/2)*mass*vc^2 + (1/2)*(mass/12)*vr^2` -- the COM
+// translates as a rigid lump of the gas's own total mass; the stretching
+// motion has its own separate, smaller, fully decoupled inertia
+// (`mass/12`). `v.piston` is kept (same `{id,off}` shape as ever) but now
+// names a *static*, kinematically-slaved marker body -- never touched by
+// the solver, just repositioned each substep (syncVesselMarkers below) --
+// so every consumer that only ever needed "some body with the right
+// polygon at the right place" (heat/flow attachment, contact-area math,
+// picking) keeps working unmodified.
+//
+// §05.2d below extends the constraint solver's own coordinate space with
+// this scalar (indices N..N+V-1, one per vessel-with-a-piston, appended
+// after the N real bodies) so ordinary constraint rows (the vessel's own
+// "mount" to its head frame, ordinary rods/pins/springs attaching to an
+// interior point) can reference it exactly like a body's own DOF.
+function syncVesselComMass(v){
   if(!v.piston) return;
-  const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
-  const head = v.head.id!=null ? bodies[bodyIndex(v.head.id)] : null;
-  if(head){
-    setBodyMass(head, Math.max(v.mass/2, EFF_MASS_FLOOR));
-    setBodyMass(cap, Math.max(v.mass/2, EFF_MASS_FLOOR));
-  } else {
-    setBodyMass(cap, Math.max(v.mass/3, EFF_MASS_FLOOR));
-  }
+  const com = bodies[bodyIndex(v.com.id)]; if(!com) return;
+  setBodyMass(com, Math.max(v.mass, EFF_MASS_FLOOR));
 }
-// Reposition a vessel's length -- for a movable piston, this means moving
-// the cap body itself along the axis (keeping its orientation and the
-// hidden prismatic's rotation lock intact; projectPositions settles any
-// other joint riding on it, mirroring how the inspector's rod-length edit
-// calls projectPositions after a direct length change); for a fixed vessel
-// (no piston body), it's a bare constant. Used by the inspector's
-// radio-lock recompute (inspector.js) whenever `length` is the field being
-// derived or edited.
+// Keep the static, kinematically-slaved piston marker at the true cap
+// point (gasFrame's pax,pay, itself built from v.sep) and sharing the
+// vessel's own orientation (com.th) -- called once per substep alongside
+// syncVesselComMass, and after any edit that moves com or changes sep.
+function syncVesselMarkers(v){
+  if(!v.piston) return;
+  const marker = bodies[bodyIndex(v.piston.id)]; if(!marker) return;
+  const com = bodies[bodyIndex(v.com.id)]; if(!com) return;
+  const f = gasFrame(v);
+  marker.x = f.pax; marker.y = f.pay; marker.th = com.th;
+}
+// Reposition a vessel's length. For a movable piston this means moving
+// `com` directly to the new midpoint (head's own frame, hx/hy/dW, doesn't
+// depend on sep, so this lands exactly on the new length with zero
+// residual constraint error -- an authoritative edit, not something a
+// least-squares projectPositions pass could partially undo by shifting
+// `sep` back); for a fixed vessel (no piston body) it's a bare constant.
+// Used by the inspector's radio-lock recompute (inspector.js) whenever
+// `length` is the field being derived or edited.
 function setVesselLength(v, newLen){
   newLen = Math.max(newLen, GAS_MIN_X);
   if(v.piston){
-    const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
+    const com = bodies[bodyIndex(v.com.id)]; if(!com) return;
     const f = gasFrame(v);
-    const wx = f.hx + f.dW[0]*newLen, wy = f.hy + f.dW[1]*newLen;
-    const [ox,oy] = R(cap.th, v.piston.off[0], v.piston.off[1]);
-    cap.x = wx-ox; cap.y = wy-oy;
+    com.x = f.hx + f.dW[0]*newLen*0.5;
+    com.y = f.hy + f.dW[1]*newLen*0.5;
+    v.sep = newLen;
+    syncVesselMarkers(v);
     projectPositions(8);
   } else {
     v.len = newLen;
   }
+}
+
+// ---- §05.2d · extended coordinate space (bodies ++ per-vessel sepRate) ----
+// Every constraint row is {cols:[[idx,jx,jy,jw],...], C}. Indices 0..N-1
+// are real bodies as always; a vessel-with-a-piston's sepRate coordinate
+// lives at one extra index N..N+V-1, appended after them -- its column is
+// always [idx, coeff, 0, 0] (a plain scalar: no lateral or rotational
+// component of its own). vesselCoordList() builds this mapping fresh
+// (cheap: one pass over gases) wherever a caller needs to translate a gas
+// to its flat index; the four coord* helpers dispatch once on idx<N so
+// EVERY existing constraint between plain bodies (rod, pin, slot, belt,
+// knife, cvt, cable, spring) goes through the *exact* code that was there
+// before this redesign -- only rows that actually reference a vessel
+// coordinate exercise the new branch. Used by physics.js §08.3's Schur
+// assembly/impulse-apply and projection.js's projectPositions in place of
+// touching bodies[c[0]] directly.
+function vesselCoordList(){
+  const N=bodies.length; const list=[]; const idxOf=new Map();
+  for(const g of gases) if(g.piston){ idxOf.set(g.id, N+list.length); list.push(g); }
+  return {N, list, idxOf};
+}
+function coordInvM(idx,N,list){
+  if(idx<N) return invMdiag(bodies[idx]);
+  return [12/Math.max(list[idx-N].mass,EFF_MASS_FLOOR), 0, 0];
+}
+function coordGetV(idx,N,list){
+  if(idx<N){ const b=bodies[idx]; return [b.vx,b.vy,b.w]; }
+  return [list[idx-N].sepRate,0,0];
+}
+function coordApplyImpulse(idx,N,list,c1,c2,c3,lambda){
+  if(idx<N){ const b=bodies[idx]; if(b.static) return;
+    b.vx+=b.invM*c1*lambda; b.vy+=b.invM*c2*lambda; b.w+=b.invI*c3*lambda; return; }
+  const g=list[idx-N]; g.sepRate += (12/Math.max(g.mass,EFF_MASS_FLOOR))*c1*lambda;
+}
+function coordApplyPos(idx,N,list,c1,c2,c3,amount){
+  if(idx<N){ const b=bodies[idx]; if(b.static) return;
+    b.x+=b.invM*c1*amount; b.y+=b.invM*c2*amount; b.th+=b.invI*c3*amount; return; }
+  const g=list[idx-N]; g.sep += (12/Math.max(g.mass,EFF_MASS_FLOOR))*c1*amount;
 }
 
 // ---- §05.2b · shape-generic body geometry ----

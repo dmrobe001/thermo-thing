@@ -13,16 +13,21 @@ let saved=null;
 // gMass (amount of gas) is saved alongside gT (temperature) now that flow
 // interactions can move mass between gases during play -- both are per-gas
 // state a Reset must roll back, exactly like a body's pose/velocity. A
-// vessel's own `sep`/`sepRate` (DEVELOPMENT.md §6.1's redesign) need no
-// separate entry here -- they live entirely on the cap body's own x/y/vx/vy,
-// already captured by the `b` snapshot above.
+// vessel's own `sep`/`sepRate` (DEVELOPMENT.md §6.1's redesign) are now a
+// genuine extra solver coordinate stored directly on the gas, not any
+// body's own position/velocity -- so they need their own explicit gSep/
+// gSepRate entries here, saved/restored the same way gT/gMass are.
 function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})),
-  gT:gases.map(g=>g.T), gMass:gases.map(g=>g.mass), cSA:cables.map(c=>c.spoolAngle) }; }
+  gT:gases.map(g=>g.T), gMass:gases.map(g=>g.mass),
+  gSep:gases.map(g=>g.piston?g.sep:null), gSepRate:gases.map(g=>g.piston?g.sepRate:null),
+  cSA:cables.map(c=>c.spoolAngle) }; }
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
   if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0; } }
   gases.forEach((g,i)=>{ if(saved.gT[i]!=null) g.T=saved.gT[i];
     if(saved.gMass[i]!=null) g.mass=saved.gMass[i];
-    syncVesselCapMass(g); });
+    if(g.piston){ if(saved.gSep&&saved.gSep[i]!=null) g.sep=saved.gSep[i];
+      if(saved.gSepRate&&saved.gSepRate[i]!=null) g.sepRate=saved.gSepRate[i]; }
+    syncVesselComMass(g); syncVesselMarkers(g); });
   // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
   // pose, so a reference accumulated across possibly many turns of prior
@@ -64,10 +69,12 @@ window.addEventListener('keydown',e=>{
   else if(e.key==='s'||e.key==='S'){ if(!sim.running){ if(!saved)saveState(); substep(sim.h);} }
   else if(e.key==='Escape'){ pending=null; bodyPreview=null; setTool('select'); }
   else if(e.key==='Delete'||e.key==='Backspace'){ if(selBody){const id=selBody.id;
-      constraints=constraints.filter(c=>c.a.id!==id&&!(c.b&&c.b.id===id));
+      // gasmount constraints (constraints.js §06.2e) carry no a/b endpoints
+      // at all, so the a-side check must guard for its own presence too.
+      constraints=constraints.filter(c=>!(c.a&&c.a.id===id)&&!(c.b&&c.b.id===id));
       springs=springs.filter(s=>s.a.id!==id&&!(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
-      for(const g of gases.filter(g=>(g.piston&&g.piston.id===id)||g.head.id===id)) purgeGas(g);
+      for(const g of gases.filter(g=>(g.piston&&g.piston.id===id)||(g.com&&g.com.id===id)||g.head.id===id)) purgeGas(g);
       heatInteractions=heatInteractions.filter(h=>h.bodyId!==id);
       flowInteractions=flowInteractions.filter(f=>f.bodyId!==id);
       bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}

@@ -21,6 +21,15 @@ function energy(island){
     ke+=0.5*b.mass*(b.vx*b.vx+b.vy*b.vy)+0.5*b.I*b.w*b.w;
     if(sim.gravity) pe+=b.mass*sim.g*b.y;
   }
+  // A vessel's sepRate is a genuine extra solver coordinate (DEVELOPMENT.md
+  // §6.1), not any body's own vx/vy/w, so its KE -- (1/2)*(mass/12)*sepRate^2,
+  // the decoupled "stretching motion" inertia derived from the gas column's
+  // coupled (v1,v2) Lagrangian -- isn't part of the body loop above and has
+  // to be added explicitly.
+  for(const g of gss) if(g.piston){
+    const effMassR=Math.max(g.mass/12, EFF_MASS_FLOOR);
+    ke += 0.5*effMassR*g.sepRate*g.sepRate;
+  }
   let U=0; for(const g of gss) U += g.mass*(1/(g.gamma-1))*g.T;   // internal energy of the gas
   // spring potential energy: 0.5*k*deviation^2 for each linear (length) and
   // rotational (angle) spring, so §08.6's rescale sees them as a legitimate

@@ -52,7 +52,7 @@ function ufUnion(p,a,b){ const ra=ufFind(p,a), rb=ufFind(p,b); if(ra!==rb) p[ra]
 // script-load time would keep pointing at whatever was live at that instant.
 const COUPLING_TABLES = [
   ()=>[constraints,'a','b'], ()=>[cables,'spool','tether'],
-  ()=>[springs,'a','b'], ()=>[rotSprings,'a','b'], ()=>[gases,'piston','head'],
+  ()=>[springs,'a','b'], ()=>[rotSprings,'a','b'], ()=>[gases,'com','head'],
 ];
 function computeIslands(){
   const N=bodies.length, WORLD=N;
@@ -80,12 +80,12 @@ function computeIslands(){
   for(const sp of springs){ islandOf(bodyIndex((sp.a.id!=null?sp.a:sp.b).id)).springs.push(sp); }
   for(const rs of rotSprings){ islandOf(bodyIndex((rs.a.id!=null?rs.a:rs.b).id)).rotSprings.push(rs); }
   // Bucket a gas into whichever of its two boundary bodies is real -- its
-  // piston if it has one, else its head (both may be missing/world, e.g. a
-  // free-floating fixed-volume vessel used only via heat/flow interactions
-  // elsewhere; such a gas belongs to no mechanical island and never joins
-  // isl.gases, exactly like a gas with a real body has nothing to lose from
-  // not being scoped to a rescale that can't touch it anyway).
-  for(const g of gases){ const realId = g.piston ? g.piston.id : g.head.id;
+  // own COM body if it has a piston, else its head (both may be missing/
+  // world, e.g. a free-floating fixed-volume vessel used only via heat/flow
+  // interactions elsewhere; such a gas belongs to no mechanical island and
+  // never joins isl.gases, exactly like a gas with a real body has nothing
+  // to lose from not being scoped to a rescale that can't touch it anyway).
+  for(const g of gases){ const realId = g.piston ? g.com.id : g.head.id;
     if(realId!=null) islandOf(bodyIndex(realId)).gases.push(g); }
   return [...byRoot.values()];
 }
@@ -258,13 +258,13 @@ function applyFlowPair(iA,iB,h){
 // ---- §08.1 · applied forces -> candidate velocities ----
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
-  // Keep every vessel's boundary bodies' mass equal to its gas's own mass
-  // (split geometry.js's syncVesselCapMass derives from the ramp-profile
-  // effective inertia) *before* islands/preE are captured below -- so a
-  // mass change from the previous substep's flow transfer is already
-  // baked into this substep's energy baseline instead of being read as
-  // drift by §08.6's rescale.
-  for(const g of gases) syncVesselCapMass(g);
+  // Keep every vessel's COM body mass equal to its gas's own mass, and its
+  // static piston marker at the true cap point (geometry.js
+  // syncVesselComMass/syncVesselMarkers) *before* islands/preE are
+  // captured below -- so a mass change from the previous substep's flow
+  // transfer is already baked into this substep's energy baseline instead
+  // of being read as drift by §08.6's rescale.
+  for(const g of gases){ syncVesselComMass(g); syncVesselMarkers(g); }
   const N=bodies.length;
   // Snapshot each island's pre-substep energy budget (§08.6's target) and
   // momentum (§08.6's momentum-conservation target for a free island)
@@ -316,24 +316,25 @@ function substep(h){
   for(const g of gases){
     const f=gasFrame(g);
     const P=g.mass*g.T/(g.bore*f.xc); g._P=P; g._V=g.bore*f.xc; g._x=f.x; g._dW=f.dW;
+    if(!g.piston) continue;
+    // The movable wall's net axial force -- internal pressure against
+    // atmosphere, plus the recoil from any mass crossing this gas's own
+    // boundary (§08.0b) -- is now a *generalized* force on the vessel's own
+    // sepRate coordinate directly (the "genuine new internal coordinate"
+    // architecture, DEVELOPMENT.md §6.1): no body force/torque bookkeeping,
+    // no head/piston split. The reaction the host frame feels comes out of
+    // the gasmount constraint's own multiplier in §08.3, same as any other
+    // joint reaction.
     const Fmag=(P-sim.bg.P)*g.bore + g._flowForce;
-    const Fx=Fmag*f.dW[0], Fy=Fmag*f.dW[1];
-    if(f.A && !f.A.static){ FX[f.ia]+=Fx; FY[f.ia]+=Fy; TAU[f.ia]+= f.prx*Fy - f.pry*Fx; }
-    if(f.B && !f.B.static){ FX[f.ib]-=Fx; FY[f.ib]-=Fy; TAU[f.ib]+= f.hrx*(-Fy) - f.hry*(-Fx); }
     // The flow-force's own mechanical work is drawn from the same
     // transferred internal energy already booked into _Qstep at §08.0b --
-    // credit it here (pre-solve point velocities, first-order in h) so
-    // §08.6's rescale treats this recoil KE as legitimate external input
-    // instead of erasing it as drift. The ordinary pressure-force work needs
-    // no such credit: it already trades against the gas's own P·dV term
-    // (§08.5).
-    if(Math.abs(g._flowForce)>1e-12){
-      const ffx=g._flowForce*f.dW[0], ffy=g._flowForce*f.dW[1];
-      let work=0;
-      if(f.A){ const vpx=f.A.vx-f.A.w*f.pry, vpy=f.A.vy+f.A.w*f.prx; work+=ffx*vpx+ffy*vpy; }
-      if(f.B){ const vhx=f.B.vx-f.B.w*f.hry, vhy=f.B.vy+f.B.w*f.hrx; work-=ffx*vhx+ffy*vhy; }
-      g._Qstep+=work*h;
-    }
+    // credit it here (pre-solve sepRate, first-order in h) so §08.6's
+    // rescale treats this recoil KE as legitimate external input instead of
+    // erasing it as drift. The ordinary pressure-force work needs no such
+    // credit: it already trades against the gas's own P·dV term (§08.5).
+    if(Math.abs(g._flowForce)>1e-12) g._Qstep += g._flowForce*g.sepRate*h;
+    const effMassR=Math.max(g.mass/12, EFF_MASS_FLOOR);
+    g.sepRate += h*Fmag/effMassR;
   }
   // linear spring force elements: Hookean, F = k*(restLen-L) along the line
   // joining the two endpoints -- same two-endpoint frame as rod (twoPointFrame,
@@ -476,6 +477,15 @@ function substep(h){
   }
 
   // ---- §08.3 · constraint assembly -> Schur solve -> impulse apply ----
+  // The coordinate space now extends past the real bodies: indices 0..N-1
+  // are bodies as always, N..N+V-1 are one flat scalar per vessel-with-a-
+  // piston (its sepRate). coordGetV/coordInvM/coordApplyImpulse (geometry.js
+  // §05.2d) branch on idx<N to delegate to *exactly* the same bodies[]/
+  // invMdiag path used before this rearchitecture, so every row built only
+  // from ordinary bodies is provably unaffected -- only rows that actually
+  // carry a vessel-coordinate column (the gasmount constraint, a vessel-
+  // interior endpoint, or the floor-stop row below) exercise the new branch.
+  const vlist = vesselCoordList().list;
   // 3) assemble all constraint rows (+ active cable rows)
   const rows=[];
   for(let ci=0;ci<constraints.length;ci++){
@@ -488,45 +498,49 @@ function substep(h){
       cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C});
     }
   }
-  // Gas minimum-volume stop (constraints.js §06.2b, gasStopRow): keeps a
-  // piston's true axial separation x from ever compressing past GAS_MIN_X.
-  // Without this, that job fell to gasFrame's xc=max(x,GAS_MIN_X) clamp
-  // inside the P=nT/V formula alone -- softening the *pressure*, not the
-  // geometry. A piston fast enough to cross GAS_MIN_X within one substep
-  // then kept compressing past it unopposed by any further pressure rise
-  // (xc, and so P and V=bore*xc, all plateau once x<GAS_MIN_X), so §08.5's
-  // dU=-P.dV saw a frozen V and stopped crediting/debiting the gas's own U
-  // for motion that was still really happening -- decoupling the mechanism's
-  // actual KE change from the gas's energy ledger. §08.6's rescale, which
-  // trusts that ledger, then "corrected" the resulting mismatch by erasing
-  // real KE every time a stroke dipped below the floor, a loss that doesn't
-  // cancel over a cycle and drives the gas toward its T floor at small
-  // volumes -- exactly the reported symptom.
+  // Gas minimum-volume stop: keeps a piston's true axial separation g.sep
+  // from ever compressing past GAS_MIN_X. Without this, that job fell to
+  // gasFrame's xc=max(sep,GAS_MIN_X) clamp inside the P=nT/V formula alone
+  // -- softening the *pressure*, not the geometry. A piston fast enough to
+  // cross GAS_MIN_X within one substep then kept compressing past it
+  // unopposed by any further pressure rise (xc, and so P and V=bore*xc, all
+  // plateau once sep<GAS_MIN_X), so §08.5's dU=-P.dV saw a frozen V and
+  // stopped crediting/debiting the gas's own U for motion that was still
+  // really happening -- decoupling the mechanism's actual KE change from the
+  // gas's energy ledger, which §08.6's rescale then "corrected" by erasing
+  // real KE every time a stroke dipped below the floor.
   //
-  // This is deliberately *not* folded into the Schur-complement rows below:
-  // every row there shares one Baumgarte target (drive post-solve Jv toward
-  // -kb*C, this function's `rhs` line further down), which is exactly right
-  // for a bilateral joint (a rod should stay at rest once its length is
-  // satisfied) but wrong here -- pinning the piston's own Jv at ~0 for as
-  // long as it sits at the floor makes the stop a fully inelastic "glue"
-  // that destroys its entire closing KE on contact. And because that KE
-  // lands at exactly zero rather than merely shrinking, §08.6's *multiplicative*
-  // rescale can't hand it back either (nothing to scale up from zero) --
-  // confirmed by instrumented play: every floor contact was a one-substep,
-  // uncompensated KE loss of exactly 0.5*m*v^2, not the rare, self-correcting
-  // "momentarily at rest" case that branch's own comment expects, because a
-  // deep stroke hits the floor on every cycle, not once in passing. A stop
-  // meant to be energy-conserving needs restitution, not Baumgarte, so this
-  // is a standalone elastic (e=1) reflection impulse applied directly:
-  // cancel the closing component of Jv and hand it straight back reversed,
-  // which conserves this DOF's KE exactly and needs no rescue from §08.6 at
-  // all -- same target math as the rows below (lambda=-(1+e)*Jv/w), just
-  // with the restitution target a bilateral row's Baumgarte rhs doesn't
-  // have.
+  // Every other row here shares one Baumgarte target (drive post-solve Jv
+  // toward -kb*C), which is exactly right for a bilateral joint but wrong
+  // for this stop -- pinning sepRate at ~0 for as long as it sits at the
+  // floor would make the stop a fully inelastic "glue" that destroys its
+  // entire closing KE on contact, and because that KE lands at exactly zero
+  // rather than merely shrinking, §08.6's multiplicative rescale can't hand
+  // it back either. A stop meant to be energy-conserving needs restitution,
+  // not Baumgarte, so this row (when active) carries its own `restitution:1`
+  // target instead of a Baumgarte one (see the rhs loop below) -- reflect
+  // the closing rate, don't drive it to zero.
+  //
+  // This row IS pushed through the *same* combined Schur solve as everything
+  // else, not a standalone impulse: sepRate is only a free coordinate from
+  // the gasmount constraint's own perspective in appearance -- flipping it
+  // alone, with `com`'s own velocity left untouched, violates the mount's
+  // position-lock rows (a vessel-interior point's velocity is COM's rigid
+  // motion *plus* sepRate's own contribution, constraints.js §06.2d), which
+  // a separate/standalone reflection pass has no way to see or account for.
+  // Sharing the K matrix with the mount's rows is what gives this stop the
+  // *correct* coupled effective inertia (the same coupling that makes an
+  // anchored piston's effective inertia mass/3, not the bare mass/12) rather
+  // than bouncing off an artificially soft (or hard) floor and immediately
+  // being partially undone by the mount's own correction on the very next
+  // pass -- confirmed by instrumented play: a standalone flip-sepRate-alone
+  // reflection let the vessel tunnel straight through GAS_MIN_X into
+  // negative separation within a couple of substeps once anything (even
+  // just the mount) coupled sepRate to another coordinate.
   //
   // Activation is anticipatory: C+h*Jv (this step's own linear prediction of
-  // where C=x-GAS_MIN_X lands after §08.4's position integration, at the
-  // current pre-reflection closing rate) rather than just the current C.
+  // where C=sep-GAS_MIN_X lands after §08.4's position integration, at the
+  // current pre-solve closing rate) rather than just the current C.
   // GAS_MIN_X is deliberately tiny (a numerical floor, not a real object's
   // thickness), so a piston needs only a modest closing speed for h*Jv to
   // already exceed the whole gap once C gets close; waiting for C itself to
@@ -535,44 +549,47 @@ function substep(h){
   // one substep it takes to react.
   for(const g of gases){
     if(!g.piston) continue; // fixed-length vessel: x is a constant, nothing to stop
-    const {cols,C}=gasStopRow(g);
-    let Jv=0; for(const c of cols){ const b=bodies[c[0]]; Jv+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; }
+    const C=g.sep-GAS_MIN_X, Jv=g.sepRate;
     if(!(C<-1e-4 || (C+h*Jv<1e-4 && Jv<0))) continue; // not about to violate
-    let w=0; for(const c of cols){ const im=invMdiag(bodies[c[0]]); w+=c[1]*c[1]*im[0]+c[2]*c[2]*im[1]+c[3]*c[3]*im[2]; }
-    if(w<1e-12) continue;
-    if(Jv<0){ const lambda=-2*Jv/w; // e=1 reflection: post-solve Jv = -Jv
-      for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.vx+=b.invM*c[1]*lambda; b.vy+=b.invM*c[2]*lambda; b.w+=b.invI*c[3]*lambda; }
-      g._reflected=true; }
-    if(C<0){ // already past the floor (e.g. a scene loaded with x<GAS_MIN_X) -- snap back out
-      const lamPos=-C/w;
-      for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.x+=b.invM*c[1]*lamPos; b.y+=b.invM*c[2]*lamPos; b.th+=b.invI*c[3]*lamPos; } }
+    if(Jv<0){
+      const sepIdx=vesselCoordList().idxOf.get(g.id);
+      rows.push({cols:[[sepIdx,1,0,0]], C:0, restitution:1});
+      g._reflected=true;
+    }
+    if(C<0){ g.sep=GAS_MIN_X; } // already past the floor -- snap back out
   }
   const m=rows.length;
   if(m>0){
     // per-row body->j map for K assembly
     const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3]]); return mp; });
     const Jv=new Array(m);
-    for(let i=0;i<m;i++){ let s=0; for(const c of rows[i].cols){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } Jv[i]=s; }
+    for(let i=0;i<m;i++){ let s=0; for(const c of rows[i].cols){ const [vx,vy,vw]=coordGetV(c[0],N,vlist); s+=c[1]*vx+c[2]*vy+c[3]*vw; } Jv[i]=s; }
     // K = J M^-1 J^T  (+ reg)
     const Kt=[]; for(let i=0;i<m;i++) Kt.push(new Array(m).fill(0));
     for(let i=0;i<m;i++){
       for(let j=i;j<m;j++){
         let s=0;
         for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue;
-          const im=invMdiag(bodies[bi]); s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
+          const im=coordInvM(bi,N,vlist); s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
         Kt[i][j]=s; Kt[j][i]=s;
       }
       Kt[i][i]+=sim.reg;
     }
     const kb=sim.beta/sim.h;
-    const rhs=new Array(m); for(let i=0;i<m;i++) rhs[i]=-(Jv[i]+kb*rows[i].C);
+    // Every row wants post-solve Jv to land on its own target: a bilateral
+    // (or cable) row's target is the Baumgarte drift correction -kb*C; the
+    // gas floor-stop row's target is a restitution reflection, -e*Jv itself
+    // (post-solve Jv = -e*Jv-before) -- same K matrix, same solve, only the
+    // right-hand side differs. rhs[i] solves for that: Jv[i]+rhs[i] == target.
+    const rhs=new Array(m);
+    for(let i=0;i<m;i++){
+      const r=rows[i];
+      rhs[i] = r.restitution!=null ? -(1+r.restitution)*Jv[i] : -(Jv[i]+kb*r.C);
+    }
     const lam=solveLinear(Kt,rhs,m);
     // 4) apply impulses  v += M^-1 J^T lambda
     for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
-      for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.vx+=b.invM*c[1]*li; b.vy+=b.invM*c[2]*li; b.w+=b.invI*c[3]*li; } }
+      for(const c of rows[i].cols) coordApplyImpulse(c[0],N,vlist,c[1],c[2],c[3],li); }
     for(let ci=0;ci<constraints.length;ci++) constraints[ci]._lam=constraints[ci]._rows.map(ri=>lam[ri]);
     for(const cb of cables) cb._lam=cb._rows.map(ri=>lam[ri]);
   } else {
@@ -582,6 +599,7 @@ function substep(h){
   // ---- §08.4 · position integration ----
   // 4) integrate positions
   for(const b of bodies){ if(b.static)continue; b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w; }
+  for(const g of gases){ if(g.piston) g.sep += h*g.sepRate; }
 
   // ---- §08.5 · gas thermodynamics (mechanical work) ----
   // 5) mechanical work: dU = -P dV over this substep's actual volume change
@@ -760,6 +778,7 @@ function substep(h){
         if(keTarget>0 && post.ke>1e-12){
           const s=Math.sqrt(keTarget/post.ke);
           for(const i of isl.bodyIdx){ const b=bodies[i]; b.vx*=s; b.vy*=s; b.w*=s; }
+          for(const g of isl.gases) if(g.piston) g.sepRate*=s;
           ENERGY_BANK.delete(bankKey);
         } else {
           ENERGY_BANK.set(bankKey,keTarget);
@@ -816,6 +835,16 @@ function substep(h){
         internal.push([ivx,ivy,iw,rx,ry]);
         keInt+=0.5*b.mass*(ivx*ivx+ivy*ivy)+0.5*b.I*iw*iw;
       }
+      // A vessel's sepRate carries zero net island momentum by construction
+      // (the internal axial force pair nets to zero COM force -- see the
+      // plan's two-benchmark derivation), so it's pure internal/shape motion
+      // just like a body's own (ivx,ivy,iw) above -- same keInt pool, same
+      // multiplicative scale at apply time, no additive rigid-field term to
+      // add back (unlike a body's velocity, sepRate has no rigid component).
+      for(const g of isl.gases){ if(!g.piston) continue;
+        const effMassR=Math.max(g.mass/12, EFF_MASS_FLOOR);
+        keInt += 0.5*effMassR*g.sepRate*g.sepRate;
+      }
       // s=1 (desiredInt<=0 or no internal motion to scale) reproduces the
       // exact momentum-target rigid field plus the untouched internal field
       // -- the free-island analogue of the anchored branch's "leave as-is",
@@ -829,6 +858,7 @@ function substep(h){
       isl.bodyIdx.forEach((i,k)=>{ const b=bodies[i]; const [ivx,ivy,iw,rx,ry]=internal[k];
         b.vx=Vt[0]-wt*ry+s*ivx; b.vy=Vt[1]+wt*rx+s*ivy; b.w=wt+s*iw;
       });
+      for(const g of isl.gases) if(g.piston) g.sepRate*=s;
     }
     // Every island present this substep either cleared or refreshed its own
     // ENERGY_BANK entry above; anything left over belongs to an island that
