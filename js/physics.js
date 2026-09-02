@@ -266,7 +266,7 @@ function substep(h){
   for(const isl of islands){
     isl.preE = energy(isl).tot;
     const k0 = islandKinematics(isl.bodyIdx);
-    isl.P0=[k0.px,k0.py]; isl.L0=k0.L; isl.M=k0.M;
+    isl.P0=[k0.px,k0.py]; isl.L0=k0.L; isl.M=k0.M; isl.com0=[k0.cx,k0.cy];
   }
   const grabbing = !!(grab && bodies[grab.bi] && !bodies[grab.bi].static);
 
@@ -626,10 +626,30 @@ function substep(h){
     // KE+PE+U+P_bg·V (the true, atmosphere-inclusive total) grew by exactly
     // P_bg·dV on every reflecting step once dU alone stopped leaking.
     const dU = g._reflected ? 0 : -g._P*dV;
-    g.T += dU/(g.n*(1/(g.gamma-1)));
-    if(g.T<1e-4) g.T=1e-4;
+    const cv=1/(g.gamma-1);
+    g.T += dU/(g.n*cv);
+    let clampedAway=0;
+    if(g.T<1e-4){
+      // T can't actually go negative, but the substep that would have taken
+      // it there already delivered the *mechanical* side of that dU to the
+      // bodies in full back at §08.1 (computed from g._P, itself derived
+      // from T *before* this clamp) -- clamping T alone, with nothing else
+      // adjusted, leaves post.U reading higher than the naive dU implied
+      // while KE already reflects the full amount, so §08.6 below is left
+      // to "discover" that surplus and correct for it via whatever spare
+      // capacity that substep's rescale happens to have (the same
+      // degenerate-KE limitation as a turning point, banked the same way --
+      // but this floor binds far more often than a real turning point does,
+      // so the unresolved residue adds up over long runs instead of staying
+      // negligible). Crediting the clamped-away amount to g._Watm keeps it
+      // out of the invariant the same way real atmospheric flow work is --
+      // it already left the tracked KE+PE+U system as real KE, so it
+      // shouldn't also sit in keTarget waiting to be clawed back.
+      clampedAway=(1e-4-g.T)*(g.n*cv);
+      g.T=1e-4;
+    }
     g._Q=g._Qstep/h;
-    g._Watm=sim.bg.P*dV;
+    g._Watm=sim.bg.P*dV+clampedAway;
   }
 
   // ---- §08.6 · energy-conservation rescale ----
@@ -677,6 +697,26 @@ function substep(h){
   if(!grabbing){
     for(const isl of islands){
       let totalQ=0, totalWatm=0; for(const g of isl.gases){ totalQ+=g._Qstep; totalWatm+=g._Watm; }
+      // Free island: apply the exact-trapezoidal COM position correction
+      // *before* post.pe is read below -- see the "Free island" comment
+      // further down for the full derivation of why this exists at all.
+      // Doing it before `post=energy(isl)` is what keeps this and the
+      // internal-motion multiplicative rescale from double-correcting the
+      // same gravity-vs-position mismatch: post.pe has to already reflect
+      // the corrected geometry, or keTarget still carries the old (stale)
+      // shortfall and the internal rescale "discovers" and re-fixes it a
+      // second time on top of this one, injecting real spurious energy --
+      // confirmed by instrumented play (this ordering bug alone inflated a
+      // gas piston's total energy over 20x across 2000 simulated seconds
+      // once there was internal motion for the rescale to (over)act on).
+      if(!isl.anchored){
+        const k0now=islandKinematics(isl.bodyIdx);
+        const Ptx0=isl.P0[0], Pty0=isl.P0[1]+(sim.gravity? -sim.g*isl.M*h : 0);
+        const V00=[isl.P0[0]/isl.M, isl.P0[1]/isl.M], Vt0=[Ptx0/isl.M, Pty0/isl.M];
+        const comTargetX=isl.com0[0]+0.5*(V00[0]+Vt0[0])*h, comTargetY=isl.com0[1]+0.5*(V00[1]+Vt0[1])*h;
+        const dComX=comTargetX-k0now.cx, dComY=comTargetY-k0now.cy;
+        for(const i of isl.bodyIdx){ bodies[i].x+=dComX; bodies[i].y+=dComY; }
+      }
       const post=energy(isl);
       // totalQ is the raw reservoir heat Q (not net dU): the P·dV term inside
       // dU=Q-P·dV is internal work already transferred into the mechanism's
@@ -714,6 +754,8 @@ function substep(h){
       }
       // Free island: additive rigid-motion fix to the exact momentum target,
       // then a multiplicative rescale of only the leftover internal field.
+      // (Position was already corrected above, before `post` -- `now` here
+      // reads the corrected geometry.)
       const now=islandKinematics(isl.bodyIdx);
       const Ieff=now.Ieff;
       const Ptx=isl.P0[0], Pty=isl.P0[1]+(sim.gravity? -sim.g*isl.M*h : 0);
@@ -721,6 +763,34 @@ function substep(h){
       const Vt=[Ptx/isl.M, Pty/isl.M], wt=Ieff>1e-9?Ltarget/Ieff:0;
       const Vnow=[now.px/isl.M, now.py/isl.M], wnow=Ieff>1e-9?now.L/Ieff:0;
       const keRigidTarget=0.5*isl.M*(Vt[0]*Vt[0]+Vt[1]*Vt[1])+0.5*Ieff*wt*wt;
+      // The rigid velocity fix above lands on Vt/wt *exactly* -- momentum's
+      // impulse-momentum theorem is exact for gravity regardless of step
+      // size, so there's no error left to correct there. But `keRigidTarget`
+      // built from that exact Vt is therefore *also* exact, for the COM
+      // motion a body with that exact momentum actually has right now -- and
+      // that could come out short of what §08.4's plain `x+=h*vx` position
+      // update alone needs to keep total energy flat, with no freedom left
+      // in velocity to make up the difference without breaking momentum
+      // (fully determined once P/L are fixed, nothing left to tune). Left
+      // uncorrected, that's exactly the classic secular energy drift of
+      // symplectic Euler applied to *constant* (unbounded, non-oscillating)
+      // acceleration: confirmed on a single free body with gravity and
+      // nothing else touching it -- no gas, no internal motion for the
+      // multiplicative rescale below to ever absorb the deficit into, so
+      // ENERGY_BANK just grew forever instead of resolving. The COM position
+      // correction applied above (before `post`) is what actually fixes
+      // this -- the island's true trajectory under the exact momentum
+      // history isl.P0 -> Pt is the trapezoidal (midpoint-velocity)
+      // displacement 0.5*(V0+Vt)*h, which -- unlike the plain forward-Euler
+      // step §08.4 already took -- is *exact* for constant acceleration (the
+      // textbook reason leapfrog/Verlet integrators don't drift on a falling
+      // body); shifting every body in the island by the same delta is the
+      // position analogue of this velocity fix, purely rigid so it can't
+      // touch the internal/shape field's own zero-net momentum property.
+      // Angular motion doesn't need the same treatment: gravity contributes
+      // zero net torque about an island's own COM (see Ltarget above), so
+      // there's no analogous *torque*-driven position drift for rotation to
+      // correct -- only linear momentum has an external driver here at all.
       let keInt=0; const internal=[];
       for(const i of isl.bodyIdx){ const b=bodies[i];
         const rx=b.x-now.cx, ry=b.y-now.cy;
