@@ -9,16 +9,13 @@
 //  the §09 projection uses C directly. Same rows serve both.
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
-//    §06.2  gasFrame   (cylinder geometry for the gas force element, §08.1/§08.5)
-//    §06.2b gasStopRow (Jacobian/C for the gas's minimum-volume floor, consumed
-//           as a standalone elastic impulse by physics.js §08.3, not a row here)
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
 //    §06.6  spring / rotSpring frames (Hookean force elements, §08.1) -- these
 //           are force elements, not constraint rows: they never appear in
 //           rowsFor or the solve of §07/§08.3, only in the applied-force pass
-//           of §08.1, mirroring gasFrame's role for the gas piston.
+//           of §08.1.
 // ============================================================================
 
 // ---- §06.1 · bodyIndex ----
@@ -27,10 +24,9 @@ function bodyIndex(id){ return bodies.findIndex(b=>b.id===id); }
 // Resolve an endpoint {id, off} to its world point. id===null means the
 // endpoint is fixed to the background (world-anchored) rather than riding a
 // body -- off then holds the world coordinate directly, mirroring the
-// null-id convention already used by gas heads and cable tethers. Shared by
-// rod and slot, whose endpoints are both {id, off} pairs.
+// null-id convention already used by cable tethers. Shared by rod and slot,
+// whose endpoints are both {id, off} pairs.
 function epWorld(ep){
-  if(ep.vesselId!=null){ const {wx,wy}=epFrame(ep); return [wx,wy,0,0]; }
   if(ep.id==null) return [ep.off[0], ep.off[1], 0, 0];
   return worldPt(bodies[bodyIndex(ep.id)], ep.off);
 }
@@ -149,92 +145,11 @@ function slotRailAngle(con){
   return Math.atan2(way-wby,wax-wbx);
 }
 
-// ---- §06.2 · gasFrame ----
-// gas vessel frame: a rectangle of width `bore` running along an axis fixed
-// in the head body's frame (or the world, if head.id is null). The far
-// (piston) face is either a real, movable body -- g.piston:{id,off}, exactly
-// the {id,off} shape every other endpoint uses -- or, when g.piston is null,
-// a fixed length g.len: a static vessel with no movable wall at all (the
-// "two-corner rectangle" placement with neither corner free to move). x is
-// the signed axial length; xc is x softened with a floor (GAS_MIN_X) purely
-// so P=nT/V and V=bore*x never divide by/report zero -- it is a formula
-// safety net, not what keeps the piston from actually reaching it. That job
-// belongs to gasStopRow below: without a real geometric stop, a fast piston
-// can cross GAS_MIN_X within a single substep, after which xc plateaus (P
-// stops rising the way a real gas's would) while x keeps shrinking --
-// decoupling the mechanism's real position/KE from the gas's own V/U
-// bookkeeping and showing up as energy loss (physics.js §08.6's comment on
-// the stop row has the full account). Everything else (drawGas, gasPolygon,
-// the piston force) is unchanged by which case this is.
-const GAS_MIN_X = 0.03;
-function gasFrame(g){
-  let hx,hy,dW,B=null,ib=-1,hrx=0,hry=0;
-  if(g.head.id!=null){ ib=bodyIndex(g.head.id); B=bodies[ib];
-    const [x,y,rx,ry]=worldPt(B,g.head.off); hx=x;hy=y;hrx=rx;hry=ry;
-    dW=R(B.th,g.head.dir[0],g.head.dir[1]); }
-  else { hx=g.head.off[0]; hy=g.head.off[1]; dW=[g.head.dir[0],g.head.dir[1]]; }
-  const dl=Math.hypot(dW[0],dW[1])||1; dW=[dW[0]/dl,dW[1]/dl];
-  let A=null, ia=-1, pax,pay,prx=0,pry=0,x;
-  if(g.piston){ ia=bodyIndex(g.piston.id); A=bodies[ia];
-    const [px,py,rx,ry]=worldPt(A,g.piston.off); pax=px;pay=py;prx=rx;pry=ry;
-    x=(pax-hx)*dW[0]+(pay-hy)*dW[1];
-  } else {
-    x=g.len; pax=hx+dW[0]*x; pay=hy+dW[1]*x;
-  }
-  return {A,ia,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,GAS_MIN_X)};
-}
-// Midpoint of a gas's rectangle -- a cheap stand-in for its centroid, used
-// only for drawing/hit-testing heat/flow interactions (render.js §11.4c,
-// tools.js §13.2), never for physics.
-function gasCentroid(g){ const f=gasFrame(g); return [(f.hx+f.pax)/2,(f.hy+f.pay)/2]; }
-
-// ---- §06.2b · gasStopRow ----
-// Jacobian (cols) and position error (C=x-GAS_MIN_X) for the geometric floor
-// that keeps a gas's *true* axial separation x from compressing past
-// GAS_MIN_X, so gasFrame's own xc clamp above never actually has to bind in
-// practice -- the geometric stop, not the softened pressure formula, is what
-// arrests the piston. Same Jacobian shape as a rod's axial row (rowsFor's
-// 'rod' branch below), built from gasFrame's own dW/prx,pry/hrx,hry instead
-// of a freshly computed unit vector: the gas's hidden prismatic joint
-// (DEVELOPMENT.md §6.1) already confines relative motion to that one axis,
-// so a single row suffices here exactly as it does for the pressure force
-// itself (physics.js §08.1). Only meaningful for a real movable piston -- a
-// fixed-length vessel (g.piston===null) has no motion to stop, and callers
-// gate on that before calling this.
-//
-// This is *not* pushed through the ordinary Schur-complement rows the way
-// the cable's own end-stop (§06.3) is -- physics.js §08.3's comment where
-// this is consumed has the reasoning: those rows all share one Baumgarte
-// target that's wrong for an energy-conserving stop, so this row's cols/C
-// instead feed a standalone elastic-reflection impulse there.
-function gasStopRow(g){
-  const f=gasFrame(g);
-  const cols=[];
-  if(f.A) cols.push([f.ia, f.dW[0], f.dW[1], -f.dW[0]*f.pry+f.dW[1]*f.prx]);
-  if(f.B) cols.push([f.ib, -f.dW[0], -f.dW[1], f.dW[0]*f.hry-f.dW[1]*f.hrx]);
-  return { cols, C: f.x-GAS_MIN_X };
-}
-
-// ---- §06.2d · vessel-interior endpoints ----
-// A point *inside* a gas vessel (DEVELOPMENT.md §6.1's "the piston is a
-// single hidden-DOF body" redesign) is a valid rod/pin/spring endpoint, not
-// just the head or cap plate. `frac` is the *material* fraction of the way
-// from head to cap (so the point rides along with the gas as it expands,
-// staying at the same fraction rather than a fixed distance) and `lat` is
-// the fixed lateral offset across the bore. Its velocity follows the same
-// linear ramp used for the cap body's mass/3 effective inertia: zero
-// (relative to the head frame) at frac=0, the full head-to-cap relative
-// rate at frac=1.
-//
-//   v_point = v_head_at(frac*sep, lat)
-//           + frac * dW * [ dW . (v_cap_at(cap.off) - v_head_at(sep,0)) ]
-//
 // `mergeCols` sums duplicate body-index entries -- required, not cosmetic:
 // physics.js's Schur assembly builds each row's per-body map with
 // `mp.set(idx,...)`, which *overwrites* rather than accumulates, so two
-// separate column entries for the same body silently drop one and corrupt
-// the row. Two of this function's three terms land on the same body
-// (head), so they must be pre-summed before returning.
+// separate column entries for the same body would silently drop one and
+// corrupt the row if a caller ever produced two entries on the same body.
 function mergeCols(colArrays){
   const m=new Map();
   for(const cols of colArrays) for(const [idx,cx,cy,cw] of cols){
@@ -242,58 +157,13 @@ function mergeCols(colArrays){
   }
   return [...m.entries()].map(([idx,[cx,cy,cw]])=>[idx,cx,cy,cw]);
 }
-// Velocity-Jacobian columns for a vessel-interior point, projected onto an
-// arbitrary probe direction (dirx,diry) -- linear in that direction, so
-// calling this with the *negated* direction gives the negated columns (used
-// to combine two endpoints of one row) and calling it with an actual force
-// vector (Fx,Fy) instead of a unit direction gives that force's generalized
-// (FX,FY,TAU) contribution to each involved body (virtual-work identity:
-// dir.v_point = sum(jx*vx+jy*vy+jw*w) holds for any dir, so it holds
-// component-wise for dir=(Fx,Fy) too).
-function vesselPointCoeffs(v, frac, lat, dirx, diry){
-  const f=gasFrame(v);
-  frac=Math.max(0,Math.min(1,frac)); lat=lat||0;
-  const dW=f.dW;
-  const terms=[];
-  if(f.B){
-    // term 1: head's own rigid motion, carried out to the interior point.
-    const [,,rx1,ry1]=worldPt(f.B,[frac*f.x, lat]);
-    terms.push([[f.ib, dirx, diry, dirx*(-ry1)+diry*rx1]]);
-    if(f.A){
-      // term 2: subtract head's motion at the cap's own attach point, so
-      // only the *relative* (cap-vs-head) rate feeds term 3 below.
-      const k=frac*(dirx*dW[0]+diry*dW[1]);
-      const [,,rx2,ry2]=worldPt(f.B,[f.x,0]);
-      terms.push([[f.ib, -k*dW[0], -k*dW[1], (-k*dW[0])*(-ry2)+(-k*dW[1])*rx2]]);
-      // term 3: the cap's share of that relative rate, at its own offset.
-      terms.push([[f.ia, k*dW[0], k*dW[1], (k*dW[0])*(-f.pry)+(k*dW[1])*(f.prx)]]);
-    }
-  } else if(f.A){
-    // World-anchored head: no head-body terms at all, and nothing moves
-    // relative to the (fixed) frame except the cap's own share.
-    const k=frac*(dirx*dW[0]+diry*dW[1]);
-    terms.push([[f.ia, k*dW[0], k*dW[1], (k*dW[0])*(-f.pry)+(k*dW[1])*(f.prx)]]);
-  }
-  return mergeCols(terms);
-}
-// Resolve any rod/pin/spring endpoint -- a plain body {id,off}, a
-// background point {id:null,off}, or a vessel-interior point
-// {vesselId,frac,lat} -- to its live world position plus a `velCols`
-// closure giving the velocity-Jacobian columns for an arbitrary probe
-// direction (see vesselPointCoeffs above for the vessel case; a plain body
-// reduces to the ordinary single-column rotate-form, background to no
-// columns at all). Not used by rod's weld / slot's prismatic locks (a
-// vessel-interior point has no rotation of its own to lock to) -- those
-// keep using twoPointFrame directly.
+// Resolve a rod/pin/spring endpoint -- a plain body {id,off} or a background
+// point {id:null,off} -- to its live world position plus a `velCols` closure
+// giving the velocity-Jacobian columns for an arbitrary probe direction (a
+// plain body reduces to the ordinary single-column rotate-form, background
+// to no columns at all). Not used by rod's weld / slot's prismatic locks --
+// those keep using twoPointFrame directly.
 function epFrame(ep){
-  if(ep.vesselId!=null){
-    const v=gases.find(g=>g.id===ep.vesselId);
-    const f=gasFrame(v);
-    const frac=Math.max(0,Math.min(1,ep.frac)), lat=ep.lat||0;
-    const nrm=[-f.dW[1],f.dW[0]];
-    const wx=f.hx+f.dW[0]*frac*f.x+nrm[0]*lat, wy=f.hy+f.dW[1]*frac*f.x+nrm[1]*lat;
-    return { wx, wy, velCols:(dirx,diry)=>vesselPointCoeffs(v,frac,lat,dirx,diry) };
-  }
   if(ep.id==null) return { wx:ep.off[0], wy:ep.off[1], velCols:()=>[] };
   const idx=bodyIndex(ep.id); const [wx,wy,rx,ry]=worldPt(bodies[idx],ep.off);
   return { wx, wy, velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx]] };
@@ -498,8 +368,6 @@ function rowsFor(con){
     ];
   }
   if(con.type==='pin'){
-    // Either endpoint may be a vessel-interior point (§06.2d) instead of a
-    // plain body -- epFrame handles both uniformly.
     const A=epFrame(con.a), B=epFrame(con.b);
     const Cx = A.wx-B.wx, Cy = A.wy-B.wy;
     return [
@@ -509,17 +377,7 @@ function rowsFor(con){
   }
   if(con.type==='rod'){
     // Either end may be background-anchored (id===null, off holds the world
-    // point directly -- §06.1 epWorld), or a vessel-interior point
-    // (§06.2d) -- neither supports a weld, so the weld rows below only ever
-    // fire for the plain twoPointFrame path.
-    const isVessel = con.a.vesselId!=null || con.b.vesselId!=null;
-    if(isVessel){
-      const A=epFrame(con.a), B=epFrame(con.b);
-      const dx=A.wx-B.wx, dy=A.wy-B.wy, L=Math.hypot(dx,dy)||1e-9;
-      const ux=dx/L, uy=dy/L;
-      const cols=mergeCols([A.velCols(ux,uy), B.velCols(-ux,-uy)]);
-      return [{ cols, C:L-con.len }];
-    }
+    // point directly -- §06.1 epWorld).
     const f=twoPointFrame(con);
     const {hasA,hasB,ia,ib,rax,ray,rbx,rby,ux,uy,L}=f;
     const distCols=[];
@@ -643,7 +501,7 @@ function springRestHandlePos(con){
 // bare {id} refs (no offset: like belt/cvt, the whole body's frame angle is
 // the feature, not a point on it). Either may be background-anchored
 // (id===null), which reads as a fixed theta=0 reference -- mirroring the
-// null-id convention rod/slot/gas use for a world-anchored end. The rest
+// null-id convention rod/slot use for a world-anchored end. The rest
 // angle captures whatever the live relative angle is at creation, so a
 // freshly-placed rotational spring starts unstressed (mirrors rod weld's
 // captureRestAngle, §06.1).
