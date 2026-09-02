@@ -89,6 +89,27 @@ function computeIslands(){
     if(realId!=null) islandOf(bodyIndex(realId)).gases.push(g); }
   return [...byRoot.values()];
 }
+// §08.6's rescale is a *multiplicative* correction (v *= sqrt(target/actual)),
+// which is well-defined only while there's actual KE to scale -- right at an
+// island's own turning point (a pendulum at the top of its swing, a piston at
+// the top of its bounce) KE passes through zero for real, not as an
+// artifact, so neither branch below can apply its correction there and both
+// fall back to leaving velocities untouched for that one substep. That
+// residual keTarget-vs-actual gap doesn't vanish on its own: the next
+// substep's preE is read straight off whatever state was left standing, so
+// an uncorrected gap becomes the new baseline permanently rather than
+// something later substeps make up for -- confirmed by instrumented play on
+// the plain (gasless) pendulum example: 100% of its slow energy loss over a
+// long run landed exactly on the substeps where this fallback fired, with
+// every other substep's own delta at floating-point zero. ENERGY_BANK defers
+// that gap instead of dropping it: keyed by the island's own body-id
+// signature (stable frame to frame barring a mid-play topology edit), it
+// carries the unresolved amount forward and folds it into the very next
+// substep where this same island's KE is large enough to actually rescale,
+// so the running total stays exactly conserved across a turning point
+// instead of only between them.
+const ENERGY_BANK = new Map();
+function islandBankKey(isl){ return isl.bodyIdx.map(i=>bodies[i].id).sort((a,b)=>a-b).join(','); }
 // Mass, centre of mass, linear momentum and angular momentum (about that
 // COM) of a set of body indices, read live from their current x/y/vx/vy/w --
 // used both to snapshot an island's pre-substep momentum (§08.1 below) and
@@ -252,7 +273,7 @@ function substep(h){
   // §08.0b heat & flow interactions: resolved once per substep, strictly
   // after preE above so its energy delta (_Qstep) reads as the legitimate
   // external input the §08.6 rescale expects, never as pre-existing state.
-  for(const g of gases){ g._Qstep=0; g._flowForce=0; }
+  for(const g of gases){ g._Qstep=0; g._flowForce=0; g._reflected=false; }
   for(const [,list] of groupInteractionsByBody(heatInteractions))
     for(let i=0;i<list.length;i++) for(let j=i+1;j<list.length;j++) applyHeatPair(list[i],list[j],h);
   for(const [,list] of groupInteractionsByBody(flowInteractions))
@@ -507,7 +528,8 @@ function substep(h){
     if(w<1e-12) continue;
     if(Jv<0){ const lambda=-2*Jv/w; // e=1 reflection: post-solve Jv = -Jv
       for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.vx+=b.invM*c[1]*lambda; b.vy+=b.invM*c[2]*lambda; b.w+=b.invI*c[3]*lambda; } }
+        b.vx+=b.invM*c[1]*lambda; b.vy+=b.invM*c[2]*lambda; b.w+=b.invI*c[3]*lambda; }
+      g._reflected=true; }
     if(C<0){ // already past the floor (e.g. a scene loaded with x<GAS_MIN_X) -- snap back out
       const lamPos=-C/w;
       for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
@@ -571,7 +593,39 @@ function substep(h){
   //    which is exactly what masks a real (P_gas - P_bg) restoring force.
   for(const g of gases){
     const f2=gasFrame(g); const Vnew=g.bore*f2.xc; const dV=Vnew-g._V;
-    const dU=-g._P*dV;
+    // A substep in which the minimum-volume stop (§08.3) elastically
+    // reflected this gas's piston doesn't get an ordinary dV credited to
+    // its *own* U here. That reflection redirects KE alone (no U change, by
+    // design), but position still integrates over this *entire* step
+    // (§08.4) at the post-reflection (outward) velocity, so Vnew-g._V reads
+    // as a real expansion that never happened as gas work -- it's just the
+    // reflection's own kinematics, whose KE it already conserved on its
+    // own. Crediting that phantom dV to P·dV here double-books it: on top
+    // of the KE the reflection already conserved, this would *also* debit
+    // the gas's U for having (apparently) produced that KE -- a real,
+    // uncompensated loss confirmed by instrumented play (every reflecting
+    // substep's own energy dropped; every other substep's didn't, and the
+    // two didn't cancel over a cycle). So dV reads as zero for *this* gas's
+    // own thermodynamic purposes on a reflected step; g._V/g._P simply
+    // resynchronize to the new true geometry starting next substep.
+    //
+    // g._Watm, below, does NOT get the same treatment, even though it's
+    // built from the same dV: it isn't the gas's own energy, it's real
+    // P_bg·dV work crossing the piston's *outer*, atmosphere-facing face,
+    // and the background does that work regardless of *why* the piston
+    // moved this step -- reflection or ordinary compression -- because the
+    // real geometry (and so the real V) changed either way. Zeroing it here
+    // too (an earlier version of this fix did exactly that) quietly broke
+    // the *other* half of the invariant instead: §08.6's keTarget subtracts
+    // totalWatm from the mechanism's own energy precisely so a piston
+    // expanding into the atmosphere is credited for the work leaving
+    // through that open face: forge Watm to 0 while x still genuinely grew
+    // this step and the mechanism's tracked energy keeps everything it
+    // "should" have paid the atmosphere for that expansion, injecting a
+    // real surplus once per reflection -- confirmed by instrumented play:
+    // KE+PE+U+P_bg·V (the true, atmosphere-inclusive total) grew by exactly
+    // P_bg·dV on every reflecting step once dU alone stopped leaking.
+    const dU = g._reflected ? 0 : -g._P*dV;
     g.T += dU/(g.n*(1/(g.gamma-1)));
     if(g.T<1e-4) g.T=1e-4;
     g._Q=g._Qstep/h;
@@ -638,15 +692,23 @@ function substep(h){
       // hud.js §12.1) is subtracted the same way post.pe is: it's a
       // legitimate KE<->PE channel the spring force itself already moved
       // energy through in §08.1/§08.4, not a discrepancy to fold back.
-      const keTarget=isl.preE+totalQ-totalWatm-post.pe-post.U-post.SPE;
+      const bankKey=islandBankKey(isl);
+      const banked=ENERGY_BANK.get(bankKey)||0;
+      const keTarget=isl.preE+totalQ-totalWatm-post.pe-post.U-post.SPE+banked;
       if(isl.anchored){
         // keTarget<=0 (all mechanical energy would have to come from an
         // impossible negative KE) or the island is momentarily at rest: leave
         // velocities as-is rather than divide by ~0 or inject energy from
-        // nothing -- rare, and self-corrects next substep once ke>0 again.
+        // nothing -- genuinely rare in isolation, but a real turning point
+        // hits it on every single swing, so the gap this substep couldn't
+        // resolve is banked (see ENERGY_BANK above) for the next substep
+        // that can, rather than silently dropped.
         if(keTarget>0 && post.ke>1e-12){
           const s=Math.sqrt(keTarget/post.ke);
           for(const i of isl.bodyIdx){ const b=bodies[i]; b.vx*=s; b.vy*=s; b.w*=s; }
+          ENERGY_BANK.delete(bankKey);
+        } else {
+          ENERGY_BANK.set(bankKey,keTarget);
         }
         continue;
       }
@@ -672,12 +734,23 @@ function substep(h){
       }
       // s=1 (desiredInt<=0 or no internal motion to scale) reproduces the
       // exact momentum-target rigid field plus the untouched internal field
-      // -- the free-island analogue of the anchored branch's "leave as-is".
+      // -- the free-island analogue of the anchored branch's "leave as-is",
+      // and banks the same way: the rigid part above is an additive fix that
+      // always lands exactly on target, so it's only this internal/shape
+      // component that can go unresolved at its own island's turning point.
       const desiredInt=keTarget-keRigidTarget;
-      const s=(desiredInt>0 && keInt>1e-12)?Math.sqrt(desiredInt/keInt):1;
+      const resolved=desiredInt>0 && keInt>1e-12;
+      const s=resolved?Math.sqrt(desiredInt/keInt):1;
+      if(resolved) ENERGY_BANK.delete(bankKey); else ENERGY_BANK.set(bankKey,desiredInt-keInt);
       isl.bodyIdx.forEach((i,k)=>{ const b=bodies[i]; const [ivx,ivy,iw,rx,ry]=internal[k];
         b.vx=Vt[0]-wt*ry+s*ivx; b.vy=Vt[1]+wt*rx+s*ivy; b.w=wt+s*iw;
       });
     }
+    // Every island present this substep either cleared or refreshed its own
+    // ENERGY_BANK entry above; anything left over belongs to an island that
+    // no longer exists (bodies/constraints edited or deleted mid-play), so
+    // it's stale and would otherwise sit in the map forever.
+    const liveBankKeys=new Set(islands.map(islandBankKey));
+    for(const k of ENERGY_BANK.keys()) if(!liveBankKeys.has(k)) ENERGY_BANK.delete(k);
   }
 }
