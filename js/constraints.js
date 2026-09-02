@@ -10,6 +10,8 @@
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
 //    §06.2  gasFrame   (cylinder geometry for the gas force element, §08.1/§08.5)
+//    §06.2b gasStopRow (Jacobian/C for the gas's minimum-volume floor, consumed
+//           as a standalone elastic impulse by physics.js §08.3, not a row here)
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -153,8 +155,17 @@ function slotRailAngle(con){
 // the {id,off} shape every other endpoint uses -- or, when g.piston is null,
 // a fixed length g.len: a static vessel with no movable wall at all (the
 // "two-corner rectangle" placement with neither corner free to move). x is
-// the signed axial length (clamped so V never goes <= 0); everything else
-// (drawGas, gasPolygon, the piston force) is unchanged by which case this is.
+// the signed axial length; xc is x softened with a floor (GAS_MIN_X) purely
+// so P=nT/V and V=bore*x never divide by/report zero -- it is a formula
+// safety net, not what keeps the piston from actually reaching it. That job
+// belongs to gasStopRow below: without a real geometric stop, a fast piston
+// can cross GAS_MIN_X within a single substep, after which xc plateaus (P
+// stops rising the way a real gas's would) while x keeps shrinking --
+// decoupling the mechanism's real position/KE from the gas's own V/U
+// bookkeeping and showing up as energy loss (physics.js §08.6's comment on
+// the stop row has the full account). Everything else (drawGas, gasPolygon,
+// the piston force) is unchanged by which case this is.
+const GAS_MIN_X = 0.03;
 function gasFrame(g){
   let hx,hy,dW,B=null,ib=-1,hrx=0,hry=0;
   if(g.head.id!=null){ ib=bodyIndex(g.head.id); B=bodies[ib];
@@ -169,12 +180,39 @@ function gasFrame(g){
   } else {
     x=g.len; pax=hx+dW[0]*x; pay=hy+dW[1]*x;
   }
-  return {A,ia,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,0.03)};
+  return {A,ia,pax,pay,prx,pry,B,ib,hrx,hry,hx,hy,dW,x,xc:Math.max(x,GAS_MIN_X)};
 }
 // Midpoint of a gas's rectangle -- a cheap stand-in for its centroid, used
 // only for drawing/hit-testing heat/flow interactions (render.js §11.4c,
 // tools.js §13.2), never for physics.
 function gasCentroid(g){ const f=gasFrame(g); return [(f.hx+f.pax)/2,(f.hy+f.pay)/2]; }
+
+// ---- §06.2b · gasStopRow ----
+// Jacobian (cols) and position error (C=x-GAS_MIN_X) for the geometric floor
+// that keeps a gas's *true* axial separation x from compressing past
+// GAS_MIN_X, so gasFrame's own xc clamp above never actually has to bind in
+// practice -- the geometric stop, not the softened pressure formula, is what
+// arrests the piston. Same Jacobian shape as a rod's axial row (rowsFor's
+// 'rod' branch below), built from gasFrame's own dW/prx,pry/hrx,hry instead
+// of a freshly computed unit vector: the gas's hidden prismatic joint
+// (DEVELOPMENT.md §6.1) already confines relative motion to that one axis,
+// so a single row suffices here exactly as it does for the pressure force
+// itself (physics.js §08.1). Only meaningful for a real movable piston -- a
+// fixed-length vessel (g.piston===null) has no motion to stop, and callers
+// gate on that before calling this.
+//
+// This is *not* pushed through the ordinary Schur-complement rows the way
+// the cable's own end-stop (§06.3) is -- physics.js §08.3's comment where
+// this is consumed has the reasoning: those rows all share one Baumgarte
+// target that's wrong for an energy-conserving stop, so this row's cols/C
+// instead feed a standalone elastic-reflection impulse there.
+function gasStopRow(g){
+  const f=gasFrame(g);
+  const cols=[];
+  if(f.A) cols.push([f.ia, f.dW[0], f.dW[1], -f.dW[0]*f.pry+f.dW[1]*f.prx]);
+  if(f.B) cols.push([f.ib, -f.dW[0], -f.dW[1], f.dW[0]*f.hry-f.dW[1]*f.hrx]);
+  return { cols, C: f.x-GAS_MIN_X };
+}
 
 // ---- §06.3 · cableFrame ----
 // Cable geometry based on a consistently-defined spool angle.
