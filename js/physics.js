@@ -453,6 +453,66 @@ function substep(h){
       cb._rows.push(rows.length); rows.push({cols:cb._cols, C:cb._C});
     }
   }
+  // Gas minimum-volume stop (constraints.js §06.2b, gasStopRow): keeps a
+  // piston's true axial separation x from ever compressing past GAS_MIN_X.
+  // Without this, that job fell to gasFrame's xc=max(x,GAS_MIN_X) clamp
+  // inside the P=nT/V formula alone -- softening the *pressure*, not the
+  // geometry. A piston fast enough to cross GAS_MIN_X within one substep
+  // then kept compressing past it unopposed by any further pressure rise
+  // (xc, and so P and V=bore*xc, all plateau once x<GAS_MIN_X), so §08.5's
+  // dU=-P.dV saw a frozen V and stopped crediting/debiting the gas's own U
+  // for motion that was still really happening -- decoupling the mechanism's
+  // actual KE change from the gas's energy ledger. §08.6's rescale, which
+  // trusts that ledger, then "corrected" the resulting mismatch by erasing
+  // real KE every time a stroke dipped below the floor, a loss that doesn't
+  // cancel over a cycle and drives the gas toward its T floor at small
+  // volumes -- exactly the reported symptom.
+  //
+  // This is deliberately *not* folded into the Schur-complement rows below:
+  // every row there shares one Baumgarte target (drive post-solve Jv toward
+  // -kb*C, this function's `rhs` line further down), which is exactly right
+  // for a bilateral joint (a rod should stay at rest once its length is
+  // satisfied) but wrong here -- pinning the piston's own Jv at ~0 for as
+  // long as it sits at the floor makes the stop a fully inelastic "glue"
+  // that destroys its entire closing KE on contact. And because that KE
+  // lands at exactly zero rather than merely shrinking, §08.6's *multiplicative*
+  // rescale can't hand it back either (nothing to scale up from zero) --
+  // confirmed by instrumented play: every floor contact was a one-substep,
+  // uncompensated KE loss of exactly 0.5*m*v^2, not the rare, self-correcting
+  // "momentarily at rest" case that branch's own comment expects, because a
+  // deep stroke hits the floor on every cycle, not once in passing. A stop
+  // meant to be energy-conserving needs restitution, not Baumgarte, so this
+  // is a standalone elastic (e=1) reflection impulse applied directly:
+  // cancel the closing component of Jv and hand it straight back reversed,
+  // which conserves this DOF's KE exactly and needs no rescue from §08.6 at
+  // all -- same target math as the rows below (lambda=-(1+e)*Jv/w), just
+  // with the restitution target a bilateral row's Baumgarte rhs doesn't
+  // have.
+  //
+  // Activation is anticipatory: C+h*Jv (this step's own linear prediction of
+  // where C=x-GAS_MIN_X lands after §08.4's position integration, at the
+  // current pre-reflection closing rate) rather than just the current C.
+  // GAS_MIN_X is deliberately tiny (a numerical floor, not a real object's
+  // thickness), so a piston needs only a modest closing speed for h*Jv to
+  // already exceed the whole gap once C gets close; waiting for C itself to
+  // cross zero the way the cable's own end-stop does would let §08.4
+  // integrate position past the floor first, reopening the same gap for the
+  // one substep it takes to react.
+  for(const g of gases){
+    if(!g.piston) continue; // fixed-length vessel: x is a constant, nothing to stop
+    const {cols,C}=gasStopRow(g);
+    let Jv=0; for(const c of cols){ const b=bodies[c[0]]; Jv+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; }
+    if(!(C<-1e-4 || (C+h*Jv<1e-4 && Jv<0))) continue; // not about to violate
+    let w=0; for(const c of cols){ const im=invMdiag(bodies[c[0]]); w+=c[1]*c[1]*im[0]+c[2]*c[2]*im[1]+c[3]*c[3]*im[2]; }
+    if(w<1e-12) continue;
+    if(Jv<0){ const lambda=-2*Jv/w; // e=1 reflection: post-solve Jv = -Jv
+      for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
+        b.vx+=b.invM*c[1]*lambda; b.vy+=b.invM*c[2]*lambda; b.w+=b.invI*c[3]*lambda; } }
+    if(C<0){ // already past the floor (e.g. a scene loaded with x<GAS_MIN_X) -- snap back out
+      const lamPos=-C/w;
+      for(const c of cols){ const b=bodies[c[0]]; if(b.static)continue;
+        b.x+=b.invM*c[1]*lamPos; b.y+=b.invM*c[2]*lamPos; b.th+=b.invI*c[3]*lamPos; } }
+  }
   const m=rows.length;
   if(m>0){
     // per-row body->j map for K assembly
