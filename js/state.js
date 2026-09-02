@@ -19,6 +19,12 @@ let cables = [];        // radial-ratchet cable elements (unilateral)
 let springs = [];       // linear (Hookean) spring force elements, see constraints.js §06.6
 let rotSprings = [];    // rotational (torsional) spring force elements, see constraints.js §06.6
 let uid = 1;
+// Gas vessels live in `bodies` alongside disks and rectangles -- they are not a
+// separate array. A vessel is an ordinary body carrying a *fourth* configuration
+// coordinate, its length (`len`/`vlen`), plus the gas state sealed inside it; see
+// VESSEL.md and geometry.js §05.2d. Keeping them in `bodies` is what makes islands,
+// save/restore, selection, deletion and every existing constraint work on them with
+// no per-kind branching.
 
 // ---- §04.3 · sim parameters & camera ----
 // h: fixed step. maxSub: max substeps per frame. beta: Baumgarte gain (spec §3.4).
@@ -33,8 +39,13 @@ let uid = 1;
 // beta only needs to keep per-step position drift small enough for that rescale's
 // keTarget to stay non-negative, not to be leak-free on its own.
 // reg: Tikhonov term added to the Schur diagonal so redundant rows stay solvable.
+// bg: the ambient atmosphere every vessel's caps push against and every gas is
+// created at -- 1 atm and 20 C, in SI (Pa, K). The world is SI throughout: metres,
+// kilograms, seconds, newtons, joules, with an implicit 1 m out-of-plane depth
+// (geometry.js §05.2d VESSEL_DEPTH) turning planar areas into volumes.
 const sim = { running:false, gravity:true, g:9.8, showForces:true, showGrid:true,
-              h:1/120, maxSub:6, beta:1.0, reg:1e-8, forceRef:1 };
+              h:1/120, maxSub:6, beta:1.0, reg:1e-8, forceRef:1,
+              bg:{ P:101325, T:293.15 } };
 
 // camera: world point at screen centre, px per world unit
 const cam = { x:0, y:2.2, scale:64 };

@@ -5,7 +5,10 @@
 //  loadExample(kind) dispatches on the data-ex key; search e.g.  kind==='crank'.
 // ============================================================================
 function loadExample(kind){
-  bodies=[];constraints=[];cables=[];uid=1;clearSelection();eHist.length=0;
+  // springs/rotSprings are cleared alongside the rest: leaving them behind would
+  // leave force elements pointing at body ids the new scene has reused or dropped,
+  // which epFrame resolves to a missing body.
+  bodies=[];constraints=[];cables=[];springs=[];rotSprings=[];uid=1;clearSelection();eHist.length=0;
   // uid restarts at 1 above, so a fresh scene's bodies can reuse ids a prior
   // scene's islands used as their ENERGY_BANK key (physics.js §08.6) --
   // clear it so a stale banked correction can never leak into an unrelated
@@ -44,6 +47,31 @@ function loadExample(kind){
     // single-locked-background pattern as the crank example above.
     constraints.push(makeSlotCon({id:B.id,off:[0,0]}, {id:null,off:[A.x-10,A.y]}, false, true));
     constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }
+  else if(kind==='gasspring'){
+    // A vessel standing on the ground: its lower cap -- the material plane
+    // f = -1/2 -- is welded to a fixed world point, which pins that cap and locks
+    // the vessel's rotation, leaving the length as the only free coordinate.
+    //
+    // Nothing here is a "gas spring" primitive. The oscillation is the vessel's own
+    // gas potential (geometry.js §05.2d) against the weight the constraint transfers
+    // onto the length coordinate: with the cap pinned, the centre of mass rises by
+    // half of any extension, so gravity acquires a generalized force on `len` that
+    // it does not have for a free vessel. The adiabat is not imposed either -- an
+    // isolated gas simply never changes its adiabat invariant.
+    const v=makeVessel(0,1.1,0.5,1.2,false); bodies.push(v);
+    const capY=v.y-v.len/2;
+    constraints.push(makeRodCon({id:null,off:[0,capY-0.35]},{id:v.id,off:[0,-0.5]},true,true));
+  }
+  else if(kind==='spinvessel'){
+    // A free vessel with nothing attached, spinning in zero gravity. I(len) grows as
+    // it stretches, so the spin slows and the centrifugal generalized force
+    // (physics.js §08.1) trades against the gas -- the vessel breathes. Angular
+    // momentum and total energy both hold flat while it does, which is the point:
+    // the same constant mu governs the length inertia and the len^2 term in I.
+    sim.gravity=false; if(gc) gc.checked=false;
+    const v=makeVessel(0,2.6,0.4,1.0,false); bodies.push(v);
+    v.w=9.0;
+  }
   else if(kind==='cable'){ const S=makeBody(0,4.6,0.4,true); bodies.push(S); const m=dy(0.9,4.4,0.32);
     const dvx=m.x-S.x, dvy=m.y-S.y; const d=Math.hypot(dvx,dvy);
     const Lfree=d>S.r?Math.sqrt(d*d-S.r*S.r):0;

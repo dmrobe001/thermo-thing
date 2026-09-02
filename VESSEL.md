@@ -6,10 +6,16 @@ alongside `DEVELOPMENT.md`; it references that document's section numbers (§3.2
 KKT solve, §3.3 the velocity-linear constraint class, §4.1 rod/slot rows, §6.1
 springs as force elements, §7 instrumentation) rather than repeating them.
 
-> **Status (as built):** Nothing in this note is implemented. The repository
-> previously carried a different gas system (two synthetic boundary bodies coupled
-> by a hidden prismatic joint, stripped in commit `97f7a72`); §V.9 explains what
-> that design got right, what it got wrong, and why this one is not a revival of it.
+> **Status (as built):** Implemented -- §V.1 through §V.9, plus the length-locked
+> reservoir of §V.8. Code: `geometry.js` §05.2d (the vessel, its inertia and the gas
+> state), §05.2c (material endpoint offsets); `constraints.js` §06.1 (`epFrame`'s
+> length column, and the rod/slot rows rebuilt on it); `physics.js` §08.1b (the gas
+> force) and §08.1/§08.3/§08.4/§08.6; `render.js` §11.3 (`drawVessel`); `tools.js`
+> §13.5 (placement, corner resize); `inspector.js` §14.2b. Heat and mass exchange
+> (§V.10) are not built. The repository previously carried a *different* gas system
+> (two synthetic boundary bodies coupled by a hidden prismatic joint, stripped in
+> commit `97f7a72`); §V.3 and §V.9 explain what that design got right, what it got
+> wrong, and why this one is not a revival of it.
 
 The short version: **a vessel is one body with four configuration coordinates
 `(x, y, theta, len)`, and the gas inside it is a force element with a potential
@@ -30,13 +36,24 @@ its fixed offset across the bore. The caps are the material planes `f = -1/2` an
 never changes -- it is glued to the material -- so the vessel's mass distribution in
 `(f, lat)` is a **constant**, independent of `len`.
 
-The deformation is the uniform axial stretch about the centre:
+The deformation is the uniform axial stretch about the centre. The axis is the
+body's **local +y**, so a freshly placed vessel has its caps facing up and down and
+its bore across, and `(bore, len)` map onto a rectangle's `(width, height)`:
 
 ```
-r(f, lat) = c + Rot(theta) * (f*len, lat)
+r(lat, f) = c + Rot(theta) * (lat, f*len)
 ```
 
-with `c = (x, y)` the centre point. Differentiating once gives the velocity of any
+with `c = (x, y)` the centre point. An endpoint offset on a vessel is that `(lat, f)`
+pair, in that order -- `geometry.js` §05.2c `epLocal`/`epOffOf` is the only place the
+conversion to a local point lives.
+
+**Units are SI throughout** -- metres, kilograms, seconds, pascals, kelvin, joules --
+with an implicit **1 m out-of-plane depth**, so a planar area reads directly as a
+volume and the bore reads directly as a cap area. Ambient is 101325 Pa at 293.15 K.
+The gas carries a *specific* gas constant (`Rs`, J/(kg*K)) rather than the universal
+one, which keeps its mass -- the quantity the vessel needs anyway, for `mu` -- as the
+primary field, with no mole count or molar mass to carry alongside. Differentiating once gives the velocity of any
 material point, which is the whole physics content of the model:
 
 ```
@@ -185,9 +202,9 @@ An endpoint on a vessel is `{id, off: [f, lat]}` read in **material** coordinate
 Its world position and velocity Jacobian follow from §V.1 by differentiation:
 
 ```
-world:  (x,y) + Rot(theta)*(f*len, lat)
+world:  (x,y) + Rot(theta)*(lat, f*len)
 velCols(dx,dy) = [[ i, dx, dy, dx*(-ry)+dy*rx, f*(dx*ux + dy*uy) ]]
-                  with (rx,ry) = Rot(theta)*(f*len, lat),  (ux,uy) = Rot(theta)*(1,0)
+                  with (rx,ry) = Rot(theta)*(lat, f*len),  (ux,uy) = Rot(theta)*(0,1)
 ```
 
 The fifth entry is the new `len` column; everything left of it is the ordinary rigid
@@ -218,15 +235,16 @@ and the answer to "should a wall attachment leave the caps unconstrained?" is **
 quite** -- a wall attachment at `f != 0` genuinely does restrain length, and declaring
 otherwise would break the virtual-work identity the energy accounting rests on.
 
-### The deliberate exception: a spatial collar
+### The exception that was considered and not built: a spatial collar
 
-If a "clamp that grips the tube while material slides past it" is wanted -- which is
-what a constraint on the walls that must *not* touch the length would physically be --
-that is a different, equally well-defined endpoint kind: `{id, spatial: [xi, lat]}`,
-a **fixed offset from the centre** rather than a material fraction. Its `len` column
-is zero by construction, so it constrains pose only. Both kinds are consistent
-(each is an exact Jacobian; a workless constraint stays workless either way). Default
-to material; offer spatial only where a sliding collar is actually meant.
+A "clamp that grips the tube while material slides past it" -- which is what a wall
+constraint that must *not* touch the length would physically be -- is a different,
+equally well-defined endpoint kind: a **fixed offset from the centre** rather than a
+material fraction, whose `len` column is zero by construction. It is consistent (an
+exact Jacobian either way, and a workless constraint stays workless), but it is
+**not implemented**: material attachment already covers every case reached in
+practice, including the one that motivated the question, since an anchor at `f = 0`
+holds the vessel without restraining its breathing at all.
 
 ## V.6 Rotation
 
@@ -289,8 +307,17 @@ v_new  = v + h * f_gas / mu
 len_new = len + h * (v + v_new)/2
 ```
 
-Then `dKE = 1/2*h*f_gas*(v + v_new) = f_gas * dlen = -dUpot` identically, for **any**
-step size. Solve the scalar residual by bisection: as `len_new -> 0+`, `Upot -> +inf`
+Every *other* generalized force on the length coordinate rides along inside the same
+solve (`physics.js` §08.1b takes them as `Fother`), which makes the identity cover
+the whole force set rather than the gas alone: for a total force held constant across
+the step,
+
+```
+d(1/2 mu v^2) = 1/2*h*f_tot*(v + v_new) = f_tot * dlen = Fother*dlen - dUpot
+```
+
+identically, for **any** step size -- so kinetic plus potential is conserved to
+rounding and the only net change is the work the other forces genuinely did. Solve the scalar residual by bisection: as `len_new -> 0+`, `Upot -> +inf`
 so the residual `-> -inf`, which means **the root is always strictly positive -- the
 step cannot cross zero volume, at any speed.** Tested at `h = 1/120` against a plain
 explicit force pass, slamming the piston shut at increasing closing speeds:
@@ -311,33 +338,64 @@ only.
 Two honest caveats. The trapezoidal update is applied to the `len` coordinate only
 (the other three keep the engine's existing symplectic-Euler step) -- which is the
 same correction §08.6 already applies to a free island's centre of mass, so it is not
-a new idea in this codebase. And the exactness above is for an *unconstrained* `len`;
-once a constraint row also acts on `len`, the constraint impulse lands between the
-force pass and the position update, and the identity becomes approximate again.
-Constraint impulses are workless, so the error is second order, and §08.6's rescale
-absorbs it exactly as it does for every other coordinate today.
+a new idea in this codebase. And the exactness above holds while nothing else writes
+to `len` between the force pass and the position update; once a constraint row also
+acts on it, the constraint impulse lands in that gap and the identity becomes
+approximate. Constraint impulses are workless, so the error is second order, and
+§08.6's rescale absorbs it exactly as it does for every other coordinate today.
+
+One case genuinely falls outside the guarantee, and the code says so where it
+happens: a vessel holding (near) **no gas at all**. A vacuum has no divergent
+pressure to arrest its caps, so the root above can fall below the floor; the step
+then lands on `VESSEL_MIN_LEN` and stops the closing motion instead of integrating
+through it. That is the only path where the length coordinate's energy identity does
+not hold, and §08.6 absorbs the difference like any other residue.
+
+**As built, measured in the browser** (`h = 1/120`), against the peak kinetic energy
+of each scene rather than the large constant `U + P_bg*V` offset:
+
+| scene | 50 s of play |
+|---|---|
+| gas spring (vessel welded to the ground by one cap) | worst `\|dE\|` = 2.1e-9 J, 7.6e-10 % of peak KE; peak-to-peak length swing identical to 6 significant figures across four successive windows -- no numerical damping |
+| free spinning vessel | worst `\|dE\|` = 5.9e-2 J (1.9e-3 % of peak KE) and **not secular** -- the excursion is the breathing turning point that `ENERGY_BANK` repays, with end-of-window drift 1e-10 J; angular momentum drift 5e-15 |
+| vessel driving a disk through a rod, or loaded by a spring | worst `\|dE\|` under 1e-9 J |
 
 ## V.8 Per-vessel state
 
+A vessel lives in `bodies` alongside disks and rectangles -- not in a separate array.
+That is what makes islands, save/restore, selection, deletion and every existing
+constraint work on it with no per-kind branching.
+
 ```
 {
-  id, kind:'vessel', shape:'vessel',
-  x, y, th, len,             // the four configuration coordinates
-  vx, vy, w, vlen,           // their rates -- all inspector-editable, per spec
-  bore,                      // fixed width
-  mShell,                    // structural mass, user-editable like body.mass
-  gas: { mass, gamma, kap }, // kap = P*V^gamma, the adiabat invariant (§V.4)
-  lenLock,                   // true -> invMu = 0: a fixed-volume vessel / reservoir
-  // derived, refreshed each substep:
-  mass, mu, A, I, invM, invI, invMu
+  id, kind:'body', shape:'vessel',
+  x, y, th, len,                 // the four configuration coordinates
+  vx, vy, w, vlen,               // their rates -- all inspector-editable
+  bore,                          // fixed width
+  mShell,                        // structural mass, user-editable like body.mass
+  gas: { mass, gamma, Rs, kap }, // kap = P*V^gamma, the adiabat invariant (§V.4)
+  lenLock, static,               // either one zeroes invMu: a fixed-volume reservoir
+  // derived, refreshed each substep (geometry.js §05.2d refreshVessel):
+  mass, mu, Alat, I, invM, invI, invMu, hw, hh
 }
 ```
 
-Derived: `mass = mShell + gas.mass`, `mu = mass/12`, `A = mass*bore^2/12`,
-`I = A + mu*len^2`. Inspector: `bore`, `len`, `vlen`, `mShell`, gas `mass`, `gamma`,
-plus live `P`, `V`, `T`, `U` readouts. `lenLock` is the exact analogue of a body's
-`static` flag, applied to one coordinate instead of three -- and a **reservoir** is
-just a vessel with `lenLock` and a large gas mass.
+Derived: `mass = mShell + gas.mass`, `mu = mass/12`, `Alat = mass*bore^2/12`,
+`I = Alat + mu*len^2`. `hw`/`hh` mirror `bore/2` and `len/2` so the rectangle-shaped
+picking, snapping, corner-resize and hit-test helpers serve vessels unchanged
+(`geometry.js` §05.2b `rectLike`).
+
+The inspector (`inspector.js` §14.2b) exposes the geometry, the shell mass, the four
+coordinates and their rates, and the gas. `P`, `T` and gas `mass` are three faces of
+one state at a fixed volume, so each edit says what it holds fixed: **temperature**
+holds the mass, **pressure** and **mass** hold the temperature. Each is a deliberate
+player-authored change to the gas's energy, exactly as typing a velocity into a
+body's panel is a deliberate change to its kinetic energy. Resizing keeps the gas
+sealed -- mass and temperature carry over, so the pressure follows the new volume.
+
+`lenLock` is the exact analogue of a body's `static` flag applied to one coordinate
+instead of three, and a **reservoir** is just a vessel with `lenLock` set and a large
+gas mass.
 
 ## V.9 What this costs the engine
 
@@ -357,14 +415,15 @@ positionally are:
 | `physics.js` §08.1 spring force apply | accumulate into a new `FL[]` |
 | `physics.js` §08.2 `rowJv` | add the `jlen*vlen` term |
 | `physics.js` §08.3 `maps` / `Jv` / `K` / impulse apply | 4 sites, one extra term each |
-| `physics.js` §08.4 position integration | `len += h*vlen`, trapezoidal per §V.7 |
+| `physics.js` §08.4 position integration | trapezoidal `len` update per §V.7 |
 | `physics.js` §08.0 `islandKinematics` | unchanged -- `vlen` carries no `P` or `L` |
 | `physics.js` §08.6 internal field | include `vlen` in `keInt` and scale it by `s` |
 | `hud.js` §12.1 `energy` | add `1/2*mu*vlen^2` and `Upot(len)` |
 | `projection.js` §09.1 | same 3 changes as §08.3 |
 
 That is roughly a dozen lines of arithmetic plus the vessel's own geometry, force,
-render, pick, and inspector code. Compare the alternative the spec floats -- two cap
+render, pick, and inspector code -- and it is what the implementation actually cost.
+Compare the alternative the spec floats -- two cap
 bodies sharing a prismatic joint with a springlike force pair -- which needs six
 coordinates plus two constraint rows to cancel the two spurious ones, needs the cap
 bodies hidden from picking and the inspector (the stripped implementation's
@@ -373,11 +432,15 @@ obvious assignment is wrong off the welded case, and still has to get §V.6's
 centrifugal coupling right through whatever inertia those bodies happen to carry.
 The four-coordinate body is both less code and more correct.
 
-One caveat: `twoPointFrame` and `endpointAngleLockRow` (code §06.1) build their
-columns by hand rather than through `velCols`, so rod-weld and slot-prismatic rows on
-a vessel endpoint need the same `jlen` treatment -- the segment direction `phi` picks
-up a `lendot` dependence when either endpoint rides a vessel. That is the one piece of
-genuinely new row algebra this design requires.
+One piece of genuinely new row algebra was required, as anticipated:
+`twoPointFrame` and `endpointAngleLockRow` built their columns by hand rather than
+through `velCols`, so a rod weld or slot prismatic on a vessel endpoint would have
+missed its length column. Rather than special-case it, all three of those row
+builders (the rod distance row, the endpoint angle lock, and the slot's lateral lock)
+were **rebuilt on `epFrame`'s closures**, which reproduces the previous hand-written
+columns exactly for two plain bodies and gets the vessel case right for free. Every
+bundled example still conserves energy to machine precision after that refactor,
+which is the check that it was exact and not merely close.
 
 ## V.10 What this sets up for heat and mass flow
 
@@ -409,21 +472,30 @@ anything mechanical. That is a far smaller surface than the stripped implementat
 * The bore is rigid, so there is no radial gas inertia and no hoop dynamics.
 * A vessel does not sag under its own weight (§V.6) and cannot bend -- `len` is the
   only internal coordinate.
-* `mu = M/12` assumes a uniform distribution. A vessel with heavy caps and a light
-  gas is a different `mu` (§V.2), not a different model, but the editor has to expose
-  it if anyone wants it.
+* `mu = mass/12` assumes a uniform distribution. A vessel with heavy caps and a light
+  gas is a different `mu` (§V.2), not a different model, but nothing in the editor
+  exposes that choice today.
 * Two vessels' gases only interact through explicit interactions (§V.10), never by
   geometric overlap -- unchanged from the sandbox's standing "nothing interacts unless
   the player says it does" invariant.
+* Belt, CVT and cable-spool attachments are restricted to disks, as before; a vessel
+  is not a valid pick for any of them. A cable *tether* on a vessel does work.
+* A vessel's default shell density (`VESSEL_DENSITY`, 2000 kg/m^3) is a usability
+  default, not a physical claim: at 1 atm and human-scale geometry a gas spring is
+  genuinely stiff, and a much lighter shell simply rings faster than the eye
+  resolves. It is stable either way -- §V.7's step is unconditionally so.
 
 ## V.12 Open items
 
-1. The rod-weld / slot-prismatic row algebra for vessel endpoints (§V.9's caveat).
-2. Whether `len` should also carry a maximum (§V.6 makes a spinning vessel stretch
-   without bound in principle; `Upot` alone only bounds it from below).
-3. Whether the spatial-collar endpoint kind (§V.5) is worth building at all, or
-   whether material attachment covers every case a player actually reaches for.
-4. The placement tool and the drag semantics for a cap handle versus the body.
-5. `P_atm` and `T_atm` as world parameters (`20 C`, `1 atm`) in whatever abstract
-   units `R = 1` implies -- the unit convention needs pinning down before any number
-   in the inspector means anything.
+1. Heat and mass exchange (§V.10) -- the reason the state was shaped this way, and
+   the next thing to build.
+2. Power instrumentation for a vessel: `P*dV/dt` alongside the per-constraint
+   reaction readout the joints already have (`DEVELOPMENT.md` §7).
+3. Whether a maximum length is worth exposing. Deliberately absent for now: `Upot`
+   bounds the length from below, and nothing bounds it from above, so a hard enough
+   spin stretches a vessel without limit (§V.6). That is real, and only becomes a
+   usability problem if someone hits it.
+4. A cap-mass fraction in the editor, if a vessel with heavy caps is ever wanted
+   (§V.2 gives `mu = mass*(1 + 2*cap)/12`; nothing else in the engine changes).
+5. Vessel-to-vessel and vessel-to-body *contact*, which remains out of scope with
+   every other contact (`DEVELOPMENT.md` §3.7).

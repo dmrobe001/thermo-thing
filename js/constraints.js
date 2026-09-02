@@ -2,7 +2,11 @@
 //  §06 · CONSTRAINT ROWS
 //  The heart of the engine. Each constraint is turned into one or more rows of
 //  the velocity-linear (Pfaffian) form  J·v = -bias  (spec §3.3). A row is
-//    { cols:[[bodyIdx, jx, jy, jw], ...], C, nh? }
+//    { cols:[[bodyIdx, jx, jy, jw, jlen?], ...], C, nh? }
+//  jlen is the column of a vessel's fourth (length) coordinate -- absent, meaning
+//  zero, on every ordinary body. Rows never build it by hand: it comes out of
+//  epFrame's velCols closure (§06.1), which is why every branch of rowsFor below
+//  works on a vessel endpoint unchanged.
 //  where C is the raw position error (the value to drive to zero) and nh flags
 //  a nonholonomic row (velocity-only, no position invariant -- excluded from the
 //  §09 position projection). The §08 solver scales C by beta/h (Baumgarte);
@@ -28,7 +32,8 @@ function bodyIndex(id){ return bodies.findIndex(b=>b.id===id); }
 // whose endpoints are both {id, off} pairs.
 function epWorld(ep){
   if(ep.id==null) return [ep.off[0], ep.off[1], 0, 0];
-  return worldPt(bodies[bodyIndex(ep.id)], ep.off);
+  const b=bodies[bodyIndex(ep.id)];
+  return worldPt(b, epLocal(b, ep.off));       // material offset on a vessel, §05.2c
 }
 // The two-endpoint geometry rod and slot both build their rows from: each
 // endpoint resolved (body or background), the segment A->B, its length, and
@@ -46,12 +51,18 @@ function epWorld(ep){
 // and the solver's Baumgarte term (kb*C, physics.js §08.3) turns it into a
 // spurious multi-turn correction in a single step. Unwrapping phi here keeps
 // it continuous through that crossing, so C stays near zero throughout.
+// epA/epB are the endpoints resolved through epFrame (§06.1): every row built from
+// this frame projects through their velCols/angCols closures rather than assembling
+// columns by hand, so a vessel endpoint's length column comes along automatically
+// and the rod weld / slot prismatic locks need no vessel-specific algebra of their
+// own. The raw wax/rax/... fields remain for rendering and reactionOf (§09.3).
 function twoPointFrame(con){
   const hasA=con.a.id!=null, hasB=con.b.id!=null;
   const A = hasA ? bodies[bodyIndex(con.a.id)] : null;
   const B = hasB ? bodies[bodyIndex(con.b.id)] : null;
-  const [wax,way,rax,ray] = hasA ? worldPt(A,con.a.off) : [con.a.off[0],con.a.off[1],0,0];
-  const [wbx,wby,rbx,rby] = hasB ? worldPt(B,con.b.off) : [con.b.off[0],con.b.off[1],0,0];
+  const epA=epFrame(con.a), epB=epFrame(con.b);
+  const [wax,way,rax,ray] = hasA ? worldPt(A,epLocal(A,con.a.off)) : [con.a.off[0],con.a.off[1],0,0];
+  const [wbx,wby,rbx,rby] = hasB ? worldPt(B,epLocal(B,con.b.off)) : [con.b.off[0],con.b.off[1],0,0];
   const ia = hasA?bodyIndex(con.a.id):-1, ib = hasB?bodyIndex(con.b.id):-1;
   const dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
   const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
@@ -64,25 +75,29 @@ function twoPointFrame(con){
     phi=con._phiRef+da;
   }
   con._phiRef=phi;
-  return {hasA,hasB,A,B,ia,ib,wax,way,rax,ray,wbx,wby,rbx,rby,ux,uy,nx,ny,L,phi};
+  return {hasA,hasB,A,B,ia,ib,epA,epB,wax,way,rax,ray,wbx,wby,rbx,rby,ux,uy,nx,ny,L,phi};
 }
 // One row locking `which` end's frame angle -- a body's theta, or 0 for a
 // background end -- to the live direction phi of the segment from B to A.
 // Shared by rod's weld and slot's prismatic lock: both are the same
 // operation (pin an endpoint's rotation to the line joining the two
 // endpoints), just attached to different base constraints.
+// The row measures  d/dt(theta_here - phi), with phi the A->B segment's world angle.
+// Since dphi/dt = n.(vA - vB)/L, that is the endpoint's own angular-velocity column
+// minus (1/L) times the two endpoints' velocity columns along the segment normal --
+// which is exactly what the closures below build. This is the same row the previous
+// hand-assembled version produced for two plain bodies, and the correct one for a
+// vessel endpoint, whose velCols carries the extra length column.
 function endpointAngleLockRow(which, f, restAng){
-  const {hasA,hasB,ia,ib,rax,ray,rbx,rby,nx,ny,L,phi} = f;
-  const cols=[];
-  if(which==='A'){
-    if(hasA) cols.push([ia, -nx/L, -ny/L, 1+(nx*ray-ny*rax)/L]);
-    if(hasB) cols.push([ib,  nx/L,  ny/L, -(nx*rby-ny*rbx)/L]);
-  } else {
-    if(hasA) cols.push([ia, -nx/L, -ny/L, -(ny*rax-nx*ray)/L]);
-    if(hasB) cols.push([ib,  nx/L,  ny/L, 1+(ny*rbx-nx*rby)/L]);
-  }
-  const thHere = which==='A' ? (hasA?f.A.th:0) : (hasB?f.B.th:0);
-  return { cols, C: thHere-phi-restAng };
+  const {epA,epB,nx,ny,L,phi} = f;
+  const here = which==='A' ? epA : epB;
+  const k = -1/L;
+  const cols = mergeCols([
+    epA.velCols(k*nx, k*ny),
+    epB.velCols(-k*nx, -k*ny),
+    here.angCols()
+  ]);
+  return { cols, C: here.th-phi-restAng };
 }
 // Capture (or recapture) endpoint `which`'s rest angle against the live A->B
 // direction. Called whenever a per-endpoint lock (rod weld, slot prismatic)
@@ -152,10 +167,11 @@ function slotRailAngle(con){
 // corrupt the row if a caller ever produced two entries on the same body.
 function mergeCols(colArrays){
   const m=new Map();
-  for(const cols of colArrays) for(const [idx,cx,cy,cw] of cols){
-    const e=m.get(idx); if(e){ e[0]+=cx; e[1]+=cy; e[2]+=cw; } else m.set(idx,[cx,cy,cw]);
+  for(const cols of colArrays) for(const [idx,cx,cy,cw,cl] of cols){
+    const l=cl||0;
+    const e=m.get(idx); if(e){ e[0]+=cx; e[1]+=cy; e[2]+=cw; e[3]+=l; } else m.set(idx,[cx,cy,cw,l]);
   }
-  return [...m.entries()].map(([idx,[cx,cy,cw]])=>[idx,cx,cy,cw]);
+  return [...m.entries()].map(([idx,[cx,cy,cw,cl]])=>[idx,cx,cy,cw,cl]);
 }
 // Resolve a rod/pin/spring endpoint -- a plain body {id,off} or a background
 // point {id:null,off} -- to its live world position plus a `velCols` closure
@@ -163,10 +179,30 @@ function mergeCols(colArrays){
 // plain body reduces to the ordinary single-column rotate-form, background
 // to no columns at all). Not used by rod's weld / slot's prismatic locks --
 // those keep using twoPointFrame directly.
+// `angCols` is the companion to velCols for the one row shape that measures an
+// endpoint's own *rotation* rather than a point's translation (the rod weld and slot
+// prismatic locks, endpointAngleLockRow below): the endpoint body's angular-velocity
+// column, or none at all for a background endpoint, whose frame angle is the fixed
+// world zero. `th` reads the same way -- a body's own theta, or 0 for background.
+//
+// On a vessel, `off` is the material label (lat, f) of §05.2c, and the point's world
+// position picks up a length dependence: d(world)/d(len) = f * axis. That is the
+// whole of the len column, and it is why an endpoint's *material fraction* is what
+// decides how much it restrains the vessel's breathing.
 function epFrame(ep){
-  if(ep.id==null) return { wx:ep.off[0], wy:ep.off[1], velCols:()=>[] };
-  const idx=bodyIndex(ep.id); const [wx,wy,rx,ry]=worldPt(bodies[idx],ep.off);
-  return { wx, wy, velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx]] };
+  if(ep.id==null) return { wx:ep.off[0], wy:ep.off[1], idx:-1, th:0,
+                           velCols:()=>[], angCols:()=>[] };
+  const idx=bodyIndex(ep.id); const b=bodies[idx];
+  const [wx,wy,rx,ry]=worldPt(b, epLocal(b,ep.off));
+  if(b.shape==='vessel'){
+    const f=ep.off[1], ax=vesselAxis(b);
+    return { wx, wy, idx, th:b.th,
+      velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx, f*(dirx*ax[0]+diry*ax[1])]],
+      angCols:()=>[[idx,0,0,1,0]] };
+  }
+  return { wx, wy, idx, th:b.th,
+    velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx]],
+    angCols:()=>[[idx,0,0,1]] };
 }
 
 // ---- §06.3 · cableFrame ----
@@ -217,7 +253,7 @@ function cableFrame(cb, spoolAngleRef){
   const is=bodyIndex(cb.spool.id);
   let T, tb=null, trx=0, tryy=0, ti=-1;
   if(cb.tether.id!=null){ ti=bodyIndex(cb.tether.id); tb=bodies[ti];
-    const [tx,ty,rx,ry]=worldPt(tb,cb.tether.off); T=[tx,ty]; trx=rx; tryy=ry; }
+    const [tx,ty,rx,ry]=worldPt(tb,epLocal(tb,cb.tether.off)); T=[tx,ty]; trx=rx; tryy=ry; }
   else { T=[cb.tether.off[0],cb.tether.off[1]]; }
 
   // Spool anchor A: material point on rim.
@@ -292,6 +328,11 @@ function cableFrame(cb, spoolAngleRef){
   // beta, Lfree) and matches: it is the same physical row as the pre-rebuild
   // +rs·side, given that convention's side = -sign(spoolAngle) (see the wrap/side
   // reconstruction in physics.js's cable migration).
+  // The tether end's columns go through epFrame (§06.1) rather than being written
+  // out here, so a tether anchored on a vessel picks up its length column the same
+  // way every other endpoint does. The spool row stays hand-built: it is a rim
+  // tangent term, not a point-velocity projection, and a spool is always a disk.
+  const epT = tb ? epFrame(cb.tether) : null;
   let cols;
   if(tangentWins){
     // d2 floors away from 0 for a step that overshoots deep past the rim
@@ -301,13 +342,11 @@ function cableFrame(cb, spoolAngleRef){
     const d2 = Math.max(d*d, 1e-9);
     const Jx = (Dx*Lfree - rs*sign*Dy) / d2;
     const Jy = (Dy*Lfree + rs*sign*Dx) / d2;
-    cols=[];
-    if(!S.static) cols.push([is, -Jx, -Jy, -rs*sign]);
-    if(tb&&!tb.static) cols.push([ti, Jx, Jy, Jx*(-tryy)+Jy*trx]);
+    cols = mergeCols([ S.static?[]:[[is, -Jx, -Jy, -rs*sign]],
+                       (tb&&!tb.static)?epT.velCols(Jx,Jy):[] ]);
   } else {
-    cols=[];
-    if(!S.static) cols.push([is, -ux, -uy, ux*ry_Q - uy*rx_Q]);
-    if(tb&&!tb.static) cols.push([ti, ux, uy, -ux*tryy + uy*trx]);
+    cols = mergeCols([ S.static?[]:[[is, -ux, -uy, ux*ry_Q - uy*rx_Q]],
+                       (tb&&!tb.static)?epT.velCols(ux,uy):[] ]);
   }
 
   return {
@@ -360,11 +399,10 @@ function rowsFor(con){
     // difference and showing up as a violation on a mechanism that's actually
     // fully satisfied within its own reachable directions.
     const A = bodies[bodyIndex(con.a.id)];
-    const [wax,way,rax,ray] = worldPt(A,con.a.off);
-    const ia = bodyIndex(con.a.id);
+    const ep = epFrame(con.a);
     return [
-      { cols:[[ia,1,0,-ray]], C: wax-con.world[0], soft:true },
-      { cols:[[ia,0,1, rax]], C: way-con.world[1], soft:true }
+      { cols:ep.velCols(1,0), C: ep.wx-con.world[0], soft:true },
+      { cols:ep.velCols(0,1), C: ep.wy-con.world[1], soft:true }
     ];
   }
   if(con.type==='pin'){
@@ -379,10 +417,9 @@ function rowsFor(con){
     // Either end may be background-anchored (id===null, off holds the world
     // point directly -- §06.1 epWorld).
     const f=twoPointFrame(con);
-    const {hasA,hasB,ia,ib,rax,ray,rbx,rby,ux,uy,L}=f;
-    const distCols=[];
-    if(hasA) distCols.push([ia, ux, uy, -ux*ray+uy*rax]);
-    if(hasB) distCols.push([ib,-ux,-uy,  ux*rby-uy*rbx]);
+    const {ux,uy,L}=f;
+    // d/dt|A-B| = u.(vA - vB): the two endpoints' velocity columns along the segment.
+    const distCols=mergeCols([f.epA.velCols(ux,uy), f.epB.velCols(-ux,-uy)]);
     const rows=[{ cols:distCols, C:L-con.len }];
     // A welded end locks its body's angle (or, for a background end, the
     // fixed world frame) to the rod's own direction phi -- see
@@ -425,15 +462,19 @@ function rowsFor(con){
       // tautology. Mirrors the old body-hosted slotFrame exactly (dDot is
       // the rail normal's own rotation rate, theta_B's contribution to
       // d/dt[n·D]).
-      const {hasA,hasB,ia,ib,rax,ray,rbx,rby,wax,way,wbx,wby}=f;
+      const {hasB,ib,wax,way,wbx,wby,epA,epB}=f;
       const railAngle=(hasB?f.B.th:0)-con.restAngB;
       const rdx=Math.cos(railAngle), rdy=Math.sin(railAngle);
       const rnx=-rdy, rny=rdx;
       const Dx=wax-wbx, Dy=way-wby;
-      const cols=[];
-      if(hasA) cols.push([ia, rnx, rny, -rnx*ray+rny*rax]);
-      if(hasB){ const dDot=rdx*Dx+rdy*Dy;
-        cols.push([ib, -rnx, -rny, rnx*rby-rny*rbx-dDot]); }
+      // d/dt(n_rail . D) = n_rail.(vA - vB) + (dn_rail/dt).D, and dn/dt = -w_B*d_rail,
+      // so B's own angular column picks up -(d_rail . D). Same row as before, now
+      // routed through the endpoint closures so a vessel end carries its len column.
+      const dDot=rdx*Dx+rdy*Dy;
+      const cols=mergeCols([
+        epA.velCols(rnx,rny), epB.velCols(-rnx,-rny),
+        hasB?[[ib,0,0,-dDot,0]]:[]
+      ]);
       rows.push({ cols, C: rnx*Dx+rny*Dy });
     }
     return rows;
@@ -450,11 +491,9 @@ function rowsFor(con){
     // no-side-slip (Chaplygin knife edge): the contact point's velocity across the
     // heading is zero. Velocity-only -- no position invariant (nonholonomic).
     const A=bodies[bodyIndex(con.a.id)];
-    const [px,py,rx,ry]=worldPt(A,con.a.off);
     const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const nx=-hh[1]/hl, ny=hh[0]/hl;                 // lateral normal to heading
-    const ia=bodyIndex(con.a.id);
-    return [{ cols:[[ia, nx, ny, -nx*ry + ny*rx]], C:0, nh:true }];
+    return [{ cols:epFrame(con.a).velCols(nx,ny), C:0, nh:true }];
   }
   if(con.type==='cvt'){
     // rolling contact at P = the point on A's rim nearest B. Match the two bodies'

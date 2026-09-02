@@ -1,5 +1,5 @@
-const a=0.4,gam=1.4,Patm=1.0,mu=0.5;
-const kappa=1.0*Math.pow(a*1.0,gam);
+const a=0.4,gam=1.4,Patm=101325,mu=66.7;    // SI: bore (m), 1 atm, mass/12 for an 800 kg vessel
+const kappa=Patm*Math.pow(a*1.0,gam);       // starts balanced at 1 atm, L0 = 1 m
 const U=L=>kappa*Math.pow(a*L,1-gam)/(gam-1)+Patm*a*L;
 const F=L=>kappa*Math.pow(a*L,-gam)*a-Patm*a;
 const E=(L,v)=>0.5*mu*v*v+U(L);
@@ -21,7 +21,7 @@ function dgStep(L,v){
   const f = Math.abs(dL)<1e-14 ? F(L) : -(U(Ln)-U(L))/dL;
   return [Ln, v+h*f/mu];
 }
-for(const v0 of [-2,-6,-12,-40,-200]){
+for(const v0 of [-1,-4,-12,-40,-200]){
   let L=1.0,v=v0; const E0=E(L,v); let minL=9,ok=true;
   for(let i=0;i<200000;i++){ [L,v]=dgStep(L,v);
     if(!(L>0)||!isFinite(L)){ok=false;break;} minL=Math.min(minL,L); }

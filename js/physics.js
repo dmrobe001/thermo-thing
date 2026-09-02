@@ -5,8 +5,11 @@
 //  single constraint solve projects those velocities onto the manifold, then
 //  positions integrate, then an energy-conservation rescale closes the gap the
 //  earlier stages only approximate.
+//    §08.1b vesselGasStep -- the gas force, as a discrete gradient of its own
+//           potential, on a vessel's length coordinate (defined ahead of §08.1,
+//           which calls it)
 //    §08.1  applied forces -> candidate velocities (gravity, drag spring,
-//           user-placed linear/rotational springs)
+//           user-placed linear/rotational springs, vessel centrifugal term)
 //    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
@@ -117,10 +120,74 @@ function islandKinematics(idxs){
   }
   return {M,cx,cy,px,py,L,Ieff};
 }
+// ---- §08.1b · vesselGasStep (the gas force, as a discrete gradient) ----
+// Advance one vessel's length rate under the gas, the atmosphere, and every other
+// generalized force already accumulated on that coordinate (`Fother`).
+//
+// The gas is a potential (geometry.js §05.2d vesselUpotAt): internal energy plus
+// the atmosphere's own P*V, both pure functions of length once the adiabat
+// invariant and the gas mass are held fixed -- which mechanics never changes. So
+// the vessel is an ordinary nonlinear spring, and the honest way to integrate a
+// spring whose stiffness diverges is a DISCRETE GRADIENT: pick the force over the
+// step so the work it does equals the potential drop *exactly*,
+//
+//     f_gas = -(Upot(Ln) - Upot(L0)) / (Ln - L0)
+//
+// paired with the trapezoidal length update §08.4 applies. Then
+//
+//     d(1/2 mu v^2) = 1/2 h f_tot (vn + v0) = f_tot * dLen
+//
+// identically, for ANY step size -- so kinetic + potential is conserved to
+// rounding and the only net energy change is the work Fother genuinely did.
+//
+// Two properties follow that the earlier (stripped) implementation had to build by
+// hand and never got exactly right. First, no minimum-volume floor is needed: as
+// the trial length approaches zero, Upot diverges, so the residual below goes to
+// -infinity and the root is always strictly positive -- the step *cannot* cross
+// zero volume, at any closing speed. Second, there is no incremental dU = -P dV to
+// book, hence no atmospheric flow-work channel and no rule about which substeps
+// may credit a volume change: a state function has no increments to misattribute.
+//
+// The residual is monotone enough for bisection and its bracket is guaranteed
+// (negative at the floor, positive far out), so no derivative and no failure mode.
+const VESSEL_GAS_ITERS = 80;
+function vesselGasStep(v, h, Fother){
+  const invMu=v.invMu;
+  if(!(invMu>0)){ v.vlen=0; return; }          // length-locked, or static
+  const L0=v.len, v0=v._vlen0, U0=vesselUpotAt(v,L0);
+  // The secant of Upot between L0 and the trial length; its limit as the trial
+  // length approaches L0 is the ordinary force law, (P - P_bg) * capArea.
+  const force=Ln=>{ const dL=Ln-L0;
+    return Math.abs(dL)<1e-13 ? (gasP(v)-sim.bg.P)*vesselCapArea(v)
+                              : -(vesselUpotAt(v,Ln)-U0)/dL; };
+  const rateAt=Ln=>v0 + h*(Fother+force(Ln))*invMu;
+  const resid =Ln=>Ln - L0 - h*(v0+rateAt(Ln))/2;
+  let lo=VESSEL_MIN_LEN, hi=Math.max(L0,1)+Math.abs(v0)*h*4+1;
+  for(let k=0;k<64 && resid(hi)<0;k++) hi*=2;
+  if(resid(lo)>=0){
+    // No root above the floor. Only reachable for a vessel with (near) no gas at
+    // all -- a vacuum has no divergent pressure to arrest the caps, so it really
+    // does close completely. Land on the floor rather than integrating through it,
+    // and stop the closing motion instead of letting it run: this is the one path
+    // in the file where the length coordinate's energy identity does not hold, and
+    // §08.6 absorbs the difference the same way it does any other residue.
+    v.vlen=Math.max(rateAt(lo),0); return;
+  }
+  for(let k=0;k<VESSEL_GAS_ITERS;k++){ const mid=0.5*(lo+hi); if(resid(mid)<0) lo=mid; else hi=mid; }
+  v.vlen=rateAt(0.5*(lo+hi));
+}
+
 // ---- §08.1 · applied forces -> candidate velocities ----
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
   const N=bodies.length;
+  // Every vessel's derived inertia depends on its length, and its mass on the gas
+  // sealed inside it, so both are refreshed before islands or the energy baseline
+  // read them (geometry.js §05.2d). _vlen0 is this substep's starting length rate,
+  // kept for the trapezoidal length update at §08.4 -- that update, paired with
+  // §08.1b's discrete-gradient force, is what makes the gas exactly conservative.
+  refreshVessels();
+  for(const b of bodies) if(b.shape==='vessel') b._vlen0=b.vlen;
   // Snapshot each island's pre-substep energy budget (§08.6's target) and
   // momentum (§08.6's momentum-conservation target for a free island)
   // before any force this substep has been applied.
@@ -133,11 +200,23 @@ function substep(h){
   const grabbing = !!(grab && bodies[grab.bi] && !bodies[grab.bi].static);
 
   // 1) accumulate applied forces, then integrate into candidate velocities v*
-  const FX=new Array(N).fill(0), FY=new Array(N).fill(0), TAU=new Array(N).fill(0);
+  // FL is the generalized-force accumulator for the fourth (vessel length)
+  // coordinate, alongside FX/FY/TAU for the usual three. Gravity contributes
+  // nothing to it: for a mass distribution symmetric about the vessel's centre the
+  // gravitational potential is independent of length, so a vessel does not sag
+  // under its own weight (VESSEL.md §V.6).
+  const FX=new Array(N).fill(0), FY=new Array(N).fill(0), TAU=new Array(N).fill(0),
+        FL=new Array(N).fill(0);
   for(let i=0;i<N;i++){ const b=bodies[i]; if(b.static) continue;
     if(sim.gravity) FY[i] += b.mass*(-sim.g);
+    // Centrifugal coupling: I(len) = Alat + mu*len^2 depends on the length
+    // coordinate, so d/dlen of the rotational kinetic energy is a real generalized
+    // force -- 1/2 * dI/dlen * w^2 = mu*len*w^2 -- that stretches a spinning vessel.
+    // Keeping it is what makes a spinning vessel conserve energy and angular
+    // momentum exactly; dropping it breaks both (VESSEL.md §V.6).
+    if(b.shape==='vessel') FL[i] += b.mu*b.len*b.w*b.w;
     if(grab && bodies[grab.bi]===b){
-      const [wx,wy,rx,ry]=worldPt(b,grab.off);
+      const [wx,wy,rx,ry]=worldPt(b,epLocal(b,grab.off));
       const vpx=b.vx - b.w*ry, vpy=b.vy + b.w*rx;
       const K=40*b.mass, Cd=9*b.mass;
       // Same screen-space-capped pull as the pose-mode drag (§05.4, tools.js
@@ -147,7 +226,12 @@ function substep(h){
       // strayed.
       const [px,py]=saturatingPull(wx,wy,mouseWorld[0],mouseWorld[1],DRAG_CAP_PX);
       const Fx=K*px-Cd*vpx, Fy=K*py-Cd*vpy;
-      FX[i]+=Fx; FY[i]+=Fy; TAU[i]+=rx*Fy-ry*Fx;
+      // Through the endpoint's own columns rather than by hand, so grabbing a
+      // vessel anywhere but its mid-plane also pulls on its length coordinate --
+      // the same virtual-work identity the spring pass below relies on.
+      for(const c of epFrame({id:b.id, off:grab.off}).velCols(Fx,Fy)){
+        FX[c[0]]+=c[1]; FY[c[0]]+=c[2]; TAU[c[0]]+=c[3]; FL[c[0]]+=c[4]||0;
+      }
     }
   }
   // linear spring force elements: Hookean, F = k*(restLen-L) along the line
@@ -164,9 +248,9 @@ function substep(h){
     const ux=dx/L, uy=dy/L;
     const Fmag=sp.k*(sp.restLen-L);
     const Fx=Fmag*ux, Fy=Fmag*uy;
-    for(const [idx,cx,cy,cw] of mergeCols([A.velCols(Fx,Fy), B.velCols(-Fx,-Fy)])){
+    for(const [idx,cx,cy,cw,cl] of mergeCols([A.velCols(Fx,Fy), B.velCols(-Fx,-Fy)])){
       if(bodies[idx].static) continue;
-      FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw;
+      FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw; FL[idx]+=cl||0;
     }
   }
   // rotational spring force elements: torsional, tau = k*(restAngle-thRel)
@@ -181,8 +265,15 @@ function substep(h){
     if(hasB && !bodies[ib].static) TAU[ib]-=tau;
   }
 
-  for(let i=0;i<N;i++){ const b=bodies[i]; if(b.static){ b.vx=0;b.vy=0;b.w=0; continue; }
-    b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i]; }
+  for(let i=0;i<N;i++){ const b=bodies[i];
+    if(b.static){ b.vx=0;b.vy=0;b.w=0; if(b.shape==='vessel') b.vlen=0; continue; }
+    b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i];
+    // A vessel's length rate is advanced by §08.1b instead of a plain explicit step:
+    // the gas force has to be solved implicitly over the step to be conservative,
+    // and FL[i] (every *other* generalized force on this coordinate) rides along
+    // inside that same solve so the energy identity covers the pair.
+    if(b.shape==='vessel') vesselGasStep(b, h, FL[i]);
+  }
 
   // ---- §08.2 · cable pre-pass ----
   // 2) cables: wound arc + straight paid-out segment.  The spool stores the
@@ -194,7 +285,8 @@ function substep(h){
   //    commits a new value on an active step -- while slack the wound-length
   //    bookkeeping freezes at its last taut value, since a limp cable's wrap
   //    is otherwise indeterminate (design note §C.4).
-  const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } return s; };
+  const rowJv=(colsIn)=>{ let s=0; for(const c of colsIn){ const b=bodies[c[0]];
+    s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w+(c[4]||0)*(b.vlen||0); } return s; };
   for(const cb of cables){ cb._rows=[];
     // Migrate old saves: if no localAngle, reconstruct spoolAngle from old wrap/side
     // FIRST, then place the anchor (localAngle) consistent with that spoolAngle --
@@ -212,7 +304,7 @@ function substep(h){
       if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
       let T0;
       if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; cb._spoolAngle=undefined; continue; }
-        const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; }
+        const [tx,ty]=worldPt(tb0,epLocal(tb0,cb.tether.off)); T0=[tx,ty]; }
       else T0=[cb.tether.off[0],cb.tether.off[1]];
       const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
       // Reconstruct spoolAngle from old wrap/side (old side=+1 means CCW -> new spoolAngle < 0).
@@ -238,7 +330,7 @@ function substep(h){
       } else {
         const S0=bodies[bodyIndex(cb.spool.id)]; if(!S0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; continue; }
         let T0; if(cb.tether.id!=null){ const tb0=bodies[bodyIndex(cb.tether.id)]; if(!tb0){ cb._active=false; cb._C=0; cb._cols=null; cb._Lallow=null; continue; }
-          const [tx,ty]=worldPt(tb0,cb.tether.off); T0=[tx,ty]; } else T0=[cb.tether.off[0],cb.tether.off[1]];
+          const [tx,ty]=worldPt(tb0,epLocal(tb0,cb.tether.off)); T0=[tx,ty]; } else T0=[cb.tether.off[0],cb.tether.off[1]];
         const tetherAngle0=Math.atan2(T0[1]-S0.y, T0[0]-S0.x);
         const anchorAngle0=S0.th+cb.localAngle;
         let raw=tetherAngle0-anchorAngle0;                 // principal value from the actual stored anchor
@@ -306,16 +398,21 @@ function substep(h){
   const m=rows.length;
   if(m>0){
     // per-row body->j map for K assembly
-    const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3]]); return mp; });
+    // Four components per column, not three -- the fourth is the vessel length
+    // coordinate (geometry.js §05.2d), zero on every ordinary body, so a row that
+    // never touches a vessel is unaffected by its presence here.
+    const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3],c[4]||0]); return mp; });
     const Jv=new Array(m);
-    for(let i=0;i<m;i++){ let s=0; for(const c of rows[i].cols){ const b=bodies[c[0]]; s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w; } Jv[i]=s; }
+    for(let i=0;i<m;i++){ let s=0; for(const c of rows[i].cols){ const b=bodies[c[0]];
+      s+=c[1]*b.vx+c[2]*b.vy+c[3]*b.w+(c[4]||0)*(b.vlen||0); } Jv[i]=s; }
     // K = J M^-1 J^T  (+ reg)
     const Kt=[]; for(let i=0;i<m;i++) Kt.push(new Array(m).fill(0));
     for(let i=0;i<m;i++){
       for(let j=i;j<m;j++){
         let s=0;
         for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue;
-          const im=invMdiag(bodies[bi]); s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
+          const im=invMdiag(bodies[bi]);
+          s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]+ji[3]*jj[3]*im[3]; }
         Kt[i][j]=s; Kt[j][i]=s;
       }
       Kt[i][i]+=sim.reg;
@@ -326,7 +423,8 @@ function substep(h){
     // 4) apply impulses  v += M^-1 J^T lambda
     for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
       for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.vx+=b.invM*c[1]*li; b.vy+=b.invM*c[2]*li; b.w+=b.invI*c[3]*li; } }
+        b.vx+=b.invM*c[1]*li; b.vy+=b.invM*c[2]*li; b.w+=b.invI*c[3]*li;
+        if(c[4] && b.invMu) b.vlen+=b.invMu*c[4]*li; } }
     for(let ci=0;ci<constraints.length;ci++) constraints[ci]._lam=constraints[ci]._rows.map(ri=>lam[ri]);
     for(const cb of cables) cb._lam=cb._rows.map(ri=>lam[ri]);
   } else {
@@ -334,8 +432,18 @@ function substep(h){
   }
 
   // ---- §08.4 · position integration ----
-  // 4) integrate positions
-  for(const b of bodies){ if(b.static)continue; b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w; }
+  // 4) integrate positions. The three rigid coordinates take the engine's usual
+  //    symplectic-Euler step; a vessel's length takes the TRAPEZOIDAL one instead,
+  //    averaging this substep's start and end rates. That is what completes §08.1b's
+  //    exact work identity for the gas (and is the same correction §08.6 already
+  //    applies to a free island's centre of mass, for the same reason).
+  for(const b of bodies){ if(b.static)continue;
+    b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w;
+    if(b.shape==='vessel') b.len=Math.max(VESSEL_MIN_LEN, b.len+h*(b._vlen0+b.vlen)/2);
+  }
+  // I(len) and the hw/hh render mirrors must reflect the new geometry before §08.6
+  // reads this island's post-solve energy and effective inertia.
+  refreshVessels();
 
   // ---- §08.6 · energy-conservation rescale ----
   // The Baumgarte-stabilized solve (§08.3) is only an approximate velocity
@@ -401,9 +509,16 @@ function substep(h){
       // same way post.pe is: it's a legitimate KE<->PE channel the spring
       // force itself already moved energy through in §08.1/§08.4, not a
       // discrepancy to fold back.
+      // post.U (gas internal energy) and post.WA (the atmosphere's own P*V) are
+      // subtracted alongside post.pe and post.SPE for exactly the same reason: they
+      // are legitimate KE<->PE channels the gas force of §08.1b already moved energy
+      // through, not discrepancies to fold back. Because both are state functions of
+      // the current geometry (geometry.js §05.2d), there is nothing here to
+      // accumulate or to decide about -- unlike an incremental dU = -P dV, they
+      // cannot be credited twice or missed.
       const bankKey=islandBankKey(isl);
       const banked=ENERGY_BANK.get(bankKey)||0;
-      const keTarget=isl.preE-post.pe-post.SPE+banked;
+      const keTarget=isl.preE-post.pe-post.SPE-post.U-post.WA+banked;
       if(isl.anchored){
         // keTarget<=0 (all mechanical energy would have to come from an
         // impossible negative KE) or the island is momentarily at rest: leave
@@ -414,7 +529,8 @@ function substep(h){
         // that can, rather than silently dropped.
         if(keTarget>0 && post.ke>1e-12){
           const s=Math.sqrt(keTarget/post.ke);
-          for(const i of isl.bodyIdx){ const b=bodies[i]; b.vx*=s; b.vy*=s; b.w*=s; }
+          for(const i of isl.bodyIdx){ const b=bodies[i]; b.vx*=s; b.vy*=s; b.w*=s;
+            if(b.shape==='vessel') b.vlen*=s; }
           ENERGY_BANK.delete(bankKey);
         } else {
           ENERGY_BANK.set(bankKey,keTarget);
@@ -460,6 +576,12 @@ function substep(h){
       // zero net torque about an island's own COM (see Ltarget above), so
       // there's no analogous *torque*-driven position drift for rotation to
       // correct -- only linear momentum has an external driver here at all.
+      // A vessel's length rate belongs entirely to the internal/shape field: the
+      // stretch is symmetric about the vessel's own centre, so it carries zero net
+      // linear momentum (integral f dm = 0) and zero net angular momentum
+      // (integral f*lat dm = 0). It therefore never enters islandKinematics at all,
+      // and scaling it here can no more disturb the rigid fix above than scaling any
+      // other relative motion can (VESSEL.md §V.6).
       let keInt=0; const internal=[];
       for(const i of isl.bodyIdx){ const b=bodies[i];
         const rx=b.x-now.cx, ry=b.y-now.cy;
@@ -468,8 +590,10 @@ function substep(h){
         // wnow) -- zero-net by construction, so it's pure relative motion,
         // never the momentum error itself, whatever s ends up being below.
         const ivx=b.vx-(Vnow[0]-wnow*ry), ivy=b.vy-(Vnow[1]+wnow*rx), iw=b.w-wnow;
-        internal.push([ivx,ivy,iw,rx,ry]);
+        const ivl=(b.shape==='vessel')?b.vlen:0;
+        internal.push([ivx,ivy,iw,rx,ry,ivl]);
         keInt+=0.5*b.mass*(ivx*ivx+ivy*ivy)+0.5*b.I*iw*iw;
+        if(b.shape==='vessel') keInt+=0.5*b.mu*ivl*ivl;
       }
       // s=1 (desiredInt<=0 or no internal motion to scale) reproduces the
       // exact momentum-target rigid field plus the untouched internal field
@@ -481,8 +605,9 @@ function substep(h){
       const resolved=desiredInt>0 && keInt>1e-12;
       const s=resolved?Math.sqrt(desiredInt/keInt):1;
       if(resolved) ENERGY_BANK.delete(bankKey); else ENERGY_BANK.set(bankKey,desiredInt-keInt);
-      isl.bodyIdx.forEach((i,k)=>{ const b=bodies[i]; const [ivx,ivy,iw,rx,ry]=internal[k];
+      isl.bodyIdx.forEach((i,k)=>{ const b=bodies[i]; const [ivx,ivy,iw,rx,ry,ivl]=internal[k];
         b.vx=Vt[0]-wt*ry+s*ivx; b.vy=Vt[1]+wt*rx+s*ivy; b.w=wt+s*iw;
+        if(b.shape==='vessel') b.vlen=s*ivl;
       });
     }
     // Every island present this substep either cleared or refreshed its own

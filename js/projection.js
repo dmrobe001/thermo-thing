@@ -27,12 +27,13 @@ function projectPositions(iters, extra){
     const m=rows.length; if(!m) return;
     let maxC=0; for(const r of rows){ const a=Math.abs(r.C); if(a>maxC)maxC=a; }
     if(maxC<1e-7) return;
-    const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3]]); return mp; });
+    // Four components per column -- see the same assembly in physics.js §08.3.
+    const maps=rows.map(r=>{ const mp=new Map(); for(const c of r.cols) mp.set(c[0],[c[1],c[2],c[3],c[4]||0]); return mp; });
     const Kt=[]; for(let i=0;i<m;i++) Kt.push(new Array(m).fill(0));
     for(let i=0;i<m;i++){
       for(let j=i;j<m;j++){ let s=0;
         for(const [bi,ji] of maps[i]){ const jj=maps[j].get(bi); if(!jj)continue; const im=invMdiag(bodies[bi]);
-          s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]; }
+          s+=ji[0]*jj[0]*im[0]+ji[1]*jj[1]*im[1]+ji[2]*jj[2]*im[2]+ji[3]*jj[3]*im[3]; }
         Kt[i][j]=s; Kt[j][i]=s; }
       if(rows[i].soft) Kt[i][i]+=Kt[i][i]*DRAG_SOFT_ALPHA;
       Kt[i][i]+=sim.reg;
@@ -41,7 +42,11 @@ function projectPositions(iters, extra){
     const lam=solveLinear(Kt,rhs,m);
     for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
       for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
-        b.x+=b.invM*c[1]*li; b.y+=b.invM*c[2]*li; b.th+=b.invI*c[3]*li; } }
+        b.x+=b.invM*c[1]*li; b.y+=b.invM*c[2]*li; b.th+=b.invI*c[3]*li;
+        // A vessel's length is a configuration coordinate like any other, so the
+        // projection settles it too -- pinning both caps really does snap the
+        // vessel to the length its constraints imply.
+        if(c[4] && b.invMu){ b.len=Math.max(VESSEL_MIN_LEN, b.len+b.invMu*c[4]*li); refreshVessel(b); } } }
   }
 }
 // ---- §09.2 · conMaxC ----
@@ -78,7 +83,7 @@ function reactionOf(con){
     return {x:wax,y:way, fx, fy, tau: tau!==undefined?tau/h:undefined};
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return null;
-  const [wax,way]=worldPt(A,con.a.off);
+  const [wax,way]=epWorldPt(A,con.a.off);
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const nx=-hh[1]/hl, ny=hh[0]/hl; return {x:wax,y:way, fx:nx*(l[0]/h), fy:ny*(l[0]/h)}; }
   if(con.type==='pin'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }

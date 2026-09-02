@@ -10,10 +10,17 @@
 // ============================================================================
 // ---- §16.1 · snapshots (reset baseline) ----
 let saved=null;
-function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w})),
+// A vessel's snapshot carries its fourth coordinate and rate (len/vlen) plus the gas
+// state sealed inside it: the adiabat invariant and the gas mass. Without those,
+// Reset would restore the geometry but leave the gas wherever the run left it --
+// silently changing the scene's energy every time the player pressed R.
+function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w,
+    len:b.len, vlen:b.vlen, kap:b.gas&&b.gas.kap, gm:b.gas&&b.gas.mass, mShell:b.mShell})),
   cSA:cables.map(c=>c.spoolAngle) }; }
 function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
-  if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0; } }
+  if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0;
+    if(b.shape==='vessel'){ b.len=s.len; b.vlen=s.vlen||0; b._vlen0=b.vlen;
+      b.gas.kap=s.kap; b.gas.mass=s.gm; b.mShell=s.mShell; refreshVessel(b); } } }
   // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
   // pose, so a reference accumulated across possibly many turns of prior

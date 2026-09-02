@@ -26,11 +26,96 @@ function pickRotSpring(wx,wy){
   for(let i=rotSprings.length-1;i>=0;i--){ if(rotSpringHit(rotSprings[i],wx,wy)) return i; }
   return -1; }
 
+// ---- §14.2b · renderVesselInspector ----
+// A vessel's panel. It differs from a body's in exposing a FOURTH coordinate --
+// `len`, with its rate `vlen` -- alongside x, y and theta, and in carrying the gas
+// state sealed inside it (geometry.js §05.2d).
+//
+// P, T and the gas mass are three faces of one state at a fixed volume, so editing
+// any one has to say what it holds fixed. The rule, shown in the panel itself:
+//   temperature -> holds the mass (heating a sealed vessel raises its pressure)
+//   pressure    -> holds the temperature (pumping gas in or out)
+//   gas mass    -> holds the temperature (the same, stated the other way)
+// Each is a deliberate, player-authored change to the gas's energy, exactly as
+// typing a velocity into a body's panel is a deliberate change to its kinetic
+// energy -- not something the simulation does on its own.
+function renderVesselInspector(v){
+  const p=document.getElementById('panelBody');
+  const P=gasP(v), T=gasT(v), V=vesselVol(v);
+  p.innerHTML=`
+    <h3>Vessel ${v.id}</h3><p class="sub">gas vessel &middot; fixed bore, variable length</p>
+    <div class="card"><div class="cardhead">geometry</div>
+      <div class="field"><span class="lab">bore</span><input class="numin" type="number" step="0.02" min="0.02" id="v_bore" value="${v.bore.toFixed(3)}"></div>
+      <div class="field"><span class="lab">length</span><input class="numin" type="number" step="0.02" min="0.001" id="v_len" value="${v.len.toFixed(4)}"></div>
+      <div class="field"><span class="lab">volume</span><span class="val" id="v_V">${V.toFixed(4)}</span></div>
+      <div class="field"><span class="lab">shell mass</span><input class="numin" type="number" step="1" min="0.001" id="v_shell" value="${v.mShell.toFixed(3)}"></div>
+      <div class="field"><span class="lab">total mass</span><span class="val" id="v_mass">${v.mass.toFixed(3)}</span></div>
+      <div class="field"><span class="lab">inertia</span><span class="val" id="v_I">${v.I.toFixed(4)}</span></div>
+      <div class="field"><span class="lab">length inertia</span><span class="val" id="v_mu">${v.mu.toFixed(4)}</span></div>
+      <label class="chk"><input type="checkbox" id="v_lock" ${v.lenLock?'checked':''}> length locked (reservoir)</label>
+    </div>
+    <div class="card"><div class="cardhead">gas</div>
+      <div class="field"><span class="lab">pressure</span><input class="numin" type="number" step="1000" min="0" id="v_P" value="${P.toFixed(1)}"></div>
+      <div class="field"><span class="lab">temperature</span><input class="numin" type="number" step="5" min="0.1" id="v_T" value="${T.toFixed(2)}"></div>
+      <div class="field"><span class="lab">gas mass</span><input class="numin" type="number" step="0.01" min="0" id="v_gm" value="${v.gas.mass.toFixed(5)}"></div>
+      <div class="field"><span class="lab">gamma</span><input class="numin" type="number" step="0.05" min="1.01" id="v_gam" value="${v.gas.gamma.toFixed(3)}"></div>
+      <div class="field"><span class="lab">internal energy</span><span class="val" id="v_U">${gasU(v).toFixed(1)}</span></div>
+      <div class="field force"><span class="lab">cap force</span><span class="val" id="v_F">${((P-sim.bg.P)*vesselCapArea(v)).toFixed(1)}</span></div>
+      <p class="muted" style="margin:8px 0 0">SI throughout: Pa, K, kg, m, J. Ambient is ${(sim.bg.P/1000).toFixed(1)} kPa at ${sim.bg.T.toFixed(2)} K. Editing temperature holds the gas mass; editing pressure or mass holds the temperature. Resizing keeps the gas sealed, so the pressure follows the new volume.</p>
+    </div>
+    <div class="card"><div class="cardhead">state</div>
+      <div class="field"><span class="lab">x</span><input class="numin" type="number" step="0.1" id="v_x" value="${v.x.toFixed(3)}"></div>
+      <div class="field"><span class="lab">y</span><input class="numin" type="number" step="0.1" id="v_y" value="${v.y.toFixed(3)}"></div>
+      <div class="field"><span class="lab">theta</span><input class="numin" type="number" step="0.05" id="v_th" value="${v.th.toFixed(3)}"></div>
+      <div class="field"><span class="lab">vx</span><input class="numin" type="number" step="0.1" id="v_vx" value="${v.vx.toFixed(3)}"></div>
+      <div class="field"><span class="lab">vy</span><input class="numin" type="number" step="0.1" id="v_vy" value="${v.vy.toFixed(3)}"></div>
+      <div class="field"><span class="lab">w</span><input class="numin" type="number" step="0.1" id="v_w" value="${v.w.toFixed(3)}"></div>
+      <div class="field"><span class="lab">len rate</span><input class="numin" type="number" step="0.1" id="v_vlen" value="${v.vlen.toFixed(3)}"></div>
+    </div>
+    <button class="del" id="v_del">Delete vessel</button>`;
+  const num=id=>parseFloat(document.getElementById(id).value);
+  const commit=()=>{ renderInspector(); saveState(); };
+  // Geometry edits go through resizeVessel, which keeps the gas sealed (mass and
+  // temperature carry over) and scales the shell mass with the footprint to hold
+  // its density -- the same convention resizeBody uses for an ordinary body.
+  const commitGeom=()=>{ const bore=num('v_bore'), len=num('v_len');
+    if(isFinite(bore)&&bore>0&&isFinite(len)&&len>0) resizeVessel(v,bore,len);
+    projectPositions(8); commit(); };
+  document.getElementById('v_bore').onchange=commitGeom;
+  document.getElementById('v_len').onchange=commitGeom;
+  document.getElementById('v_shell').onchange=()=>{ const m=num('v_shell');
+    if(isFinite(m)&&m>0){ v.mShell=m; refreshVessel(v); } commit(); };
+  document.getElementById('v_lock').onchange=e=>{ v.lenLock=e.target.checked; refreshVessel(v); commit(); };
+  document.getElementById('v_P').onchange=()=>{ const Pn=num('v_P');
+    if(isFinite(Pn)&&Pn>=0) setVesselGasPT(v,Pn,gasT(v)||sim.bg.T); commit(); };
+  document.getElementById('v_T').onchange=()=>{ const Tn=num('v_T');
+    if(isFinite(Tn)&&Tn>0) setVesselGasMT(v,v.gas.mass,Tn); commit(); };
+  document.getElementById('v_gm').onchange=()=>{ const mn=num('v_gm');
+    if(isFinite(mn)&&mn>=0) setVesselGasMT(v,mn,gasT(v)||sim.bg.T); commit(); };
+  // gamma changes c_v, hence the internal energy at the same P and V. Hold P and T
+  // (the measurable state) and let U follow, rather than the reverse.
+  document.getElementById('v_gam').onchange=()=>{ const g=num('v_gam');
+    if(isFinite(g)&&g>1.001){ const Pk=gasP(v), Tk=gasT(v)||sim.bg.T; v.gas.gamma=g; setVesselGasPT(v,Pk,Tk); } commit(); };
+  const commitPose=()=>{ const x=num('v_x'), y=num('v_y'), th=num('v_th');
+    if(isFinite(x)&&isFinite(y)&&isFinite(th)){ v.x=x; v.y=y; v.th=th; projectPositions(8); } commit(); };
+  ['v_x','v_y','v_th'].forEach(id=>document.getElementById(id).onchange=commitPose);
+  const commitVel=()=>{ const vx=num('v_vx'), vy=num('v_vy'), w=num('v_w'), vl=num('v_vlen');
+    if(isFinite(vx)&&isFinite(vy)&&isFinite(w)&&isFinite(vl)){ v.vx=vx; v.vy=vy; v.w=w; v.vlen=vl; } commit(); };
+  ['v_vx','v_vy','v_w','v_vlen'].forEach(id=>document.getElementById(id).onchange=commitVel);
+  document.getElementById('v_del').onclick=()=>{ const id=v.id;
+    constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+    springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
+    rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
+    cables=cables.filter(c=>c.spool.id!==id && c.tether.id!==id);
+    bodies=bodies.filter(x=>x!==v); clearSelection(); saveState(); };
+}
+
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, cable, spring, rotational
 // spring, or the empty bench.
 function renderInspector(){
   const p=document.getElementById('panelBody');
+  if(selBody && selBody.shape==='vessel'){ renderVesselInspector(selBody); return; }
   if(selBody){
     const b=selBody; const isRect=b.shape==='rect';
     p.innerHTML=`
@@ -213,11 +298,13 @@ function renderInspector(){
           <button data-ex="skate">Skate (knife-edge)</button>
           <button data-ex="integrator">Wheel integrator (CVT)</button>
           <button data-ex="cable">Cable ratchet</button>
+          <button data-ex="gasspring">Gas spring (vessel on ground)</button>
+          <button data-ex="spinvessel">Spinning vessel (free)</button>
           <button data-ex="clear">Clear bench</button>
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/k/v/c/q tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/g/k/v/c/q tools</p>
       </div>`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
   }
@@ -227,6 +314,21 @@ function renderInspector(){
 // it focused -- clobbering mid-edit would fight their keystrokes
 function setLive(id,v){ const el=document.getElementById(id); if(el && document.activeElement!==el) el.value=v; }
 function updateInspectorLive(){
+  if(selBody && selBody.shape==='vessel' && document.getElementById('v_len')){
+    const v=selBody, P=gasP(v), T=gasT(v);
+    setLive('v_len',v.len.toFixed(4)); setLive('v_bore',v.bore.toFixed(3));
+    setLive('v_x',v.x.toFixed(3)); setLive('v_y',v.y.toFixed(3)); setLive('v_th',v.th.toFixed(3));
+    setLive('v_vx',v.vx.toFixed(3)); setLive('v_vy',v.vy.toFixed(3)); setLive('v_w',v.w.toFixed(3));
+    setLive('v_vlen',v.vlen.toFixed(3));
+    setLive('v_P',P.toFixed(1)); setLive('v_T',T.toFixed(2));
+    setLive('v_gm',v.gas.mass.toFixed(5)); setLive('v_shell',v.mShell.toFixed(3));
+    document.getElementById('v_V').textContent=vesselVol(v).toFixed(4);
+    document.getElementById('v_mass').textContent=v.mass.toFixed(3);
+    document.getElementById('v_I').textContent=v.I.toFixed(4);
+    document.getElementById('v_mu').textContent=v.mu.toFixed(4);
+    document.getElementById('v_U').textContent=gasU(v).toFixed(1);
+    document.getElementById('v_F').textContent=((P-sim.bg.P)*vesselCapArea(v)).toFixed(1);
+  }
   if(selBody){ const b=selBody;
     if(document.getElementById('f_x')){
       setLive('f_x',b.x.toFixed(3)); setLive('f_y',b.y.toFixed(3)); setLive('f_th',b.th.toFixed(3));
