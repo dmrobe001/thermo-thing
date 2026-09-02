@@ -61,6 +61,22 @@ function setBodyMass(b,m){
   if(b.shape==='vessel'){ b.mShell=Math.max(m-b.gas.mass,1e-9); refreshVessel(b); return; }
   b.mass=m; refreshInertia(b);
 }
+// Fix a body to the world, or release it. `static` is one of the two places the
+// engine freezes coordinates by zeroing an inverse mass rather than by adding a
+// constraint row -- the other is a vessel's `lenLock` -- and both are deliberate:
+// a static body is the single commonest fact in any scene, and paying three solver
+// rows for it everywhere is a bad trade. They are the ONLY two, and nothing new
+// should join them (SCENE.md §S.1).
+//
+// The velocities go to zero with the flag. The substep already does this every step
+// for a static body (physics.js §08.5), so this changes no dynamics -- it just keeps
+// the inspector's readout, the reset baseline and an exported scene (§17) from
+// carrying a velocity that is about to be discarded anyway.
+function setBodyStatic(b,isStatic){
+  b.static=!!isStatic;
+  if(b.static){ b.vx=0; b.vy=0; b.w=0; if(b.shape==='vessel') b.vlen=0; }
+  refreshInertia(b);
+}
 
 // ---- §05.2d · gas vessels ----
 // A vessel is a body of fixed bore and variable length holding a gas. It carries a

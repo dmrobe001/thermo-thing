@@ -20,8 +20,13 @@ js/hud.js           §12 energy ledger, status line, sparkline
 js/tools.js         §13 tool palette & pointer handling
 js/inspector.js     §14 selection state & right-panel inspector
 js/examples.js      §15 prebuilt example machines
+js/scene.js         §17 the scene file (ledger, exportScene, importScene)
 js/transport.js     §16 transport controls, snapshots, keyboard shortcuts, boot
 ```
+
+`js/scene.js` loads before `js/transport.js` despite its higher number: transport's
+boot calls `renderInspector()`, which draws the scene-file card. Load order is
+dependency order; the section numbers are names.
 
 All scripts are plain globals -- no ES modules. Load order matters; `index.html` loads them in dependency order.
 
@@ -56,6 +61,29 @@ All mutable world state lives in `js/state.js` (§04):
 - `sim` -- simulation parameters (`h`, `beta`, `reg`, `running`, `gravity`, `g`, `bathQ`, ...).
 - `cam` -- camera state (`x`, `y`, `scale`).
 
+## Scenes are built from the scene file, not from code
+
+A scene is described by the text format in `js/scene.js` (§17), and that format is
+also the definitive statement of what a scene may contain -- the reader builds only
+by calling the constructors the tool dispatch calls, and rejects any key its ledger
+does not list. Two rules follow, and they are what keep the bench honest:
+
+- **Every kind of scene object has exactly one constructor** (`makeBody`,
+  `makeRectBody`, `makeVessel` in §05.2; `makeRodCon`, `makeSlotCon`, `makePinCon`,
+  `makeBeltCon`, `makeCvtCon`, `makeKnifeCon`, `makeCableCon`, `makeSpringCon`,
+  `makeRotSpringCon` in §06.1/§06.2; `makeInteraction` in §17.1), called from the
+  tool dispatch (§13.5) and the scene reader (§17.4) and nowhere else. Do not build
+  one from an object literal.
+- **A new field on a scene object needs a row in `SCENE_SCHEMA`**, classified as
+  authored (has a default, written when it differs), captured (`always:true`,
+  written every time, because the pose does not imply it), or derived (absent from
+  the table, recomputed on load). `node tools/scene-roundtrip.js` fails if you skip
+  this.
+
+Only two coordinates in the engine are frozen by zeroing an inverse mass rather
+than by a constraint object: a body's `static` and a vessel's `lenLock`. Both are
+deliberate and both are in the ledger. Nothing new should join them; see `SCENE.md`.
+
 ## Adding or moving code
 
 Give new code a home in an existing section (and register it in that section's sub-index) or open a new section and update the list above. A stale map is worse than none.
@@ -76,4 +104,5 @@ Give new code a home in an existing section (and register it in that section's s
 | `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
 | `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
 | `js/examples.js` | §15 | `loadExample` -- assembles prebuilt machines from library primitives |
+| `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, and the definitive list of what a scene may contain), `exportScene`/`importScene`, `clearScene`, the scene-file panel card |
 | `js/transport.js` | §16 | `saveState`, `restoreState`, `setRunning`, keyboard shortcuts, boot |

@@ -215,58 +215,102 @@ Every scene object in the data model is flat except for `{id, off}` endpoints an
 `gas`, so the grammar stays small. Recommend the DSL; JSON-lines is the fallback if
 the parser proves annoying.
 
-Sketch, `heatpair` as it would be written:
+`heatpair`, exactly as the exporter writes it:
 
 ```
-# thermo-scene 1
-# A hot reservoir warming a working vessel through a fixed plate. What couples
-# the two gases is a PAIR of heat interactions sharing an ordinary static plate.
-sim    gravity=off g=9.8 bg.P=101325 bg.T=293.15
-cam    x=0 y=2.6 scale=64
+scene 1
 
-rect   1  x=0     y=2.6  w=2.50 h=0.12  static
-vessel 2  x=-1.25 y=2.6  bore=0.55 len=1.80  T=800  lenlock
-vessel 3  x=1.15  y=2.6  bore=0.90 len=0.90
-rod    4  bg(1.15,1.75) -- 3@(0,0)  weld=both  len=0.85
-heat   5  body=1 vessel=2 k=2000
-heat   6  body=1 vessel=3 k=2000
+sim gravity=off
+cam x=0 y=2.6 scale=64
+
+# bodies
+rect 1 x=0 y=2.6 width=2.5 height=0.24 static
+vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=276513.730172 T=800 lenlock
+vessel 3 x=1.15 y=2.6 bore=0.9 len=0.9 P=101325 T=293.15
+
+# constraints
+rod bg(1.15,1.75) -- 3 len=0.85 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+
+# interactions
+heat body=1 vessel=2 k=2000
+heat body=1 vessel=3 k=2000
 ```
 
 Grammar notes:
 
-- `<kind> <id> <field>=<value> ...`; bare words are boolean flags (`static`,
-  `lenlock`). Ids are preserved literally -- they are what the inspector shows and
-  what other lines reference -- and `uid` resumes at `max + 1`.
-- Endpoints: `<id>@(ox,oy)` for a body-local offset, `bg(x,y)` for the background,
-  `--` between the two ends of a two-endpoint object. A bare `<id>` means `@(0,0)`.
-- Omitted keys take the ledger's default; omitted *captured* keys recapture from
-  the pose. So the terse hand-written form above is legal, and a full export is the
-  same file with every captured key written out.
-- Bodies before anything that references them; the exporter emits in that order and
-  the importer requires it (a forward reference is an error with a line number, not
-  a silent null).
-- `# thermo-scene 1` is required. An unknown major version is refused outright.
-- **Any unrecognized key or kind is an error**, reported with its line. This is the
-  enforcement surface -- see §S.2.
+- `<kind> [<id>] [<endpoints>] <field>=<value> ...`; bare words are boolean flags
+  (`static`, `lenlock`, `crossed`). Only **bodies** carry an id, because they are the
+  only things anything refers to -- nouns are named, relations are anonymous, which
+  is the data model exactly. Body ids are preserved literally (they are what the
+  inspector shows) and `uid` resumes at `max + 1`.
+- Endpoints: `7` for body 7 at its centre, `7@(0.1,-0.2)` for a body-local offset (a
+  *material* label on a vessel, so the second number is a fraction of the length),
+  `bg(x,y)` for the fixed background, `--` between the two ends. No spaces inside
+  the parentheses -- a line tokenizes on whitespace.
+- A rectangle's dimensions are `width`/`height`, not `w`/`h`: `w` is the angular
+  velocity every body carries.
+- A vessel's gas is written as pressure and temperature -- the two faces of it a
+  person reasons about, and a complete encoding at a known volume, since the gas
+  mass and the adiabat invariant both follow.
+- Omitted keys take the ledger's default, which for an object built by a constructor
+  *is* what the constructor produced -- so the terse hand-written form is legal and
+  means the obvious thing. `sim` and `cam` are the exception (§S.4): they are not
+  rebuilt, so an omitted key there is the default, not "keep what is there".
+- Line order does not matter: the reader builds bodies in a first pass. The exporter
+  still writes them first, because a file a person reads should introduce a thing
+  before mentioning it.
+- `scene 1` must be the first non-comment line. An unknown version is refused.
+- **Any unrecognized key or kind is an error**, reported with its line, and nothing
+  is touched until the whole file has parsed -- so a bad file leaves the current
+  bench exactly as it was. This is the enforcement surface; see §S.2.
+
+**Numeric precision** was the one thing the plan did not anticipate, and it took
+three attempts. Numbers are written to **12 significant digits**. Nine reads better
+on the captured fields (`len=2.5019992`) but throws away ~1e-9, which the dynamics
+amplify: an exported and reimported four-bar had visibly diverged after two seconds,
+and a file that does not reproduce the scene it was written from is not a scene
+file. Printing *exactly* -- JavaScript's `Number`-to-`String` is the shortest decimal
+that parses back to the identical double -- makes every stored field bit-exact, but
+a vessel sitting at ambient then exports as `P=101325.00000000001`, because pressure
+and temperature are a change of variables away from what a vessel stores; that
+exactness is fake, and the text was not even stable under a second round trip.
+Twelve digits reads as the value in every case that has one, keeps ~1e-12 of the
+state, and is stable under repeated round trips because the rounding absorbs exactly
+the last-bit wobble that made exact printing unstable.
 
 ---
 
 ## S.6 Phasing
 
-**Phase 0 -- close the gap and write the ledger.** Add the `static` checkbox to the
-body, rectangle and vessel inspectors (with the `refreshInertia`/`refreshVessel`
-call and a `saveState`, exactly like the existing `lenLock` toggle). Write
-`SCENE_SCHEMA` in a new `js/scene.js` (§17). No behavior change; every current
-example becomes legal.
+**Phase 0 -- close the gap and write the ledger. `[done]`** The `static` checkbox is
+on the body, rectangle and vessel inspectors, going through a new `setBodyStatic`
+(§05.2) that also zeroes the velocities the substep was about to discard anyway.
+`SCENE_SCHEMA` lives in `js/scene.js` (§17.1). Every current example is now legal.
 
-**Phase 1 -- the writer.** `exportScene()` walking the ledger, and an Export button
-that drops the text into a textarea with a copy button (and a `Blob` download
-alongside). Low risk, immediately useful, nothing else changes. Read the output of
-all ten examples by eye; that is the format review.
+Phase 0 also turned up something the audit missed: five constraint kinds -- pin,
+belt, CVT, knife and cable -- had *no* constructor at all, only object literals at
+each call site. §S.2's "the reader builds only through the constructors the tools
+call" was not enforceable against a kind that had none, so they were added
+(`js/constraints.js` §06.2, plus `makeInteraction` in §17.1) and the tool dispatch
+and the examples both switched onto them. Every kind now has exactly one
+constructor, called from exactly two places.
 
-**Phase 2 -- the reader.** `importScene(text)` built strictly on the constructors,
-with line-numbered errors and hard rejection of unknown keys. Import UI: paste into
-the same textarea, plus drag-drop a file onto the canvas.
+**Phase 1 -- the writer. `[done]`** `exportScene()` (§17.3) walks the ledger; the
+inspector's empty-bench panel carries a scene-file card with Export, Import, Copy
+and Download.
+
+**Phase 2 -- the reader. `[done]`** `importScene(text)` (§17.4) is a parse pass that
+validates everything it can without touching the world -- syntax, unknown kinds and
+keys, duplicate and dangling body ids -- and only then a commit pass that clears the
+bench and builds. Errors carry their line number. A scene file can also be dropped
+onto the canvas. `tools/scene-roundtrip.js` is the validator, and it checks four
+things over all eleven examples: the export round-trips byte-for-byte; every ledger
+field survives; the reader rejects an unknown kind, an unknown key, a dangling
+reference, a duplicate id, a bad version, a flag given a value, a prototype key and
+a background pin, each leaving the bench standing; and -- the one that catches a
+*derived* field the reader recomputed wrongly, which no comparison of the file
+itself can see -- two seconds of the real `substep` on the world the tools built and
+on the world rebuilt from its export agree.
 
 **Phase 3 -- flip the examples, and shut the door.** Convert each example to scene
 text in `js/scenes.js` (embedded string literals, `file://`-safe), keeping the
@@ -279,9 +323,8 @@ tool dispatch, no file pushes onto `bodies`, `constraints`, `cables`, `springs`,
 **Phase 4 -- fold in `saveState`.** Point `transport.js` §16.1 at the ledger's
 state-class fields, deleting the parallel definition described in §S.4.
 
-Phases 0-2 are independently useful and independently shippable. Phase 3 is where
-the architectural claim gets paid for; Phase 4 is cleanup that only becomes cheap
-once the ledger exists.
+Phases 0-2 are done. Phase 3 is where the architectural claim gets paid for; Phase 4
+is cleanup that only becomes cheap once the ledger exists.
 
 ---
 

@@ -53,6 +53,7 @@ function renderVesselInspector(v){
       <div class="field"><span class="lab">total mass</span><span class="val" id="v_mass">${v.mass.toFixed(3)}</span></div>
       <div class="field"><span class="lab">inertia</span><span class="val" id="v_I">${v.I.toFixed(4)}</span></div>
       <div class="field"><span class="lab">length inertia</span><span class="val" id="v_mu">${v.mu.toFixed(4)}</span></div>
+      <label class="chk"><input type="checkbox" id="v_static" ${v.static?'checked':''}> static (fixed to the world)</label>
       <label class="chk"><input type="checkbox" id="v_lock" ${v.lenLock?'checked':''}> length locked (reservoir)</label>
     </div>
     <div class="card"><div class="cardhead">gas</div>
@@ -86,6 +87,7 @@ function renderVesselInspector(v){
   document.getElementById('v_len').onchange=commitGeom;
   document.getElementById('v_shell').onchange=()=>{ const m=num('v_shell');
     if(isFinite(m)&&m>0){ v.mShell=m; refreshVessel(v); } commit(); };
+  document.getElementById('v_static').onchange=e=>{ setBodyStatic(v,e.target.checked); commit(); };
   document.getElementById('v_lock').onchange=e=>{ v.lenLock=e.target.checked; refreshVessel(v); commit(); };
   document.getElementById('v_P').onchange=()=>{ const Pn=num('v_P');
     if(isFinite(Pn)&&Pn>=0) setVesselGasPT(v,Pn,gasT(v)||sim.bg.T); commit(); };
@@ -129,6 +131,7 @@ function renderInspector(){
           : `<div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>`}
         <div class="field"><span class="lab">mass</span><input class="numin" type="number" step="0.05" min="0.001" id="f_mass" value="${b.mass.toFixed(3)}"></div>
         <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
+        <label class="chk"><input type="checkbox" id="f_static" ${b.static?'checked':''}> static (fixed to the world)</label>
       </div>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">x</span><input class="numin" type="number" step="0.1" id="f_x" value="${b.x.toFixed(3)}"></div>
@@ -153,6 +156,7 @@ function renderInspector(){
     document.getElementById('f_mass').onchange=ev=>{ const v=parseFloat(ev.target.value);
       if(isFinite(v)&&v>0.001) setBodyMass(b,v);
       renderInspector(); saveState(); };
+    document.getElementById('f_static').onchange=ev=>{ setBodyStatic(b,ev.target.checked); renderInspector(); saveState(); };
     const commitPose=()=>{ const x=parseFloat(document.getElementById('f_x').value),
         y=parseFloat(document.getElementById('f_y').value), th=parseFloat(document.getElementById('f_th').value);
       if(isFinite(x)&&isFinite(y)&&isFinite(th)){ b.x=x; b.y=y; b.th=th; projectPositions(8); }
@@ -336,8 +340,10 @@ function renderInspector(){
       </div>
       <div class="card"><div class="cardhead">controls</div>
         <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/f/g/h/k/v/c/q tools</p>
-      </div>`;
+      </div>
+      ${sceneCardHTML()}`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
+    wireSceneCard();
   }
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----

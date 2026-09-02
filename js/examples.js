@@ -5,19 +5,7 @@
 //  loadExample(kind) dispatches on the data-ex key; search e.g.  kind==='crank'.
 // ============================================================================
 function loadExample(kind){
-  // springs/rotSprings are cleared alongside the rest: leaving them behind would
-  // leave force elements pointing at body ids the new scene has reused or dropped,
-  // which epFrame resolves to a missing body.
-  bodies=[];constraints=[];cables=[];springs=[];rotSprings=[];interactions=[];uid=1;clearSelection();eHist.length=0;
-  // The bath's running total (state.js sim.bathQ) belongs to the scene that spent it,
-  // not to the next one -- leaving it standing would open every fresh bench with a
-  // nonzero ledger row and an offset total.
-  sim.bathQ=0;
-  // uid restarts at 1 above, so a fresh scene's bodies can reuse ids a prior
-  // scene's islands used as their ENERGY_BANK key (physics.js §08.6) --
-  // clear it so a stale banked correction can never leak into an unrelated
-  // scene's very first substep.
-  ENERGY_BANK.clear();
+  clearScene();          // one definition of a fresh bench, scene.js §17.4
   sim.gravity=true; const gc=document.getElementById('tgGrav'); if(gc) gc.checked=true;
   const dy=(x,y,r=0.38)=>{ const b=makeBody(x,y,r,false); bodies.push(b); return b; };
   // A plain (unwelded) rod between two bodies -- free to rotate at both ends.
@@ -38,7 +26,7 @@ function loadExample(kind){
     constraints.push(makeSlotCon({id:P.id,off:[0,0]}, {id:null,off:[P.x-10,P.y]}, false, true)); }
   else if(kind==='skate'){ sim.gravity=false; if(gc) gc.checked=false;
     const b=dy(0,2.6,0.45);
-    constraints.push({type:'knife', a:{id:b.id, off:[0.42,0]}, dir:[1,0], sel:false}); }
+    constraints.push(makeKnifeCon({id:b.id, off:[0.42,0]}, [1,0])); }
   else if(kind==='integrator'){ sim.gravity=false; if(gc) gc.checked=false;
     const A=dy(0,2.6,0.95);
     // A short background-welded rod into A's own centre: the weld on the
@@ -50,7 +38,7 @@ function loadExample(kind){
     // Position-only rail for the CVT follower B (pin, free to spin) -- same
     // single-locked-background pattern as the crank example above.
     constraints.push(makeSlotCon({id:B.id,off:[0,0]}, {id:null,off:[A.x-10,A.y]}, false, true));
-    constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false}); }
+    constraints.push(makeCvtCon(A.id, B.id)); }
   else if(kind==='gasspring'){
     // A vessel standing on the ground: its lower cap -- the material plane
     // f = -1/2 -- is welded to a fixed world point, which pins that cap and locks
@@ -126,11 +114,7 @@ function loadExample(kind){
       interactions.push({id:uid++, type:'flow', body:{id:port.id}, vessel:{id:v.id}, k:3e-5, sel:false});
   }
   else if(kind==='cable'){ const S=makeBody(0,4.6,0.4,true); bodies.push(S); const m=dy(0.9,4.4,0.32);
-    const dvx=m.x-S.x, dvy=m.y-S.y; const d=Math.hypot(dvx,dvy);
-    const Lfree=d>S.r?Math.sqrt(d*d-S.r*S.r):0;
-    const cb0={type:'cable', tether:{id:m.id, off:[0,0]}, spool:{id:S.id},
-               localAngle:Math.atan2(dvy,dvx)-S.th, spoolAngle:0, Ltot:Lfree, sel:false};
-    cables.push(cb0); }
+    cables.push(makeCableCon({id:m.id, off:[0,0]}, S.id)); }
   saveState();
   cam.x=0;cam.y=2.6;cam.scale=64;
 }

@@ -13,6 +13,7 @@
 //  the §09 projection uses C directly. Same rows serve both.
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
+//    §06.2  the remaining constraint makers (pin, belt, cvt, knife, cable)
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -158,6 +159,50 @@ function slotRailAngle(con){
     return (A?A.th:0)-con.restAngA; }
   const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
   return Math.atan2(way-wby,wax-wbx);
+}
+
+// ---- §06.2 · the remaining constraint makers ----
+// Pin, belt, CVT, knife and cable were built as object literals at each of their
+// call sites until the scene file (§17) needed a third one. Every constraint kind
+// now has exactly ONE constructor, called from exactly two places -- the tool
+// dispatch (§13.5) and the scene reader (§17.4) -- so "what fields does a belt
+// have" has a single answer, and a scene file cannot describe a constraint the
+// tools cannot build. See SCENE.md §S.2.
+
+// A pin coincides two body-local points. Both ends are real bodies: pinning a body
+// to the background is a rod with a welded background end (§15's rodBG), not this.
+function makePinCon(a,b){ return {type:'pin', a, b, sel:false}; }
+
+// A belt couples two disks' rim speeds. The wrap radii default to the bodies' own
+// radii and the phase is captured from their live angles, so a freshly built belt
+// is unstressed -- the same capture the wrap-radius and crossed-belt edits redo
+// (inspector.js §14.2).
+function makeBeltCon(aId,bId,sense){
+  const A=bodies[bodyIndex(aId)], B=bodies[bodyIndex(bId)];
+  const sn = sense===-1 ? -1 : 1;
+  return {type:'belt', a:{id:aId}, b:{id:bId}, rA:A.r, rB:B.r, sense:sn,
+          restPhase:(A.r*A.th - sn*B.r*B.th), sel:false};
+}
+// The variable-ratio rolling contact carries no captured state at all -- its ratio
+// is read from the live geometry every step (§06.5).
+function makeCvtCon(aId,bId){ return {type:'cvt', a:{id:aId}, b:{id:bId}, sel:false}; }
+
+// A knife edge forbids sideways motion of one body-local point. `dir` is the
+// heading in the body's OWN frame -- callers holding a world direction rotate it in
+// by R(-b.th, ...) first, as the tool does.
+function makeKnifeCon(a,dir){ return {type:'knife', a, dir, sel:false}; }
+
+// A cable runs from a tether point (a body-local anchor, or the background) to a
+// spool disk it winds on. Ltot and localAngle are captured from the live geometry:
+// the free span at creation, and the rim point nearest the tether (spoolAngle = 0).
+// See CABLE.md §C.3.
+function makeCableCon(tether,spoolId){
+  const S=bodies[bodyIndex(spoolId)];
+  const [tx,ty]=epWorld(tether);
+  const dvx=tx-S.x, dvy=ty-S.y, d=Math.hypot(dvx,dvy);
+  return {type:'cable', tether, spool:{id:spoolId},
+          localAngle:Math.atan2(dvy,dvx)-S.th, spoolAngle:0,
+          Ltot: d>S.r ? Math.sqrt(d*d-S.r*S.r) : 0, sel:false};
 }
 
 // `mergeCols` sums duplicate body-index entries -- required, not cosmetic:
