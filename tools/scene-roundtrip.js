@@ -33,21 +33,25 @@ const stubEl = () => new Proxy({}, { get:(t,k)=>
 const ctx = vm.createContext({
   document:{ getElementById:()=>stubEl(), createElement:()=>stubEl(),
              querySelectorAll:()=>[], addEventListener(){} },
-  window:{}, performance:{now:()=>0}, console, Math, JSON, Number, String, Object, Array, Map, Set, Error,
+  window:{addEventListener(){}}, performance:{now:()=>0}, console,
+  Math, JSON, Number, String, Object, Array, Map, Set, Error,
   requestAnimationFrame:()=>{},
 });
 ctx.globalThis = ctx;
 // Stubs for the parts of the engine the scene path calls but does not need loaded:
-// selection lives in the inspector (DOM-heavy), the reset baseline in transport,
-// the energy bank in physics, the sparkline history in the HUD.
+// selection and the tool rail both live in DOM-heavy files, and nothing under test
+// touches either. saveState/restoreState are NOT stubbed -- check (6) is about the
+// real ones, so js/transport.js is loaded below like any other source file.
 vm.runInContext(`
-  function clearSelection(){} function renderInspector(){} function saveState(){}
+  function clearSelection(){} function renderInspector(){}
+  function setTool(){} var TOOLS=[];
 `, ctx);
 // solver/physics/projection come along because check (4) below runs the real
 // substep on both worlds -- a derived field the reader recomputed wrongly shows up
 // as a diverging trajectory even when every serialized field matches.
 for(const f of ['js/state.js','js/geometry.js','js/constraints.js','js/solver.js',
-                'js/physics.js','js/projection.js','js/loop.js','js/hud.js','js/scene.js','js/examples.js'])
+                'js/physics.js','js/projection.js','js/loop.js','js/hud.js','js/scene.js','js/examples.js',
+                'js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
 
 const run = src => vm.runInContext(src, ctx);
@@ -190,6 +194,33 @@ for(const ex of EXAMPLES){
   const [w0, e0] = worstOver(0,1), [w1, e1] = worstOver(1,a.length);
   ok(ex.padEnd(12)+'loads to the same state', w0<1e-11, `worst ${w0.toExponential(2)} (${e0})`);
   ok(ex.padEnd(12)+'2 s of substeps agree  ', w1<1e-6,  `worst ${w1.toExponential(2)} (${e1})`);
+}
+
+console.log('\n6. Reset puts back exactly what was loaded');
+// saveState/restoreState (§16.1) walk the same ledger as the file, over each row's
+// `state` list. This is the check that list is complete: load a scene, run it, press
+// R, and every field of every body -- including the derived ones the snapshot does
+// not carry and the restore has to recompute -- must be back where it started. A
+// state field missing from the ledger shows up here as a field that did not return.
+for(const ex of EXAMPLES){
+  run(`loadExample(${JSON.stringify(ex)})`);
+  run('saveState()');
+  const at0 = run(STATE), bath0 = run('sim.bathQ');
+  run('projectPositions(20)');
+  for(let i=0;i<240;i++) run('substep(sim.h)');
+  const moved = run(STATE)!==at0;
+  run('restoreState()');
+  const back = run(STATE), bathBack = run('sim.bathQ');
+  const A=JSON.parse(at0), B=JSON.parse(back);
+  let worst=0, where='';
+  for(let i=0;i<A.length;i++) for(let j=0;j<A[i].length;j++){
+    const d=Math.abs(A[i][j]-B[i][j]);
+    if(d>worst){ worst=d; where=`body ${i}, field ${j}: ${A[i][j]} -> ${B[i][j]}`; }
+  }
+  const bathOk = bath0===bathBack;
+  // a scene that never moves would pass trivially; say so rather than counting it
+  ok(ex.padEnd(12)+(moved?'restores exactly':'is static (nothing to restore)'),
+     worst===0 && bathOk, bathOk ? where : `sim.bathQ ${bath0} -> ${bathBack}`);
 }
 
 function firstDiff(a,b){

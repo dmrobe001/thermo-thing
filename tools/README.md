@@ -11,7 +11,7 @@ implementation and then compared against it.
 | `vessel-check-stiff.js` | the discrete-gradient gas force conserves energy exactly at any step size and never crosses zero volume, where an explicit force pass diverges | `VESSEL.md` §V.7 |
 | `vessel-check-massmatrix.js` | the centred one-body formulation reproduces the exact gas mass matrix, where a fixed `m/3` cap mass is right only when the head is welded | `VESSEL.md` §V.3 |
 | `vessel-check-exchange.js` | the heat and mass relaxations are the exact solutions of their ODEs at any step size, a finite mass transfer is the exact integral of the differential one, and a transfer conserves energy and linear momentum | `VESSEL.md` §V.10 |
-| `scene-roundtrip.js` | every bundled example exports, round-trips byte-for-byte, reloads to the same state, and runs the same; and the reader rejects everything outside its ledger | `SCENE.md` §S.2 |
+| `scene-roundtrip.js` | every bundled example is a canonical scene file that round-trips byte-for-byte, reloads to the same state and runs the same; the reader rejects everything outside its ledger; and Reset puts back exactly what was loaded | `SCENE.md` §S.2, §S.6 |
 
 Run any of them with `node tools/<script>`.
 
@@ -20,7 +20,10 @@ above: its claim is about the real reader and writer, so a reimplementation woul
 test nothing. It loads the engine's source files into a bare context with a stub
 DOM. Its last check runs the real `substep` on both the example the tools built and
 the world rebuilt from its export -- which is how a *derived* field the reader
-failed to recompute gets caught, since no comparison of the file itself can see one.
+failed to recompute gets caught, since no comparison of the file itself can see one. The last check runs a scene, presses Reset, and asserts every
+field is back -- which is what fails if a field a run can change is missing from its
+row's `state` list. `--canon <name>` prints an example's canonical text, which is how
+you regenerate a bundled scene after a ledger change.
 
 `vessel-check-dynamics.js` doubles as an independent check on the engine itself: it
 integrates the same system as the bundled **spinning vessel** example with RK4 at

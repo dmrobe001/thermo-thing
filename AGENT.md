@@ -79,6 +79,12 @@ does not list. Two rules follow, and they are what keep the bench honest:
   written every time, because the pose does not imply it), or derived (absent from
   the table, recomputed on load). `node tools/scene-roundtrip.js` fails if you skip
   this.
+- **A new field a *run* can change also needs an entry in that row's `state` list**,
+  which is what Reset restores (§17.6, walked by §16.1). It is a separate list from
+  `fields` because the two answer different questions -- a radius is in the file and
+  not in the snapshot; a vessel's adiabat invariant is in the snapshot and not in
+  the file -- but they sit together so adding a coordinate is one edit. The
+  validator's Reset check fails if you skip this.
 
 Only two coordinates in the engine are frozen by zeroing an inverse mass rather
 than by a constraint object: a body's `static` and a vessel's `lenLock`. Both are
@@ -104,5 +110,5 @@ Give new code a home in an existing section (and register it in that section's s
 | `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
 | `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
 | `js/examples.js` | §15 | `SCENES` -- every prebuilt machine as scene-file text, with its own reasoning as `#` comments; `loadExample` is `importScene` and nothing else |
-| `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, and the definitive list of what a scene may contain), `exportScene`/`importScene`, `clearScene`, the scene-file panel card |
-| `js/transport.js` | §16 | `saveState`, `restoreState`, `setRunning`, keyboard shortcuts, boot |
+| `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, carrying both the serialized `fields` and the `state` a run can change), `exportScene`/`importScene`, `clearScene`, the scene-file panel card, §17.6 `snapshotState`/`applyState` |
+| `js/transport.js` | §16 | `saveState`/`restoreState` (the ledger walk of §17.6 plus solver-scratch clearing), `setRunning`, keyboard shortcuts, boot |

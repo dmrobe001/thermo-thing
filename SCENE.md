@@ -343,12 +343,27 @@ scene reader (§17.4) push onto `bodies`, `constraints`, `cables`, `springs`,
 `rotSprings` or `interactions`.* Every kind of scene object has exactly one
 constructor, and it is called from exactly those two places.
 
-**Phase 4 -- fold in `saveState`.** Point `transport.js` §16.1 at the ledger's
-state-class fields, deleting the parallel definition described in §S.4.
+**Phase 4 -- fold in `saveState`. `[done]`** `transport.js` §16.1 is now four lines
+of `snapshotState()` / `applyState()` (§17.6) plus the transient-clearing that is
+genuinely transport's own. The parallel definition described in §S.4 is gone.
 
-Phases 0-3 are done, so the architectural claim is paid for: there is no longer a
-code path by which a scene can contain something the editor cannot build. Phase 4 is
-cleanup that only became cheap once the ledger existed.
+The plan said to reuse "the ledger's state-class fields", which turned out to be
+wrong in one specific way worth recording: *what a run can change* and *what the
+file writes* are related lists but not the same list. A body's radius is in the file
+and not in the snapshot; a vessel's adiabat invariant is in the snapshot and not in
+the file, because the file writes the readable view (pressure and temperature) and
+Reset must not go through a change of variables it runs on every press of R. So each
+row carries a `state` list alongside its `fields` -- two lists, but adjacent, in one
+place, so adding a coordinate is one edit.
+
+That refactor also made a check possible that the codebase never had: load a scene,
+run it, press R, and assert every field is exactly back -- including the derived ones
+the snapshot does not carry and the restore has to recompute. A state field missing
+from the ledger fails it. This is the check that would have caught both historical
+bugs the §16.1 comments describe.
+
+All four phases are done. The architectural claim is paid for: there is no longer a
+code path by which a scene can contain something the editor cannot build.
 
 ---
 

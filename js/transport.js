@@ -10,22 +10,20 @@
 // ============================================================================
 // ---- §16.1 · snapshots (reset baseline) ----
 let saved=null;
-// A vessel's snapshot carries its fourth coordinate and rate (len/vlen) plus the gas
-// state sealed inside it: the adiabat invariant and the gas mass. Without those,
-// Reset would restore the geometry but leave the gas wherever the run left it --
-// silently changing the scene's energy every time the player pressed R. sim.bathQ --
-// the running total a background interaction has drawn from the bath (physics.js
-// §08.0b) -- goes with them for the same reason: it is the ledger's counterweight to
-// exactly that gas state, so restoring one without the other would make the total
-// jump by whatever the run had exchanged.
-function saveState(){ saved={ b:bodies.map(b=>({id:b.id,x:b.x,y:b.y,th:b.th,vx:b.vx,vy:b.vy,w:b.w,
-    len:b.len, vlen:b.vlen, kap:b.gas&&b.gas.kap, gm:b.gas&&b.gas.mass, mShell:b.mShell})),
-  bathQ:sim.bathQ, cSA:cables.map(c=>c.spoolAngle) }; }
-function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodies.find(x=>x.id===s.id);
-  if(b){ b.x=s.x;b.y=s.y;b.th=s.th;b.vx=s.vx||0;b.vy=s.vy||0;b.w=s.w||0;
-    if(b.shape==='vessel'){ b.len=s.len; b.vlen=s.vlen||0; b._vlen0=b.vlen;
-      b.gas.kap=s.kap; b.gas.mass=s.gm; b.mShell=s.mShell; refreshVessel(b); } } }
-  sim.bathQ=saved.bathQ||0;
+// WHAT to snapshot is not decided here: it is the `state` list on each row of the
+// scene ledger (§17.1), walked by snapshotState/applyState (§17.6). That list used
+// to live in this file, as a second definition of "the scene's state" maintained
+// alongside the one the scene format uses -- and it fell out of step twice, once
+// when a vessel's fourth coordinate and its gas arrived and again when sim.bathQ
+// did, each time letting Reset silently change the scene's energy. One list now.
+//
+// What stays here is what is genuinely transport's own: clearing the solver's
+// per-element scratch, which is not state a snapshot carries but staleness a jump
+// back in time creates.
+function saveState(){ saved=snapshotState(); }
+function restoreState(){
+  if(!saved) return;
+  applyState(saved);
   interactions.forEach(it=>{ it._rate=0; });
   // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
@@ -35,11 +33,10 @@ function restoreState(){ if(!saved)return; for(const s of saved.b){ const b=bodi
   // failure this fixes at the horizontal crossing, but constant instead of
   // one-step). Clearing it makes the next twoPointFrame call re-seed from the
   // restored geometry's raw atan2, matching how restAngA/B were themselves
-  // captured from a fresh, un-accumulated angle. Mirrors cables' c._spoolAngle
+  // captured from a fresh, un-accumulated angle. Mirrors cables' _spoolAngle
   // reset below.
   constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._phiRef=undefined; });
-  cables.forEach((c,i)=>{
-    if(saved.cSA[i]!=null){ c.spoolAngle=saved.cSA[i]; }
+  cables.forEach(c=>{
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
     c._Lallow=null; c._spoolAngle=undefined;
   });

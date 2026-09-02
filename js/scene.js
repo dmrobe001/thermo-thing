@@ -15,6 +15,7 @@
 //    §17.3  exportScene     (world -> text)
 //    §17.4  importScene     (text -> world)
 //    §17.5  panel UI        (the scene-file card, and file drag-drop)
+//    §17.6  state snapshot  (snapshotState/applyState -- what Reset restores)
 // ============================================================================
 
 const SCENE_VERSION = 1;
@@ -58,6 +59,20 @@ const F_POSE = () => ({
 // `static` is a constructor argument, so it has no setter -- build reads it
 // through q(). Same for every x/y/r/bore/len below.
 const F_STATIC = () => ({ static:{t:'flag', def:false, get:b=>b.static} });
+// A row's `state` list is the second thing the ledger defines: the fields a RUN can
+// change, which is exactly what Reset has to put back (§16.1). It is a separate list
+// from `fields` because the two answer different questions -- a body's radius is in
+// the file and not in the snapshot; a vessel's adiabat invariant is in the snapshot
+// and not in the file -- but they live here together so that adding a coordinate is
+// one edit in one place. Getting that wrong is not hypothetical: Reset silently
+// changed a scene's energy twice, once when the vessel's fourth coordinate and gas
+// arrived and again when the bath total did, each time because the snapshot was a
+// second list maintained somewhere else.
+const S_POSE = () => [
+  ['x',  b=>b.x,  (b,v)=>{b.x=v;}],   ['y',  b=>b.y,  (b,v)=>{b.y=v;}],
+  ['th', b=>b.th, (b,v)=>{b.th=v;}],  ['vx', b=>b.vx, (b,v)=>{b.vx=v;}],
+  ['vy', b=>b.vy, (b,v)=>{b.vy=v;}],  ['w',  b=>b.w,  (b,v)=>{b.w=v;}],
+];
 
 const SCENE_SCHEMA = [
   { kind:'body', list:'bodies', id:true, match:b=>b.shape==='circle',
@@ -70,7 +85,8 @@ const SCENE_SCHEMA = [
       ...F_STATIC(), ...F_POSE(),
     },
     build:q=>makeBody(q('x'), q('y'), q('r'), q('static')),
-    finish:o=>refreshInertia(o) },
+    finish:o=>refreshInertia(o),
+    state:S_POSE() },
 
   { kind:'rect', list:'bodies', id:true, match:b=>b.shape==='rect',
     fields:{
@@ -84,7 +100,8 @@ const SCENE_SCHEMA = [
       ...F_STATIC(), ...F_POSE(),
     },
     build:q=>makeRectBody(q('x'), q('y'), q('width')/2, q('height')/2, q('static')),
-    finish:o=>refreshInertia(o) },
+    finish:o=>refreshInertia(o),
+    state:S_POSE() },
 
   { kind:'vessel', list:'bodies', id:true, match:b=>b.shape==='vessel',
     fields:{
@@ -107,7 +124,17 @@ const SCENE_SCHEMA = [
       vlen:{t:'num', def:0, get:b=>b.vlen, set:(b,v)=>{b.vlen=v;}},
     },
     build:q=>makeVessel(q('x'), q('y'), q('bore'), q('len'), q('static')),
-    finish:(o,f,q)=>{ setVesselGasPT(o, q('P'), q('T')); refreshVessel(o); } },
+    finish:(o,f,q)=>{ setVesselGasPT(o, q('P'), q('T')); refreshVessel(o); },
+    // The gas is snapshotted in the form the vessel STORES -- the adiabat invariant
+    // and the mass -- not in the pressure and temperature the file writes. Those are
+    // a change of variables away from it (§05.2d), and Reset runs on every press of
+    // R: routing it through the readable view would drift the gas by a rounding
+    // error every time, for nothing.
+    state:[ ...S_POSE(),
+            ['len',  v=>v.len,  (v,x)=>{v.len=x;}],
+            ['vlen', v=>v.vlen, (v,x)=>{v.vlen=x;}],
+            ['gas',  v=>[v.gas.kap, v.gas.mass], (v,a)=>{v.gas.kap=a[0]; v.gas.mass=a[1];}] ],
+    restore:v=>{ v._vlen0=v.vlen; refreshVessel(v); } },
 
   { kind:'pin', list:'constraints', match:c=>c.type==='pin',
     ends:[['a','ep-body'], ['b','ep-body']],
@@ -160,7 +187,8 @@ const SCENE_SCHEMA = [
       localAngle:{t:'num', always:true, get:c=>c.localAngle, set:(c,v)=>{c.localAngle=v;}},
       spoolAngle:{t:'num', def:0, get:c=>c.spoolAngle, set:(c,v)=>{c.spoolAngle=v;}},
     },
-    build:(q,e)=>makeCableCon(e.tether, e.spool.id) },
+    build:(q,e)=>makeCableCon(e.tether, e.spool.id),
+    state:[ ['spoolAngle', c=>c.spoolAngle, (c,x)=>{c.spoolAngle=x;}] ] },
 
   { kind:'spring', list:'springs', match:()=>true,
     ends:[['a','ep'], ['b','ep']],
@@ -585,6 +613,47 @@ function commitScene(parsed){
 
 // The whole of it: parse (throws on anything wrong), then commit.
 function importScene(text){ commitScene(parseScene(text)); }
+
+// ---- §17.6 · the state snapshot (what Reset restores) ----
+// Walks the same ledger, over each row's `state` list. Structure is not captured --
+// Reset never adds or removes anything -- so a snapshot is one record per object,
+// positional within its list, carrying a body's id so a structural edit between
+// save and restore is skipped rather than applied to the wrong object.
+//
+// This is deliberately NOT the text format: it runs on every inspector keystroke
+// (§16.1 saveState) and has to be exact, so it copies values rather than formatting
+// them. What it shares with the format is the ledger, which is the part that was
+// being maintained twice.
+const SCENE_STATE_LISTS = () => [['bodies',bodies], ['constraints',constraints],
+  ['cables',cables], ['springs',springs], ['rotSprings',rotSprings], ['interactions',interactions]];
+
+function snapshotState(){
+  const rec = {};
+  for(const [list, arr] of SCENE_STATE_LISTS()){
+    rec[list] = arr.map(o=>{
+      const row = SCENE_SCHEMA.find(r => r.list===list && r.match(o));
+      if(!row || !row.state) return null;
+      return { id:o.id, v:row.state.map(([,get]) => get(o)) };
+    });
+  }
+  rec.bathQ = sim.bathQ;
+  return rec;
+}
+function applyState(rec){
+  if(!rec) return;
+  for(const [list, arr] of SCENE_STATE_LISTS()){
+    const saved = rec[list]; if(!saved) continue;
+    arr.forEach((o,i)=>{
+      const s = saved[i]; if(!s) return;
+      if(s.id!==undefined && o.id!==undefined && s.id!==o.id) return;  // structure moved under us
+      const row = SCENE_SCHEMA.find(r => r.list===list && r.match(o));
+      if(!row || !row.state) return;
+      row.state.forEach(([, , set], k)=>set(o, s.v[k]));
+      if(row.restore) row.restore(o);
+    });
+  }
+  sim.bathQ = rec.bathQ || 0;
+}
 
 // ---- §17.5 · panel UI ----
 // The textarea's contents survive a renderInspector() -- which fires on every
