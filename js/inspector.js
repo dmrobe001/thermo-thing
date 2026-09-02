@@ -84,6 +84,34 @@ function relockVesselField(g, newLockedField){
   else if(newLockedField==='mass'){ g.mass=Math.max(P*bore*length/T,1e-6); syncVesselCapMass(g); }
 }
 
+// The rate a heat/flow interaction actually participates in is set by the
+// SMALLER of its own contact area and whichever partner interaction(s)
+// share its body (physics.js §08.0b's `areaMin`) -- not this interaction's
+// own overlap alone, which for the background side is always infinite
+// (background has no boundary) and so, shown on its own, reads as an
+// unbounded rate when the real, finite limit lives on the other side of
+// the pair. A body can mediate more than one simultaneous pair (more than
+// two interactions sharing a bodyId), so this returns the smallest paired
+// (min) area across every valid partner, or `null` if there's no partner
+// at all (a lone interaction moves nothing, DEVELOPMENT.md §6.2). Mirrors
+// applyHeatPair/applyFlowPair's own `gA===gB` guard (same gas object, or
+// both null/background, on both sides -- not a real pair) exactly.
+function interactionEffectiveArea(it, isHeat){
+  const body=bodies[bodyIndex(it.bodyId)]; if(!body) return null;
+  const ownGas = it.gasId!=null ? gases.find(g=>g.id===it.gasId) : null;
+  const ownArea = ownGas ? bodyGasOverlapArea(body,ownGas) : Infinity;
+  const list=(isHeat?heatInteractions:flowInteractions).filter(x=>x!==it && x.bodyId===it.bodyId);
+  let best=null;
+  for(const other of list){
+    const otherGas = other.gasId!=null ? gases.find(g=>g.id===other.gasId) : null;
+    if(otherGas===ownGas) continue;
+    const otherArea = otherGas ? bodyGasOverlapArea(body,otherGas) : Infinity;
+    const paired=Math.min(ownArea, otherArea);
+    if(best===null || paired<best) best=paired;
+  }
+  return best;
+}
+
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, gas, cable, spring, rotational
 // spring, or the empty bench.
@@ -222,7 +250,7 @@ function renderInspector(){
       <div class="card"><div class="cardhead">properties</div>
         ${FIELDS.map(fieldRow).join('')}
         <div class="field"><span class="lab" style="margin-left:22px">gamma</span><input class="numin" type="number" step="0.01" min="1.01" id="g_gamma" value="${g.gamma.toFixed(3)}"></div>
-        <p class="muted" style="margin:8px 0 0">The radio marks which field the sim derives from the other four via the ideal gas law; its box is disabled and always shows the live value. ${hasPiston?'The moving wall’s own inertia is exactly mass/3 (DEVELOPMENT.md §6.1), not an independently-set plate mass.':'No movable wall: length is a fixed constant here.'}</p>
+        <p class="muted" style="margin:8px 0 0">The radio marks which field the sim derives from the other four via the ideal gas law; its box is disabled and always shows the live value. ${hasPiston?'The gas’s own mass is what gives the walls their inertia (DEVELOPMENT.md §6.1) -- split evenly between head and piston when both are real bodies, or mass/3 on the piston alone if the head is a bare world anchor -- not an independently-set plate mass.':'No movable wall: length is a fixed constant here.'}</p>
       </div>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">heat+flow Q_dot</span><span class="val" id="g_Q">--</span></div>
@@ -249,12 +277,13 @@ function renderInspector(){
       <h3>${isHeat?'Heat':'Flow'} interaction</h3>
       <p class="sub">body ${it.bodyId} ↔ ${gas?('gas '+gas.id):'background'}</p>
       <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">contact area</span><span class="val" id="i_area">--</span></div>
+        <div class="field"><span class="lab">own contact area</span><span class="val" id="i_area">--</span></div>
+        <div class="field"><span class="lab">effective area</span><span class="val" id="i_areaEff">--</span></div>
       </div>
       <div class="card"><div class="cardhead">${isHeat?'conductivity':'flow restriction'}</div>
         <div class="field"><span class="lab">k</span><span class="val" id="i_kL">${it.k.toFixed(2)}</span></div>
         <input type="range" id="i_k" min="0" max="20" step="0.1" value="${it.k}" style="width:100%">
-        <p class="muted" style="margin:8px 0 0">Two interactions on the same body -- one to each gas/background -- couple those gases through it, at a rate set by their combined k and the smaller of the two contact areas.</p>
+        <p class="muted" style="margin:8px 0 0">Two interactions on the same body -- one to each gas/background -- couple those gases through it. "Own contact area" is just this side's overlap with its own named gas (always infinite for the background side, which has no boundary); "effective area" is what actually sets the rate -- the smaller of the two paired sides' areas. No partner on this body yet means this interaction moves nothing.</p>
       </div>
       <button class="del" id="i_del">Delete interaction</button>`;
     document.getElementById('i_k').oninput=ev=>{ it.k=parseFloat(ev.target.value); document.getElementById('i_kL').textContent=it.k.toFixed(2); saveState(); };
@@ -391,10 +420,14 @@ function updateInspectorLive(){
       }
       eQ.textContent=(g._Q||0).toFixed(3);
     } }
-  if(selHeat||selFlow){ const it=selHeat||selFlow; const body=bodies[bodyIndex(it.bodyId)];
+  if(selHeat||selFlow){ const it=selHeat||selFlow; const isHeat=!!selHeat; const body=bodies[bodyIndex(it.bodyId)];
     const gas = it.gasId!=null ? gases.find(x=>x.id===it.gasId) : null;
     const el=document.getElementById('i_area');
-    if(el && body) el.textContent = (gas ? bodyGasOverlapArea(body,gas).toFixed(3) : '∞ (background)'); }
+    if(el && body){
+      el.textContent = (gas ? bodyGasOverlapArea(body,gas).toFixed(3) : '∞ (background)');
+      const eff=interactionEffectiveArea(it,isHeat);
+      document.getElementById('i_areaEff').textContent = eff===null ? 'none -- no partner' : eff.toFixed(3);
+    } }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);

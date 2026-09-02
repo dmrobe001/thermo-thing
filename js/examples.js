@@ -18,24 +18,34 @@ function loadExample(kind){
   // A rod pinned to a fixed background point -- the free-swinging pivot a
   // pendulum needs (both ends unwelded, unlike the tool's rigid-strut default).
   const rodBG=(wx,wy,B)=>constraints.push(makeRodCon({id:null,off:[wx,wy]},{id:B.id,off:[0,0]},false,false));
-  // A vertical piston vessel in a world-fixed cylinder (head at headOff,
-  // axis +y, initial length `len`) -- the redesigned single-object piston
-  // (DEVELOPMENT.md §6.1): a synthetic, auto-managed cap body (hidden from
-  // the player as a separate body, drawn as part of the one vessel
-  // rectangle) linked to the head frame by the same hidden prismatic a real
-  // placement (tools.js §13.5) would also create, its own mass forced to
-  // the gas's mass/3 effective inertia rather than an independently-set
-  // plate mass. Shared by the gasspring and heatengine examples below;
-  // returns the vessel, with `g.piston.id` already naming the cap body.
+  // A vertical piston vessel in a cylinder (head at headOff, axis +y,
+  // initial length `len`) -- the redesigned single-object piston
+  // (DEVELOPMENT.md §6.1): two synthetic, auto-managed boundary bodies
+  // (hidden from the player as separate bodies, drawn as part of the one
+  // vessel rectangle) linked by the same hidden prismatic a real placement
+  // (tools.js §13.5) would also create, their masses forced to the gas's
+  // own mass/2 each (see geometry.js syncVesselCapMass) rather than an
+  // independently-set plate mass. The head is anchored to the world by a
+  // visible, both-ends-welded rod -- DEVELOPMENT.md §4.1's "how a body is
+  // anchored to the world" (there is no bare world-anchored frame, no
+  // standalone static toggle) -- so every part of this example is
+  // something the player could place and connect with the tool palette,
+  // not a hidden hard-coded anchor with nothing on screen explaining why
+  // the vessel doesn't fall. Shared by the gasspring and heatengine
+  // examples below; returns the vessel, with `g.head.id`/`g.piston.id`
+  // already naming the two (real, if hidden) boundary bodies.
   const gasPiston=(headOff,T,mass=5,gamma=1.4,bore=1.0,len=1.0)=>{
+    const headBody=makeRectBody(headOff[0], headOff[1], bore/2, 0.06, false);
+    headBody.synthetic=true; bodies.push(headBody);
     const cap=makeRectBody(headOff[0], headOff[1]+len, bore/2, 0.06, false);
     cap.synthetic=true; bodies.push(cap);
-    const head={id:null, off:headOff, dir:[0,1]}, piston={id:cap.id, off:[0,0]};
+    const head={id:headBody.id, off:[0,0], dir:[0,1]}, piston={id:cap.id, off:[0,0]};
     const link=makeSlotCon(piston, head, true, true);
     const g={kind:'gas', id:uid++, head, piston, bore, mass, gamma, T, lockedField:'P', sel:false};
     link.hidden=true; link.gasLink=g.id;
     constraints.push(link); gases.push(g);
     syncVesselCapMass(g);
+    constraints.push(makeRodCon({id:null,off:[headOff[0],headOff[1]-0.4]}, {id:headBody.id,off:[0,0]}, true, true));
     return g;
   };
   if(kind==='pendulum'){ const b=dy(2.6,4.4); rodBG(0,4.4,b); }
@@ -57,16 +67,29 @@ function loadExample(kind){
     gasPiston([0,1.8],1.0); }
   else if(kind==='heatengine'){
     // Same piston/cylinder as the gas spring above, but started hot (T=2,
-    // background defaults to T=1) and with a heat *and* a flow interaction
-    // from the cap to both the gas and the background -- it mediates both
-    // couplings (spec: two interactions sharing a body couple whatever they
-    // each name), so heat and mass both leak from the hot gas out to
-    // atmosphere at a finite rate, and the piston settles as they do.
+    // background defaults to T=1) and with a heat-and-mass conduit -- a
+    // real, ordinary, player-visible body (not the vessel's own hidden
+    // wall) straddling the bore near the fixed head end: half of it
+    // overlaps the gas (bodyGasOverlapArea, geometry.js §05.2c), half
+    // sticks out into open air. Two heat interactions and two flow
+    // interactions share that one body -- one of each pair naming the
+    // gas, the other naming the background (gasId:null) -- so the conduit
+    // mediates both couplings (spec: two interactions sharing a body
+    // couple whatever they each name), exactly like a heat-conducting
+    // plug through a real cylinder wall. It's placed near the head (not
+    // riding the moving piston) so the overlap stays valid across the
+    // piston's whole stroke without needing its own mechanical attachment
+    // -- welded to the world by the same visible-anchor pattern gasPiston
+    // uses for the head, rather than a hidden coupling with nothing shown
+    // connecting the vessel to the background (spec: "should be impossible").
     const g=gasPiston([0,1.8],2.0);
-    heatInteractions.push({kind:'heat', id:uid++, bodyId:g.piston.id, gasId:g.id, k:1.5, sel:false});
-    heatInteractions.push({kind:'heat', id:uid++, bodyId:g.piston.id, gasId:null, k:1.5, sel:false});
-    flowInteractions.push({kind:'flow', id:uid++, bodyId:g.piston.id, gasId:g.id, k:0.4, sel:false});
-    flowInteractions.push({kind:'flow', id:uid++, bodyId:g.piston.id, gasId:null, k:0.4, sel:false}); }
+    const conduit=makeRectBody(g.bore/2, 2.05, 0.15, 0.15, false);
+    bodies.push(conduit);
+    constraints.push(makeRodCon({id:null,off:[g.bore/2+0.5,2.05]}, {id:conduit.id,off:[0,0]}, true, true));
+    heatInteractions.push({kind:'heat', id:uid++, bodyId:conduit.id, gasId:g.id, k:1.5, sel:false});
+    heatInteractions.push({kind:'heat', id:uid++, bodyId:conduit.id, gasId:null, k:1.5, sel:false});
+    flowInteractions.push({kind:'flow', id:uid++, bodyId:conduit.id, gasId:g.id, k:0.4, sel:false});
+    flowInteractions.push({kind:'flow', id:uid++, bodyId:conduit.id, gasId:null, k:0.4, sel:false}); }
   else if(kind==='skate'){ sim.gravity=false; if(gc) gc.checked=false;
     const b=dy(0,2.6,0.45);
     constraints.push({type:'knife', a:{id:b.id, off:[0.42,0]}, dir:[1,0], sel:false}); }

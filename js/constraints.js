@@ -222,9 +222,9 @@ function gasStopRow(g){
 // from head to cap (so the point rides along with the gas as it expands,
 // staying at the same fraction rather than a fixed distance) and `lat` is
 // the fixed lateral offset across the bore. Its velocity follows the same
-// linear ramp used for the cap body's mass/3 effective inertia: zero
-// (relative to the head frame) at frac=0, the full head-to-cap relative
-// rate at frac=1.
+// linear-interpolation ramp geometry.js's `syncVesselCapMass` derives the
+// boundary bodies' own mass split from: zero (relative to the head frame)
+// at frac=0, the full head-to-cap relative rate at frac=1.
 //
 //   v_point = v_head_at(frac*sep, lat)
 //           + frac * dW * [ dW . (v_cap_at(cap.off) - v_head_at(sep,0)) ]

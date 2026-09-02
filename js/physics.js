@@ -258,11 +258,12 @@ function applyFlowPair(iA,iB,h){
 // ---- §08.1 · applied forces -> candidate velocities ----
 let grab=null; // {bi, off} while mouse-dragging a body during play
 function substep(h){
-  // Keep every vessel's cap body mass equal to its gas's own mass/3 (the
-  // ramp-profile effective inertia, geometry.js) *before* islands/preE are
-  // captured below -- so a mass change from the previous substep's flow
-  // transfer is already baked into this substep's energy baseline instead
-  // of being read as drift by §08.6's rescale.
+  // Keep every vessel's boundary bodies' mass equal to its gas's own mass
+  // (split geometry.js's syncVesselCapMass derives from the ramp-profile
+  // effective inertia) *before* islands/preE are captured below -- so a
+  // mass change from the previous substep's flow transfer is already
+  // baked into this substep's energy baseline instead of being read as
+  // drift by §08.6's rescale.
   for(const g of gases) syncVesselCapMass(g);
   const N=bodies.length;
   // Snapshot each island's pre-substep energy budget (§08.6's target) and

@@ -771,9 +771,10 @@ function runToolClick(wx,wy){
     // Both plates are synthetic: real bodies (mass, gravity, normal physics)
     // for the solver's sake, but hidden from the player as separate bodies
     // -- drawVessel (render.js) paints the whole thing as one rectangle,
-    // and pickBody/snapAnchor skip them (tools.js). The cap's own mass is
-    // overwritten immediately below to the gas's mass/3 effective inertia
-    // (geometry.js syncVesselCapMass) rather than its plate-geometry mass.
+    // and pickBody/snapAnchor skip them (tools.js). Both bodies' own mass
+    // is overwritten immediately below (mass/2 each, since neither end is
+    // privileged here -- geometry.js syncVesselCapMass) rather than their
+    // plate-geometry mass.
     const headBody=makeRectBody(cx, yLo+plateHH, bore/2, plateHH, false);
     const pistonBody=makeRectBody(cx, yHi-plateHH, bore/2, plateHH, false);
     headBody.synthetic=true; pistonBody.synthetic=true;

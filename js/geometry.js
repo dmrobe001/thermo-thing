@@ -44,21 +44,49 @@ function refreshInertia(b){
   b.invM=b.static?0:1/b.mass; b.invI=b.static?0:1/b.I;
 }
 function setBodyMass(b,m){ b.mass=m; refreshInertia(b); }
-// A gas vessel's cap body (the "piston is a hidden auxiliary body" redesign,
-// DEVELOPMENT.md §6.1) doesn't carry an independently-editable structural
-// mass -- its inertia *is* the gas's own, distributed uniformly along the
-// axial span with one end (the head) fixed: the classic "one end fixed,
-// mass distributed uniformly along the moving segment" rod result gives an
-// effective inertia of mass/3 at the moving end. Called once per substep
-// (physics.js §08.0, before islands/preE are snapshotted -- so a mass
-// change from the *previous* substep's flow transfer is already baked into
-// the new energy baseline, not read as drift by §08.6's rescale) and
-// immediately on any inspector edit to the vessel's mass field.
+// A gas vessel's boundary bodies (the "piston is a hidden auxiliary body"
+// redesign, DEVELOPMENT.md §6.1) don't carry an independently-editable
+// structural mass -- their inertia *is* the gas's own, distributed
+// uniformly along the axial span. The exact kinetic energy of a uniform
+// column with material velocity interpolated linearly between the two
+// ends (v1 at the head, v2 at the cap) works out to
+// `mass*(v1^2 + v1*v2 + v2^2)/6` -- a genuinely *coupled* quadratic form
+// (a cross term between the two bodies' velocities) that this engine's
+// block-diagonal per-body mass matrix (DEVELOPMENT.md §3.1) has no way to
+// represent. Two special cases of that exact formula ARE representable as
+// plain per-body masses, and this picks whichever applies:
+//   - head fixed (v1 = 0, e.g. genuinely world-anchored with no body at
+//     all): reduces to `mass*v2^2/6`, i.e. an effective mass of exactly
+//     `mass/3` at the cap alone -- the classic "one end fixed" rod result.
+//   - both ends real bodies (neither is privileged -- nothing in the
+//     physical setup distinguishes "head" from "cap"): dropping only the
+//     cross term and splitting the diagonal evenly, `mass/2` at each end,
+//     is exact in the v1=v2 (rigid, non-stretching) limit -- the gas
+//     translates as one lump of its own total mass, matching a free
+//     island's own COM physics exactly -- and gives both ends identical
+//     inertia when nothing else distinguishes them, unlike a `mass/3`-
+//     only-on-the-cap split (which measurably differs from the head's own
+//     mass and reads as an unphysical amplitude asymmetry the moment the
+//     head is a real, movable body). It overstates the fixed-end limit by
+//     50% (mass/2 vs the exact mass/3) if the head ends up rigidly welded
+//     down (DEVELOPMENT.md §6.1's anchoring pattern) rather than truly
+//     bodiless -- a bounded, accepted approximation, not a growing one.
+// Called once per substep (physics.js §08.0, before islands/preE are
+// snapshotted -- so a mass change from the *previous* substep's flow
+// transfer is already baked into the new energy baseline, not read as
+// drift by §08.6's rescale) and immediately on any inspector edit to the
+// vessel's mass field.
 const EFF_MASS_FLOOR = 1e-6;
 function syncVesselCapMass(v){
   if(!v.piston) return;
   const cap = bodies[bodyIndex(v.piston.id)]; if(!cap) return;
-  setBodyMass(cap, Math.max(v.mass/3, EFF_MASS_FLOOR));
+  const head = v.head.id!=null ? bodies[bodyIndex(v.head.id)] : null;
+  if(head){
+    setBodyMass(head, Math.max(v.mass/2, EFF_MASS_FLOOR));
+    setBodyMass(cap, Math.max(v.mass/2, EFF_MASS_FLOOR));
+  } else {
+    setBodyMass(cap, Math.max(v.mass/3, EFF_MASS_FLOOR));
+  }
 }
 // Reposition a vessel's length -- for a movable piston, this means moving
 // the cap body itself along the axis (keeping its orientation and the
