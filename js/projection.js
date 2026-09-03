@@ -21,9 +21,14 @@
 // no such penalty, so the least-squares split leans overwhelmingly its way.
 const DRAG_SOFT_ALPHA = 1;
 function projectPositions(iters, extra){
+  // The frozen flags gate which coordinates may move here as much as they do in the
+  // substep, and projection runs from edit paths that never reach one -- so derive
+  // them first rather than depending on a substep having happened (§06.2b).
+  refreshFrozen();
   const cons = (extra && extra.length) ? constraints.concat(extra) : constraints;
   for(let it=0; it<iters; it++){
-    const rows=[]; for(const con of cons){ for(const r of rowsFor(con)) if(!r.nh) rows.push(r); }
+    const rows=[]; for(const con of cons){ if(con._compiled) continue;
+                     for(const r of rowsFor(con)) if(!r.nh) rows.push(r); }
     const m=rows.length; if(!m) return;
     let maxC=0; for(const r of rows){ const a=Math.abs(r.C); if(a>maxC)maxC=a; }
     if(maxC<1e-7) return;
@@ -41,7 +46,7 @@ function projectPositions(iters, extra){
     const rhs=rows.map(r=>-r.C);
     const lam=solveLinear(Kt,rhs,m);
     for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
-      for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
+      for(const c of rows[i].cols){ const b=bodies[c[0]];
         b.x+=b.invM*c[1]*li; b.y+=b.invM*c[2]*li; b.th+=b.invI*c[3]*li;
         // A vessel's length is a configuration coordinate like any other, so the
         // projection settles it too -- pinning both caps really does snap the
@@ -50,7 +55,7 @@ function projectPositions(iters, extra){
   }
 }
 // ---- §09.2 · conMaxC ----
-function conMaxC(con){ let m=0; for(const r of rowsFor(con)){ if(r.nh) continue; const a=Math.abs(r.C); if(a>m)m=a; } return m; }
+function conMaxC(con){ if(con._compiled) return 0; let m=0; for(const r of rowsFor(con)){ if(r.nh) continue; const a=Math.abs(r.C); if(a>m)m=a; } return m; }
 // ---- §09.3 · reactionOf ----
 function reactionOf(con){
   const l=con._lam; const h=sim.h; if(!l||!l.length) return null;

@@ -22,7 +22,11 @@ function energy(island){
     // a static or length-locked vessel -- they are properties of its geometry, not
     // of its motion, and a reservoir's contribution to the ledger is real.
     if(b.shape==='vessel'){ U+=gasU(b); WA+=vesselAtmPE(b); }
-    if(b.static)continue;
+    // A pinned vessel keeps its length as a kinetic channel even though its pose
+    // is fixed; a fully pinned body has none. Pinned coordinates carry no potential
+    // either -- they cannot move, so their height is a constant offset, and the
+    // ledger has always left it out.
+    if(b.static){ if(b.shape==='vessel') ke+=0.5*b.mu*b.vlen*b.vlen; continue; }
     // A vessel's length rate is a genuine kinetic channel with its own generalized
     // mass mu (geometry.js §05.2d); b.I is already the length-dependent I(len).
     ke+=0.5*b.mass*(b.vx*b.vx+b.vy*b.vy)+0.5*b.I*b.w*b.w;

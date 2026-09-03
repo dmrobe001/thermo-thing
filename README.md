@@ -22,6 +22,10 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
+Nothing in a scene is fixed by a checkbox. A body is held still by a rod welded at both ends to fixed ground; a vessel's length is held by a rod between two of its own caps. The engine still freezes those coordinates internally -- that is what makes a fixed body a wall that islands split at -- but it *derives* which ones from the constraints you placed, so deleting the rod frees the body. See `SCENE.md` §S.8.
+
+Any bench can be written out as a **scene file** -- a plain-text listing of every body with its state, every constraint, force element and interaction, plus the ambient and the camera. Export, import and download it from the scene-file card at the bottom of that same panel, or drop a scene file onto the canvas. The bundled examples *are* scene files, so clicking one shows you its source. The format is also the definitive statement of what a scene may contain: it can express exactly what the tools can build, and nothing else. See `SCENE.md`.
+
 **Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or Alt-drag -- pan · keys 1-9, b/f/g/h/k/v/c/q -- select tools.
 
 ## Project layout
@@ -34,5 +38,6 @@ AGENT.md                codebase navigation guide for developers and AI agents
 DEVELOPMENT.md          physics engine and constraint library design
 CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
 VESSEL.md               design note for the gas vessel (slots alongside DEVELOPMENT.md)
+SCENE.md                design note for the scene file format and the constructible set
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```

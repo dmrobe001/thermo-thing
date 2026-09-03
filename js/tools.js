@@ -668,7 +668,7 @@ function runToolClick(wx,wy){
     const vi=pickVessel(wx,wy);
     const vesselId = vi>=0 ? bodies[vi].id : null;
     if(vesselId===bodyId) return;                 // a body cannot be its own far side
-    interactions.push({id:uid++, type:tool, body:{id:bodyId}, vessel:{id:vesselId}, k:tool==='heat'?1000:1e-5, sel:false});
+    interactions.push(makeInteraction(tool, bodyId, vesselId));
     selectInteraction(interactions.length-1); saveState();
     return;
   }
@@ -698,12 +698,7 @@ function runToolClick(wx,wy){
     if(!pending){ const bi=pickBody(wx,wy); if(bi<0||bodies[bi].shape!=='circle')return; pending={id:bodies[bi].id, wp:[wx,wy]}; return; }
     const bi2=pickBodyExcept(wx,wy,pending.id); if(bi2<0||bodies[bi2].shape!=='circle')return;
     const A=bodies[bodyIndex(pending.id)], B=bodies[bi2];
-    if(tool==='belt'){
-      constraints.push({type:'belt', a:{id:A.id}, b:{id:B.id}, rA:A.r, rB:B.r, sense:1,
-                        restPhase:(A.r*A.th - B.r*B.th), sel:false});
-    } else {
-      constraints.push({type:'cvt', a:{id:A.id}, b:{id:B.id}, sel:false});
-    }
+    constraints.push(tool==='belt' ? makeBeltCon(A.id,B.id,1) : makeCvtCon(A.id,B.id));
     pending=null; saveState();
     return;
   }
@@ -713,7 +708,7 @@ function runToolClick(wx,wy){
       pending={id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp}; return; }
     const dx=wx-pending.wp[0], dy=wy-pending.wp[1]; const L=Math.hypot(dx,dy); if(L<0.15) return;
     const A=bodies[bodyIndex(pending.id)];
-    constraints.push({type:'knife', a:{id:pending.id, off:pending.off}, dir:R(-A.th, dx/L, dy/L), sel:false});
+    constraints.push(makeKnifeCon({id:pending.id, off:pending.off}, R(-A.th, dx/L, dy/L)));
     pending=null; saveState();
     return;
   }
@@ -729,15 +724,10 @@ function runToolClick(wx,wy){
     const bi=pickBody(wx,wy); if(bi<0) return;
     const S=bodies[bi]; if(S.shape!=='circle') return;     // a spool is always a disk
     if(pending.tid!=null && S.id===pending.tid) return;
-    const T = pending.tid!=null ? (()=>{ const tb=bodies[bodyIndex(pending.tid)]; const [x,y]=epWorldPt(tb,pending.toff); return [x,y]; })()
-                                : [pending.toff[0],pending.toff[1]];
-    const dvx=T[0]-S.x, dvy=T[1]-S.y; const d=Math.hypot(dvx,dvy); if(d<1e-6) return;
-    const Lfree = d > S.r ? Math.sqrt(d*d-S.r*S.r) : 0;
-    // Initialise anchor at the rim point closest to the tether (spoolAngle = 0).
-    const localAngle=Math.atan2(dvy,dvx)-S.th;
-    const cb0={type:'cable', tether:{id:pending.tid, off:pending.toff}, spool:{id:S.id},
-               localAngle, spoolAngle:0, Ltot:Lfree, sel:false};
-    cables.push(cb0);
+    const tether={id:pending.tid, off:pending.toff};
+    const [tx,ty]=epWorld(tether);
+    if(Math.hypot(tx-S.x,ty-S.y)<1e-6) return;   // degenerate: tether sits on the spool centre
+    cables.push(makeCableCon(tether, S.id));
     pending=null; saveState();
     return;
   }
@@ -754,7 +744,7 @@ function runToolClick(wx,wy){
     else { const s=snapAnchor(wx,wy); if(s && s.body.id!==Aep.id) Bep={id:s.body.id, off:offOf(s.body,pending.wp)}; }
     if(!Bep) return;   // nothing indicated -- keep the pivot and wait
     if(Aep.id!=null && Bep.id===Aep.id) return;
-    constraints.push({type:'pin', a:Aep, b:Bep, sel:false});
+    constraints.push(makePinCon(Aep, Bep));
     pending=null; saveState();
     return;
   }
@@ -770,7 +760,15 @@ function runToolClick(wx,wy){
     const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
     const Aep=pending.ep;
     if(Aep.id==null && Bep.id==null) return; // a rod needs at least one real target -- keep pending, wait for a better second click
-    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself -- ditto
+    // A rod from a body to ITSELF is degenerate on a rigid body -- the distance
+    // between two of its points is already constant, and the row's columns cancel
+    // to nothing. On a vessel it is the length lock (constraints.js §06.2b): the
+    // two ends ride different material planes, so what it holds is `len`. Allow it
+    // there, and only between planes that actually differ.
+    if(Aep.id!=null && Bep.id===Aep.id){
+      const b=bodies[bodyIndex(Aep.id)];
+      if(!b || b.shape!=='vessel' || Aep.off[1]===Bep.off[1]) return;
+    }
     pending=null;
     // A rod touching the background defaults to both ends welded -- a rigid
     // strut out of the wall -- since that's the anchoring use case; the user
@@ -878,6 +876,10 @@ cv.addEventListener('pointermove',e=>{
     if(G.static){
       // move the root kinematically; the island follows it
       const [gx,gy]=epWorldPt(G,drag.off); G.x+=mouseWorld[0]-gx; G.y+=mouseWorld[1]-gy;
+      // Its grounding rod's rows are compiled away, so nothing in the solver will
+      // pull the anchor back into agreement -- recapture it from the new pose
+      // instead, exactly as creating the rod would have (§06.2b).
+      recaptureGrounding(G);
       projectPositions(8);
     } else {
       // pull the grabbed point toward the cursor; the island articulates to comply.

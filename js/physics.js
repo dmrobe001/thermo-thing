@@ -58,7 +58,7 @@ const COUPLING_TABLES = [
 function computeIslands(){
   const N=bodies.length, WORLD=N;
   const p=new Array(N+1); for(let i=0;i<=N;i++) p[i]=i;
-  for(let i=0;i<N;i++) if(bodies[i].static) ufUnion(p,i,WORLD);
+  for(let i=0;i<N;i++) if(frozenSolid(bodies[i])) ufUnion(p,i,WORLD);
   for(const get of COUPLING_TABLES){ const [arr,fa,fb]=get();
     for(const el of arr){
       const ea=el[fa], eb=el[fb];
@@ -74,7 +74,9 @@ function computeIslands(){
   const islandOf=i=>{ const r=ufFind(p,i); let isl=byRoot.get(r);
     if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[]}; byRoot.set(r,isl); }
     return isl; };
-  for(let i=0;i<N;i++) if(!bodies[i].static) islandOf(i).bodyIdx.push(i);
+  // frozenSolid, not `static`: a vessel pinned at its mid-plane still has a live
+  // length, so it belongs to an island and its length energy is that island's.
+  for(let i=0;i<N;i++) if(!frozenSolid(bodies[i])) islandOf(i).bodyIdx.push(i);
   // Bucket each force element's PE bookkeeping into its (now-final) island
   // for §08.6's per-island energy target, keyed off whichever endpoint is a
   // real body (an element always has at least one).
@@ -429,6 +431,11 @@ function substep(h){
   // kept for the trapezoidal length update at §08.4 -- that update, paired with
   // §08.1b's discrete-gradient force, is what makes the gas exactly conservative.
   refreshVessels();
+  // Which coordinates this scene has pinned, and which constraints are therefore
+  // compiled away, follow from the constraints present -- recomputed here so an
+  // edit between substeps takes effect, and before computeIslands reads them
+  // (constraints.js §06.2b).
+  refreshFrozen();
   // The thermodynamic pass (§08.0b), at frozen geometry and ahead of everything
   // mechanical -- including the energy/momentum snapshot below, which is exactly what
   // spares §08.6 a heat channel of its own. Whatever an interaction pair moved is
@@ -495,8 +502,10 @@ function substep(h){
     const ux=dx/L, uy=dy/L;
     const Fmag=sp.k*(sp.restLen-L);
     const Fx=Fmag*ux, Fy=Fmag*uy;
+    // No skip for a frozen body: its inverse masses are already zero, so the pose
+    // terms integrate to nothing, while a pinned VESSEL's length column -- which is
+    // not frozen with its pose -- still has to get its share.
     for(const [idx,cx,cy,cw,cl] of mergeCols([A.velCols(Fx,Fy), B.velCols(-Fx,-Fy)])){
-      if(bodies[idx].static) continue;
       FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw; FL[idx]+=cl||0;
     }
   }
@@ -508,12 +517,16 @@ function substep(h){
     const hasA=rs.a.id!=null, hasB=rs.b.id!=null;
     const ia=hasA?bodyIndex(rs.a.id):-1, ib=hasB?bodyIndex(rs.b.id):-1;
     const tau=rs.k*(rs.restAngle-rotSpringRelAngle(rs));
-    if(hasA && !bodies[ia].static) TAU[ia]+=tau;
-    if(hasB && !bodies[ib].static) TAU[ib]-=tau;
+    if(hasA) TAU[ia]+=tau;
+    if(hasB) TAU[ib]-=tau;
   }
 
   for(let i=0;i<N;i++){ const b=bodies[i];
-    if(b.static){ b.vx=0;b.vy=0;b.w=0; if(b.shape==='vessel') b.vlen=0; continue; }
+    // Clearing a frozen pose's rates is bookkeeping, not dynamics -- the inverse
+    // masses below are zero, so nothing would move them anyway; this just keeps the
+    // inspector, the ledger and an exported scene from carrying a stale rate. There
+    // is no `continue`: a vessel frozen in pose still has a length to advance.
+    if(b.static){ b.vx=0;b.vy=0;b.w=0; }
     b.vx += h*b.invM*FX[i]; b.vy += h*b.invM*FY[i]; b.w += h*b.invI*TAU[i];
     // A vessel's length rate is advanced by §08.1b instead of a plain explicit step:
     // the gas force has to be solved implicitly over the step to be conservative,
@@ -633,9 +646,13 @@ function substep(h){
   // 3) assemble all constraint rows (+ active cable rows)
   const rows=[];
   for(let ci=0;ci<constraints.length;ci++){
-    const rs=rowsFor(constraints[ci]);
     constraints[ci]._rows=[];
-    for(const r of rs){ constraints[ci]._rows.push(rows.length); rows.push(r); }
+    // A compiled-away constraint contributes nothing: it is the thing that froze
+    // the coordinates it touches, so every column it would write is zero
+    // (constraints.js §06.2b). Skipping it keeps a row of zeros out of the Schur
+    // complement, where only the Tikhonov term would have kept it solvable.
+    if(constraints[ci]._compiled) continue;
+    for(const r of rowsFor(constraints[ci])){ constraints[ci]._rows.push(rows.length); rows.push(r); }
   }
   for(const cb of cables){
     if(cb._active){
@@ -669,7 +686,7 @@ function substep(h){
     const lam=solveLinear(Kt,rhs,m);
     // 4) apply impulses  v += M^-1 J^T lambda
     for(let i=0;i<m;i++){ const li=lam[i]; if(!li)continue;
-      for(const c of rows[i].cols){ const b=bodies[c[0]]; if(b.static)continue;
+      for(const c of rows[i].cols){ const b=bodies[c[0]];
         b.vx+=b.invM*c[1]*li; b.vy+=b.invM*c[2]*li; b.w+=b.invI*c[3]*li;
         if(c[4] && b.invMu) b.vlen+=b.invMu*c[4]*li; } }
     for(let ci=0;ci<constraints.length;ci++) constraints[ci]._lam=constraints[ci]._rows.map(ri=>lam[ri]);
@@ -684,7 +701,7 @@ function substep(h){
   //    averaging this substep's start and end rates. That is what completes §08.1b's
   //    exact work identity for the gas (and is the same correction §08.6 already
   //    applies to a free island's centre of mass, for the same reason).
-  for(const b of bodies){ if(b.static)continue;
+  for(const b of bodies){
     b.x+=h*b.vx; b.y+=h*b.vy; b.th+=h*b.w;
     if(b.shape==='vessel') b.len=Math.max(VESSEL_MIN_LEN, b.len+h*(b._vlen0+b.vlen)/2);
   }

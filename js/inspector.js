@@ -53,7 +53,9 @@ function renderVesselInspector(v){
       <div class="field"><span class="lab">total mass</span><span class="val" id="v_mass">${v.mass.toFixed(3)}</span></div>
       <div class="field"><span class="lab">inertia</span><span class="val" id="v_I">${v.I.toFixed(4)}</span></div>
       <div class="field"><span class="lab">length inertia</span><span class="val" id="v_mu">${v.mu.toFixed(4)}</span></div>
-      <label class="chk"><input type="checkbox" id="v_lock" ${v.lenLock?'checked':''}> length locked (reservoir)</label>
+      <div class="field"><span class="lab">pose</span><span class="val">${v.static?'pinned':'free'}</span></div>
+      <div class="field"><span class="lab">length</span><span class="val">${v.lenLock?'locked':'free'}</span></div>
+      <p class="muted" style="margin:8px 0 0">Both are read off the scene, not set here. A vessel's pose is pinned by a rod welded at both ends to its mid-wall (f&nbsp;=&nbsp;0) and to the background; its length is locked by a rod between two of its own material planes &mdash; a strut inside it. Delete that rod and the coordinate is free again.</p>
     </div>
     <div class="card"><div class="cardhead">gas</div>
       <div class="field"><span class="lab">pressure</span><input class="numin" type="number" step="1000" min="0" id="v_P" value="${P.toFixed(1)}"></div>
@@ -86,7 +88,6 @@ function renderVesselInspector(v){
   document.getElementById('v_len').onchange=commitGeom;
   document.getElementById('v_shell').onchange=()=>{ const m=num('v_shell');
     if(isFinite(m)&&m>0){ v.mShell=m; refreshVessel(v); } commit(); };
-  document.getElementById('v_lock').onchange=e=>{ v.lenLock=e.target.checked; refreshVessel(v); commit(); };
   document.getElementById('v_P').onchange=()=>{ const Pn=num('v_P');
     if(isFinite(Pn)&&Pn>=0) setVesselGasPT(v,Pn,gasT(v)||sim.bg.T); commit(); };
   document.getElementById('v_T').onchange=()=>{ const Tn=num('v_T');
@@ -98,7 +99,8 @@ function renderVesselInspector(v){
   document.getElementById('v_gam').onchange=()=>{ const g=num('v_gam');
     if(isFinite(g)&&g>1.001){ const Pk=gasP(v), Tk=gasT(v)||sim.bg.T; v.gas.gamma=g; setVesselGasPT(v,Pk,Tk); } commit(); };
   const commitPose=()=>{ const x=num('v_x'), y=num('v_y'), th=num('v_th');
-    if(isFinite(x)&&isFinite(y)&&isFinite(th)){ v.x=x; v.y=y; v.th=th; projectPositions(8); } commit(); };
+    if(isFinite(x)&&isFinite(y)&&isFinite(th)){ v.x=x; v.y=y; v.th=th;
+      recaptureGrounding(v); projectPositions(8); } commit(); };
   ['v_x','v_y','v_th'].forEach(id=>document.getElementById(id).onchange=commitPose);
   const commitVel=()=>{ const vx=num('v_vx'), vy=num('v_vy'), w=num('v_w'), vl=num('v_vlen');
     if(isFinite(vx)&&isFinite(vy)&&isFinite(w)&&isFinite(vl)){ v.vx=vx; v.vy=vy; v.w=w; v.vlen=vl; } commit(); };
@@ -129,6 +131,8 @@ function renderInspector(){
           : `<div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>`}
         <div class="field"><span class="lab">mass</span><input class="numin" type="number" step="0.05" min="0.001" id="f_mass" value="${b.mass.toFixed(3)}"></div>
         <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
+        <div class="field"><span class="lab">pose</span><span class="val">${b.static?'pinned':'free'}</span></div>
+        ${b.static?'<p class="muted" style="margin:8px 0 0">Pinned by a rod welded at both ends to fixed ground &mdash; not a property set here. Delete or unweld that rod and the body is free.</p>':''}
       </div>
       <div class="card"><div class="cardhead">state</div>
         <div class="field"><span class="lab">x</span><input class="numin" type="number" step="0.1" id="f_x" value="${b.x.toFixed(3)}"></div>
@@ -155,7 +159,8 @@ function renderInspector(){
       renderInspector(); saveState(); };
     const commitPose=()=>{ const x=parseFloat(document.getElementById('f_x').value),
         y=parseFloat(document.getElementById('f_y').value), th=parseFloat(document.getElementById('f_th').value);
-      if(isFinite(x)&&isFinite(y)&&isFinite(th)){ b.x=x; b.y=y; b.th=th; projectPositions(8); }
+      if(isFinite(x)&&isFinite(y)&&isFinite(th)){ b.x=x; b.y=y; b.th=th;
+        recaptureGrounding(b); projectPositions(8); }
       renderInspector(); saveState(); };
     document.getElementById('f_x').onchange=commitPose;
     document.getElementById('f_y').onchange=commitPose;
@@ -336,8 +341,10 @@ function renderInspector(){
       </div>
       <div class="card"><div class="cardhead">controls</div>
         <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/f/g/h/k/v/c/q tools</p>
-      </div>`;
+      </div>
+      ${sceneCardHTML()}`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
+    wireSceneCard();
   }
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----

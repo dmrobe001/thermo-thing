@@ -17,30 +17,37 @@ function worldPt(b,off){ const [rx,ry]=R(b.th,off[0],off[1]); return [b.x+rx, b.
 // three: the fourth is the inverse generalized mass of a vessel's length coordinate
 // (§05.2d), and is 0 for every ordinary body -- which is exactly what makes a stray
 // len column on a non-vessel row a no-op rather than a corruption.
-function invMdiag(b){ return b.static?[0,0,0,0]:[b.invM,b.invM,b.invI,b.invMu||0]; }
+// `static` and `lenLock` are already baked into these four by refreshInertia /
+// refreshVessel, and they are baked in SEPARATELY: a vessel pinned at its mid-plane
+// has a frozen pose and a live length, which is the whole reason this is a diagonal
+// of four and not a single flag. (It used to short-circuit all four on `static`,
+// which silently froze the length of any fixed vessel -- constraints.js §06.2b.)
+function invMdiag(b){ return [b.invM,b.invM,b.invI,b.invMu||0]; }
 // Is `b` drawn and hit-tested as an axis-aligned box in its own frame? True for a
 // plain rectangle body and for a vessel, which mirrors bore/len into hw/hh
 // (refreshVessel) precisely so the box-shaped geometry helpers below serve both.
 function rectLike(b){ return b.shape==='rect' || b.shape==='vessel'; }
 
 // ---- §05.2 · body factory (mass/inertia from radius) ----
-function makeBody(x,y,r,isStatic){
+// `static` starts false on every body and is never set by a caller: it is derived
+// from the constraints present, every substep (constraints.js §06.2b refreshFrozen).
+function makeBody(x,y,r){
   const mass = Math.PI*r*r;                 // density = 1
   const I = 0.5*mass*r*r;
   return { id:uid++, x, y, th:0, vx:0, vy:0, w:0,
-           mass, I, invM:isStatic?0:1/mass, invI:isStatic?0:1/I,
-           shape:'circle', r, static:!!isStatic, sel:false, kind:'body' };
+           mass, I, invM:1/mass, invI:1/I,
+           shape:'circle', r, static:false, sel:false, kind:'body' };
 }
 // Rectangle counterpart of makeBody: hw/hh are the half-width/half-height in
 // the body's local (unrotated) frame. Mass is the plate's area (density = 1,
 // same convention as the disk); I is the standard uniform-rectangle inertia
 // about its own centroid, m*(w^2+h^2)/12 with w=2hw, h=2hh.
-function makeRectBody(x,y,hw,hh,isStatic){
+function makeRectBody(x,y,hw,hh){
   const mass = 4*hw*hh;
   const I = mass*(hw*hw+hh*hh)/3;
   return { id:uid++, x, y, th:0, vx:0, vy:0, w:0,
-           mass, I, invM:isStatic?0:1/mass, invI:isStatic?0:1/I,
-           shape:'rect', hw, hh, static:!!isStatic, sel:false, kind:'body' };
+           mass, I, invM:1/mass, invI:1/I,
+           shape:'rect', hw, hh, static:false, sel:false, kind:'body' };
 }
 // Recompute I/invM/invI from the body's current mass and shape (uniform
 // disk: I = 0.5*mass*r^2; uniform rectangle: I = mass*(hw^2+hh^2)/3). mass
@@ -61,7 +68,6 @@ function setBodyMass(b,m){
   if(b.shape==='vessel'){ b.mShell=Math.max(m-b.gas.mass,1e-9); refreshVessel(b); return; }
   b.mass=m; refreshInertia(b);
 }
-
 // ---- §05.2d · gas vessels ----
 // A vessel is a body of fixed bore and variable length holding a gas. It carries a
 // FOURTH configuration coordinate, `len` (rate `vlen`), on top of the usual
@@ -162,7 +168,11 @@ function refreshVessel(v){
   v.I     = v.Alat + v.mu*v.len*v.len;       // = mass*(bore^2 + len^2)/12
   v.invM  = v.static?0:1/v.mass;
   v.invI  = v.static?0:1/v.I;
-  v.invMu = (v.static||v.lenLock)?0:1/v.mu;
+  // NOT `static || lenLock`. A fixed pose says nothing about the length: a vessel
+  // welded to the world at its mid-plane has three coordinates pinned and a fourth
+  // entirely free, which is exactly the heat pair's working vessel. Only a length
+  // lock -- a strut inside the vessel (constraints.js §06.2b) -- freezes this one.
+  v.invMu = v.lenLock?0:1/v.mu;
   v.hw    = v.bore/2; v.hh = v.len/2;        // mirrors for the rect-shaped helpers
 }
 function refreshVessels(){ for(const b of bodies) if(b.shape==='vessel') refreshVessel(b); }
@@ -188,13 +198,13 @@ function setVesselGasMT(v,m,T){
 }
 // Two opposite corners, exactly as makeRectBody -- the placement tool's own model.
 // bore is the width, len the height, so the caps face up and down at th = 0.
-function makeVessel(x,y,bore,len,isStatic){
+function makeVessel(x,y,bore,len){
   const v = { id:uid++, kind:'body', shape:'vessel',
               x, y, th:0, len,
               vx:0, vy:0, w:0, vlen:0,
               bore, mShell:VESSEL_DENSITY*bore*len*VESSEL_DEPTH,
               gas:{ mass:0, gamma:GAS_AIR.gamma, Rs:GAS_AIR.Rs, kap:0 },
-              lenLock:false, static:!!isStatic, sel:false };
+              lenLock:false, static:false, sel:false };
   setVesselGasPT(v, sim.bg.P, sim.bg.T);     // starts balanced against the atmosphere
   return v;
 }
