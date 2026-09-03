@@ -97,8 +97,9 @@ The rod and the slot are conceptual complements -- distance-along-a-line vs. dri
 | No-side-slip wheel | contact-point velocity *across* heading is zero | 1 |
 | Rolling wheel | across-heading zero **and** along-heading = r·spin | 2 |
 | Variable-ratio transmission (disk-on-disk) | tangential speeds equal at a contact point whose radius is itself a coordinate | 1 |
+| Rolling / gear (rack-on-pinion) | a body's translation along a fixed traction line matches a circular "gear"'s tangential rim speed at the live perpendicular radius | 1 |
 
-These three are the same primitive -- "tangential velocities match at a parameterized contact point" -- with different features attached. Building the variable-radius contact once yields the rolling wheel, the ball-and-disk integrator, and the continuously variable transmission as configurations of one object. A gear whose ratio depends on configuration *is* nonholonomic; this is why the CVT lives in this group and not with the fixed-ratio gear above.
+These are the same primitive -- "tangential velocities match at a parameterized contact point" -- with different features attached. Building the variable-radius contact once yields the rolling wheel, the ball-and-disk integrator, and the continuously variable transmission as configurations of one object. A gear whose ratio depends on configuration *is* nonholonomic; this is why the CVT lives in this group and not with the fixed-ratio gear above. The rolling/gear coupling (`type:'gear'`, `js/constraints.js` §06.2/§06.5 `gearFrame`) is the straight-line member of the same family: instead of a second rim, the "ratio" is the live perpendicular distance from the gear's centre to a traction line carried by the first body's control point -- a point defined to translate with its body but never rotate with it, so the row needs no angular term from that side at all, only the gear's own rotation and both bodies' translations.
 
 ### 4.3 Unilateral (inequality; LCP path)
 

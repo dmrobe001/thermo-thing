@@ -121,6 +121,33 @@ slot 2 -- bg(-10,2.6) lock=B restAngB=0
 cvt 1 -- 2
 `,
 
+gear: `scene 2
+# Rack-and-pinion, via the rolling/gear constraint (constraints.js §06.2, gearFrame).
+# The cart's control point sits at its own centre (off is exactly (0,0), so it
+# never visibly detaches as the cart translates -- a body's own centre is
+# trivially unaffected by the point's own "never rotates with its body" rule
+# anyway), and the traction line is frozen horizontal (angle=0). The gear's
+# rotation is coupled to the cart's speed along that line at the LIVE traction
+# radius -- the perpendicular distance from the gear's centre to the line, here
+# 1.0, deliberately different from the gear's own drawn radius (0.4): the
+# traction radius is a property of the geometry, not of the gear body itself.
+#
+# The gear is held in place exactly as the wheel integrator's disk is: a short
+# rod to a fixed background point, welded only at that end, pins its centre
+# while leaving it free to spin (see the integrator example's own comment).
+sim gravity=off
+cam x=-1 y=2 scale=64
+
+# bodies
+body 1 x=-1 y=2.6 r=0.3 vx=1.4
+body 2 x=-1 y=1.6 r=0.4
+
+# constraints
+slot 1 -- bg(-10,2.6) lock=B restAngB=0
+rod bg(-1.5,1.6) -- 2 len=0.5 weld=A restAngA=-3.14159265359
+gear 1 -- 2 angle=0
+`,
+
 cable: `scene 2
 # A mass hanging from a cable wound on a fixed spool. Tension only: the cable goes
 # slack rather than pushing, and the wrap point tracks around the rim as it winds.

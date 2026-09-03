@@ -440,6 +440,7 @@ function drawConstraint(con){
     jointDot(wax,way,col);
     return;
   }
+  if(con.type==='gear'){ drawGearConstraint(con,col,sel); return; }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
   if(con.type==='belt'){
@@ -467,6 +468,23 @@ function drawConstraint(con){
     drawRim(A.x,A.y,A.r,col,A.th);                      // wheel: fixed perimeter
     drawRim(B.x,B.y,rB,col,B.th);                       // disk: current contact radius
   }
+}
+// A rolling/gear coupling (constraints.js §06.2/§06.5, gearFrame): the traction
+// line as a dashed line spanning the viewport (same "infinite rail" motif as
+// slot's, render.js above), and a dashed circle at the gear's live traction
+// radius, its dash phase tied to the gear's own spin -- exactly like drawRim
+// already does for a CVT's rims, so the gear's rotation reads the same way here.
+function drawGearConstraint(con,col,sel){
+  const f=gearFrame(con); if(!f.B) return;
+  const [vx0,vy0]=s2w(0,0), [vx1,vy1]=s2w(W(),H());
+  const span=Math.hypot(vx1-vx0,vy1-vy0);
+  ctx.strokeStyle=col; ctx.lineWidth=sel?2:1.5; ctx.setLineDash([8,6]);
+  const [x1,y1]=w2s(f.px-f.ux*span, f.py-f.uy*span);
+  const [x2,y2]=w2s(f.px+f.ux*span, f.py+f.uy*span);
+  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+  ctx.setLineDash([]);
+  drawRim(f.B.x,f.B.y,Math.abs(f.R),col,f.B.th);
+  drawEndMarker(f.px,f.py,false,!f.hasA,col);
 }
 // Dotted circle whose dash phase is tied to `ang` (the owning body's rotation),
 // so the pattern visibly spins with the body rather than staying screen-fixed.

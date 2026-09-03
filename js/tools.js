@@ -22,6 +22,7 @@ const TOOLS=[
   {id:'belt',key:'b',tip:'Belt (b)',svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
   {id:'knife',key:'k',tip:'Knife-edge wheel (k)',svg:'<path d="M4 16h16"/><path d="M12 16l3-9 3 9"/><circle cx="8" cy="16" r="1.5"/>'},
   {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
+  {id:'gear',key:'t',tip:'Rolling / gear constraint (t)',svg:'<circle cx="12" cy="13" r="6"/><path d="M2 19h20"/>'},
   {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
   {id:'spring',key:'8',tip:'Linear spring (8)',svg:'<circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="6" r="2.4"/><path d="M7 16.5l2-3 3 6 3-6 2 3"/>'},
   {id:'rotspring',key:'9',tip:'Rotational spring (9)',svg:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 11a1 1 0 1 0 1 1"/>'},
@@ -32,7 +33,7 @@ const TOOLS=[
 let tool='select';
 const rail=document.getElementById('rail');
 TOOLS.forEach((t,i)=>{
-  if(i===1||i===4||i===11||i===13||i===15){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
+  if(i===1||i===4||i===12||i===14||i===16){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
   const el=document.createElement('button');el.className='tool';el.dataset.id=t.id;
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
@@ -78,6 +79,15 @@ function constraintHit(con,wx,wy){
   if(con.type==='pin'){
     const [ax,ay]=epWorld(con.a);
     return (wx-ax)**2+(wy-ay)**2<=tol*tol;
+  }
+  if(con.type==='gear'){
+    // Either the traction line (infinite, like slot's rail) or the dashed
+    // circle at the live traction radius around the gear -- whichever the
+    // point actually sits near.
+    const f=gearFrame(con); if(!f.B) return false;
+    if(Math.abs(f.nx*(wx-f.px)+f.ny*(wy-f.py))<=tol) return true;
+    const d=Math.hypot(wx-f.B.x,wy-f.B.y);
+    return Math.abs(d-Math.abs(f.R))<=tol;
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return false;
   const [ax,ay]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
@@ -203,6 +213,15 @@ function conHandles(con){
     if(con.sel){ const [rx,ry]=springRestHandlePos(con); handles.push({which:'restLen',x:rx,y:ry}); }
     return handles;
   }
+  if(con.type==='gear'){
+    // The control point (draggable, re-bindable to another body or the
+    // background, like rod/slot's endpoints) plus a direction handle that
+    // rotates the frozen traction-line angle -- the same anchor/dir pair
+    // knife's contact point and heading use, just against a fixed-angle line
+    // instead of a body-local heading.
+    const f=gearFrame(con);
+    return [ {which:'point',x:f.px,y:f.py}, {which:'dir',x:f.px+f.ux*0.7,y:f.py+f.uy*0.7} ];
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
   if(con.type==='pin'){ const [x,y]=epWorldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
   if(con.type==='knife'){ const [px,py]=epWorldPt(A,con.a.off);
@@ -302,6 +321,26 @@ function applyHandle(ad, wx, wy){
     if(ad.which==='anchor'){ const s=snapAnchor(wx,wy,[A.id]); lastSnap=s; const P=s?s.wp:[wx,wy]; con.a.off=offOf(A,P); }
     else if(ad.which==='dir'){ const [px,py]=epWorldPt(A,con.a.off); const dx=wx-px,dy=wy-py; const L=Math.hypot(dx,dy)||1;
       lastSnap=null; con.dir=R(-A.th, dx/L, dy/L); }
+  }
+  else if(con.type==='gear'){
+    if(ad.which==='point'){
+      // Snap to a body if one is under/near the cursor (its own capture, like
+      // rod/slot); otherwise re-bind to the background at the raw world point.
+      // The stored offset is a WORLD-frame delta from the body's CURRENT
+      // position -- never rotated back out -- so it stays put as the body
+      // translates but is deliberately left behind if the body spins
+      // (gearFrame/makeGearCon, constraints.js).
+      const s=snapAnchor(wx,wy); lastSnap=s;
+      const bi = s ? bodyIndex(s.body.id) : pickBody(wx,wy);
+      if(bi>=0){ const b=bodies[bi]; con.a.id=b.id; con.a.off=[wx-b.x, wy-b.y]; }
+      else { con.a.id=null; con.a.off=[wx,wy]; }
+    } else if(ad.which==='dir'){
+      // Rotates the frozen traction-line angle -- the one thing that makes it
+      // "non-rotating" is that nothing else ever touches con.angle afterward.
+      lastSnap=null;
+      const f=gearFrame(con);
+      con.angle=Math.atan2(wy-f.py, wx-f.px);
+    }
   }
   else if(con.type==='spring'){
     if(ad.which==='restLen'){
@@ -503,6 +542,14 @@ function updateHover(wx,wy){
     const bi=pickBody(wx,wy); if(bi>=0 && bodies[bi].shape==='circle') hover=bodies[bi];
     return;
   }
+  if(tool==='gear'){
+    // FIRST pick is the control point -- any body, or the background, exactly
+    // like slot/pin/rod (anchorTarget). SECOND pick is the gear, and -- like
+    // belt/cvt above -- only a circle is a valid target.
+    if(!pending){ const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; } return; }
+    const bi=pickBody(wx,wy); if(bi>=0 && bodies[bi].shape==='circle' && bodies[bi].id!==pending.id) hover=bodies[bi];
+    return;
+  }
   if(tool==='knife'||tool==='rotspring'){
     const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
     return;
@@ -699,6 +746,24 @@ function runToolClick(wx,wy){
     const bi2=pickBodyExcept(wx,wy,pending.id); if(bi2<0||bodies[bi2].shape!=='circle')return;
     const A=bodies[bodyIndex(pending.id)], B=bodies[bi2];
     constraints.push(tool==='belt' ? makeBeltCon(A.id,B.id,1) : makeCvtCon(A.id,B.id));
+    pending=null; saveState();
+    return;
+  }
+  if(tool==='gear'){
+    // FIRST click: the control point, on any body or the background -- exactly
+    // like slot/pin/rod's first pick. off is stored as a WORLD-frame delta from
+    // the body's centre at this instant (never a body-local, rotating offset --
+    // see makeGearCon, constraints.js), or the raw world point when background-
+    // anchored, mirroring the null-id convention every other endpoint uses.
+    if(!pending){ const t=anchorTarget(wx,wy);
+      pending = t ? {id:t.body.id, off:[wx-t.body.x, wy-t.body.y], wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+      return; }
+    // SECOND click: the gear -- must be a circle, and not the same body as the
+    // control point (a self-referencing traction line is degenerate: A's own
+    // translation and the gear's own centre would cancel in the row).
+    const bi=pickBody(wx,wy); if(bi<0||bodies[bi].shape!=='circle') return;
+    const B=bodies[bi]; if(pending.id!=null && B.id===pending.id) return;
+    constraints.push(makeGearCon(pending.id, pending.off, B.id));
     pending=null; saveState();
     return;
   }

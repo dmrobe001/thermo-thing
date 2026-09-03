@@ -129,6 +129,7 @@ has('flowpair', /^vessel \d+ .* P=243180 /m,         'the reservoir is at 2.4 at
 has('spinvessel',/^sim gravity=off/m,                'gravity is off');
 has('spinvessel',/^vessel \d+ .* w=9$/m,              'the initial spin');
 has('crank',    /^slot \d+ -- bg\([^)]*\) lock=B/m,  'the one-end-prismatic rail');
+has('gear',     /^gear \d+ -- \d+ angle=0$/m,         'the gear constraint, with its frozen traction-line angle');
 has('skate',    /^knife \d+@\(0\.42,0\) dir=\(1,0\)$/m,'the knife heading');
 has('cable',    /^cable \d+ -- \d+ Ltot=\S+ localAngle=\S+$/m,'the cable, with its captured length');
 has('cable',    /^rod bg\(0,5\.1\) -- 1 .*weld=both/m,  'the spool is grounded by a rod');

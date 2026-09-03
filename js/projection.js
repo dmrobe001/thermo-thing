@@ -63,6 +63,11 @@ function reactionOf(con){
   if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
     return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }
+  if(con.type==='gear'){ const f=gearFrame(con); if(!f.B) return null;
+    // The contact point: the foot of the perpendicular from the gear's centre
+    // to the traction line, same Q the row itself (constraints.js §06.5) acts
+    // through -- and the force is along the line, exactly like the CVT's.
+    return {x:f.B.x-f.R*f.nx, y:f.B.y-f.R*f.ny, fx:f.ux*(l[0]/h), fy:f.uy*(l[0]/h)}; }
   if(con.type==='rod'){
     const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;

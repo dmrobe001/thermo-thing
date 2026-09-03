@@ -70,10 +70,10 @@ does not list. Two rules follow, and they are what keep the bench honest:
 
 - **Every kind of scene object has exactly one constructor** (`makeBody`,
   `makeRectBody`, `makeVessel` in §05.2; `makeRodCon`, `makeSlotCon`, `makePinCon`,
-  `makeBeltCon`, `makeCvtCon`, `makeKnifeCon`, `makeCableCon`, `makeSpringCon`,
-  `makeRotSpringCon` in §06.1/§06.2; `makeInteraction` in §17.1), called from the
-  tool dispatch (§13.5) and the scene reader (§17.4) and nowhere else. Do not build
-  one from an object literal.
+  `makeBeltCon`, `makeCvtCon`, `makeGearCon`, `makeKnifeCon`, `makeCableCon`,
+  `makeSpringCon`, `makeRotSpringCon` in §06.1/§06.2; `makeInteraction` in §17.1),
+  called from the tool dispatch (§13.5) and the scene reader (§17.4) and nowhere
+  else. Do not build one from an object literal.
 - **A new field on a scene object needs a row in `SCENE_SCHEMA`**, classified as
   authored (has a default, written when it differs), captured (`always:true`,
   written every time, because the pose does not imply it), or derived (absent from

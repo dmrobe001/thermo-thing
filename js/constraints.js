@@ -188,6 +188,45 @@ function makeBeltCon(aId,bId,sense){
 // is read from the live geometry every step (§06.5).
 function makeCvtCon(aId,bId){ return {type:'cvt', a:{id:aId}, b:{id:bId}, sel:false}; }
 
+// A rolling/gear coupling: body A carries a "traction line" through a control
+// point that TRANSLATES with A but never rotates with it -- fixed in the world at
+// whatever angle A had (or, for a background-anchored point, world +x) when the
+// constraint was made, and frozen from then on regardless of how A itself spins.
+// Body B (the "gear") is always a circle; the traction radius is its centre's live
+// perpendicular distance to the line (gearFrame below), so the row couples A's own
+// translation along the line to B's rotation exactly as a rack couples to a pinion
+// -- with the ratio (the traction radius) free to change as B slides along the
+// line, the same "coordinate as ratio" move the CVT's contact makes. Because the
+// control point does not rotate with A, A's own angular velocity never enters the
+// row -- only its translation does (see gearFrame / rowsFor's 'gear' branch,
+// §06.5). `off` holds a WORLD-frame offset from A's centre when aId is real (never
+// rotated back out), or the absolute world point directly when aId===null,
+// mirroring the null-id background convention every other endpoint in this file
+// uses -- except this one is deliberately never resolved through epFrame/worldPt,
+// since those would rotate it with the body.
+function makeGearCon(aId,aOff,bId){
+  const angle = aId!=null ? bodies[bodyIndex(aId)].th : 0;
+  return {type:'gear', a:{id:aId, off:aOff.slice()}, b:{id:bId}, angle, sel:false};
+}
+// Traction-line geometry for the gear/rack row above. P (px,py) is the control
+// point; (ux,uy) is the line's own fixed direction (con.angle, never updated from
+// a live body angle); R is the gear's SIGNED perpendicular distance from the line,
+// positive on the +n side -- signed, not clamped, so the row below stays correct
+// however the gear's centre crosses the line.
+function gearFrame(con){
+  const hasA = con.a.id!=null;
+  const ia = hasA ? bodyIndex(con.a.id) : -1;
+  const A = hasA ? bodies[ia] : null;
+  const px = hasA ? A.x+con.a.off[0] : con.a.off[0];
+  const py = hasA ? A.y+con.a.off[1] : con.a.off[1];
+  const ux = Math.cos(con.angle), uy = Math.sin(con.angle);
+  const nx = -uy, ny = ux;
+  const ib = bodyIndex(con.b.id);
+  const B = bodies[ib];
+  const R = B ? (B.x-px)*nx + (B.y-py)*ny : 0;
+  return {hasA, ia, A, ib, B, px, py, ux, uy, nx, ny, R};
+}
+
 // A knife edge forbids sideways motion of one body-local point. `dir` is the
 // heading in the body's OWN frame -- callers holding a world direction rotate it in
 // by R(-b.th, ...) first, as the tool does.
@@ -520,6 +559,9 @@ function cableCurrentLength(cb, f){
 //   belt           1   fixed phase ratio of two rim angles (holonomic)
 //   knife          1   no-side-slip contact (NONHOLONOMIC, nh:true)
 //   cvt            1   tangential match at a variable-radius contact (NONHOLONOMIC)
+//   gear           1   tangential match between a body's translation along a fixed
+//                      traction line and a circular "gear"'s rotation at the live
+//                      perpendicular radius (NONHOLONOMIC)
 // (Cable rows are built inline in §08.2, not here, because they are unilateral.)
 function rowsFor(con){
   // Each row carries the raw position error C (the value to drive to zero). The
@@ -642,6 +684,22 @@ function rowsFor(con){
     const ux=rvx/d, uy=rvy/d; const tx=-uy, ty=ux;   // tangent at contact
     const rA=A.r, armB=d-rA;
     return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true }];
+  }
+  if(con.type==='gear'){
+    // d/dt(A's control point . u) = vA.u -- no wA term, because the point is
+    // defined not to rotate with A (gearFrame above). The gear's tangential
+    // material speed at the foot of the perpendicular from its centre to the
+    // line is vB.u + wB*R, R the signed traction radius -- the same derivation
+    // as the CVT's contact row, just against a straight line instead of a second
+    // rim. R is a live coordinate (it changes as either body moves), so this is
+    // NONHOLONOMIC exactly like the CVT's.
+    const f=gearFrame(con);
+    if(!f.B) return [];
+    const cols=mergeCols([
+      f.hasA ? [[f.ia, f.ux, f.uy, 0]] : [],
+      [[f.ib, -f.ux, -f.uy, -f.R]]
+    ]);
+    return [{ cols, C:0, nh:true }];
   }
   return [];
 }
