@@ -183,9 +183,9 @@ function renderInspector(){
     const isRod=c.type==='rod', isSlot=c.type==='slot';
     const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
                 : ({pin:'Pin · hinge',rod:'Rigid rod',
-                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
+                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',gear:'Rolling / gear'})[c.type];
     const showTorque = (isRod && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
-    const isBelt=c.type==='belt', isCvt=c.type==='cvt';
+    const isBelt=c.type==='belt', isCvt=c.type==='cvt', isGear=c.type==='gear';
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
@@ -193,12 +193,14 @@ function renderInspector(){
         <div class="field"><span class="lab">wrap rB</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rB" value="${c.rB.toFixed(3)}"></div>
         <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
+    if(isGear) extra=`<div class="field"><span class="lab">traction radius</span><span class="val" id="f_gearR">--</span></div>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
+               : isGear ? 'Nonholonomic: the control point translates with its body but never rotates with it, so the traction line stays at a fixed angle; drag its handles to move or re-aim it. The gear\u2019s rotation is coupled to the control point\u2019s speed along the line, at the live traction radius.'
                : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
                : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
@@ -331,6 +333,7 @@ function renderInspector(){
           <button data-ex="crank">Slider-crank mechanism</button>
           <button data-ex="skate">Skate (knife-edge)</button>
           <button data-ex="integrator">Wheel integrator (CVT)</button>
+          <button data-ex="gear">Rack and pinion (gear)</button>
           <button data-ex="cable">Cable ratchet</button>
           <button data-ex="gasspring">Gas spring (vessel on ground)</button>
           <button data-ex="spinvessel">Spinning vessel (free)</button>
@@ -384,7 +387,9 @@ function updateInspectorLive(){
         const t=document.getElementById('f_rt'); if(t&&r.tau!==undefined) t.textContent=r.tau.toFixed(2); } }
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
-      if(er) er.textContent=((d-A.r)/A.r).toFixed(2); } }
+      if(er) er.textContent=((d-A.r)/A.r).toFixed(2); }
+    if(c.type==='gear'){ const f=gearFrame(c); const er=document.getElementById('f_gearR');
+      if(er && f.B) er.textContent=Math.abs(f.R).toFixed(3); } }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);

@@ -193,6 +193,20 @@ const SCENE_SCHEMA = [
     fields:{},
     build:(q,e)=>makeCvtCon(e.a.id, e.b.id) },
 
+  // 'a' is written with the ordinary endpoint syntax (id, id@(ox,oy) or bg(x,y)),
+  // but unlike every other 'ep' end its offset is a WORLD-frame delta, never a
+  // body-local one -- see makeGearCon/gearFrame (constraints.js §06.2), which is
+  // also why it round-trips through parseEp/fmtEp unchanged: the syntax is
+  // identical, only the physical meaning differs. angle is CAPTURED (the frozen
+  // traction-line direction), not derived, so -- like a rod weld's restAngA -- it
+  // is always written and never recomputed from the live pose.
+  { kind:'gear', list:'constraints', match:c=>c.type==='gear',
+    ends:[['a','ep'], ['b','id']],
+    fields:{
+      angle:{t:'num', always:true, get:c=>c.angle, set:(c,v)=>{c.angle=v;}},
+    },
+    build:(q,e)=>makeGearCon(e.a.id, e.a.off, e.b.id) },
+
   { kind:'knife', list:'constraints', match:c=>c.type==='knife',
     ends:[['a','ep-body']],
     fields:{ dir:{t:'vec2', always:true, get:c=>c.dir} },
