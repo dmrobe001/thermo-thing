@@ -14,6 +14,7 @@
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
 //    §06.2  the remaining constraint makers (pin, belt, cvt, knife, cable)
+//    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen)
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -248,6 +249,97 @@ function epFrame(ep){
   return { wx, wy, idx, th:b.th,
     velCols:(dirx,diry)=>[[idx, dirx, diry, dirx*(-ry)+diry*rx]],
     angCols:()=>[[idx,0,0,1]] };
+}
+
+// ---- §06.2b · derived freezing (which coordinates a scene has pinned) ----
+// `static` and `lenLock` are not properties a player sets. They are DERIVED, every
+// substep, from the constraints actually present -- so a coordinate is frozen only
+// when something in the scene says it is, and the thing that says so is a
+// first-class object the player can see, select, and delete.
+//
+// Freezing is an optimization, not the physics: the solver already holds a
+// constrained body exactly. What it buys is a coordinate removed from the system
+// (and its now-redundant constraint compiled away, `_compiled` below) plus the
+// island split that makes a fixed body a wall between what it touches.
+//
+// TWO patterns are recognized, both structural -- they depend on what is attached,
+// never on the current configuration, so nothing freezes or thaws as a mechanism
+// swings through a pose. Other arrangements do pin a body (three pin-ended rods to
+// the ground, say); they are simply not optimized, and the solver handles them
+// exactly as it always has. Recognizing those in general means a rank computation on
+// the Jacobian every step, which would be both expensive and configuration-dependent
+// -- the very thing this avoids. See SCENE.md §S.8.
+
+// A double-welded rod pins its far end's frame completely: distance, direction and
+// orientation are all held. So it grounds a body whose other end is the background,
+// or a body already grounded -- applied to a fixed point, that is what "static"
+// means, and it is the only thing that makes it so.
+//
+// The exception is a vessel anchored anywhere but its MID-PLANE. A vessel's fourth
+// coordinate moves its own material: a point at material fraction f sits f*len from
+// the centre (§05.2c), so pinning a cap fixes the cap, not the centre -- the centre
+// still rides the length. Only f = 0, whose world position has no length dependence,
+// pins the body's pose. That is the difference between the gas spring (welded at its
+// cap, f = -1/2, and genuinely free to move as it breathes) and the heat pair's
+// working vessel (welded at its mid-wall, f = 0, pose fixed and length free).
+function rodGrounds(con){
+  if(con.type!=='rod' || !con.weldA || !con.weldB) return null;
+  const held = ep => { if(ep.id==null) return true;
+                       const b=bodies[bodyIndex(ep.id)]; return !!(b && b.static); };
+  const far = held(con.a) ? con.b : held(con.b) ? con.a : null;
+  if(!far || far.id==null) return null;
+  const b = bodies[bodyIndex(far.id)]; if(!b) return null;
+  if(b.shape==='vessel' && far.off[1]!==0) return null;      // not the mid-plane
+  return b;
+}
+// A rod with BOTH ends on the same vessel, at different material fractions, holds
+// the distance between two points that move only with the length -- so it holds the
+// length, and nothing else. Its pose columns cancel exactly (mergeCols sums them),
+// which is also why the same rod on a rigid body is degenerate and the tool refuses
+// it (§13.5). This is what a reservoir is: a vessel with a strut inside it.
+function rodLocksLength(con){
+  if(con.type!=='rod' || con.a.id==null || con.a.id!==con.b.id) return null;
+  const v=bodies[bodyIndex(con.a.id)];
+  if(!v || v.shape!=='vessel' || con.a.off[1]===con.b.off[1]) return null;
+  return v;
+}
+// Recompute every body's frozen flags and every constraint's `_compiled` mark.
+// Iterated to a fixed point because grounding is transitive: a body double-welded to
+// a body that is itself grounded is grounded too.
+function refreshFrozen(){
+  for(const b of bodies){ b.static=false; b.lenLock=false; }
+  for(let pass=0; pass<=bodies.length; pass++){
+    let changed=false;
+    for(const con of constraints){
+      const g=rodGrounds(con);    if(g && !g.static){ g.static=true; changed=true; }
+      const v=rodLocksLength(con); if(v && !v.lenLock){ v.lenLock=true; changed=true; }
+    }
+    if(!changed) break;
+  }
+  // A constraint that does the freezing has nothing left to solve: every column it
+  // would write lands on a coordinate that no longer moves. Left in, it would be a
+  // row of zeros that only the Tikhonov term keeps solvable, reporting a reaction
+  // read off the regularizer rather than off the mechanism. Compile it away instead.
+  for(const con of constraints) con._compiled = !!(rodGrounds(con) || rodLocksLength(con));
+  for(const b of bodies) refreshInertia(b);   // the inverse masses follow the flags
+}
+// A body whose EVERY coordinate is frozen is a wall: nothing passes through it, so
+// islands may split there (§08.0). A vessel pinned at its mid-plane is not one --
+// its length is still a live channel between whatever is attached to it.
+const frozenSolid = b => b.static && (b.shape!=='vessel' || b.lenLock);
+
+// After a frozen body is moved by hand -- dragged, or its pose typed into the
+// inspector -- nothing in the solver will pull its anchors back into agreement,
+// because the rows that would have done so are compiled away. Recapture them from
+// the new pose instead, exactly as creating the rod would have.
+function recaptureGrounding(b){
+  for(const con of constraints){
+    if(rodGrounds(con)!==b && rodLocksLength(con)!==b) continue;
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+    con.len=Math.hypot(wax-wbx,way-wby);
+    if(con.weldA) captureRestAngle(con,'A');
+    if(con.weldB) captureRestAngle(con,'B');
+  }
 }
 
 // ---- §06.3 · cableFrame ----

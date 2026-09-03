@@ -99,9 +99,12 @@ function drawVessel(b){
   const path=()=>{ ctx.beginPath(); c.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); };
   path();
   ctx.fillStyle=gasTint(gasT(b)); ctx.globalAlpha=0.5; ctx.fill(); ctx.globalAlpha=1;
-  if(b.static||b.lenLock){
-    // Same hatch a static body carries, marking a length-locked vessel (a reservoir)
-    // as something the gas cannot move.
+  if(b.lenLock){
+    // Same hatch a pinned body carries, marking a length-locked vessel (a reservoir)
+    // as something the gas cannot move. `lenLock` alone, not `static || lenLock`:
+    // the two are independent now (constraints.js §06.2b), and a vessel pinned in
+    // POSE with a free length is the opposite of what this hatch means -- its whole
+    // point is that the gas moves it.
     ctx.save(); path(); ctx.clip();
     const xs=c.map(p=>p[0]), ys=c.map(p=>p[1]);
     const x0=Math.min(...xs), y0=Math.min(...ys), span=(Math.max(...xs)-x0)+(Math.max(...ys)-y0);

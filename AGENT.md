@@ -86,9 +86,15 @@ does not list. Two rules follow, and they are what keep the bench honest:
   the file -- but they sit together so adding a coordinate is one edit. The
   validator's Reset check fails if you skip this.
 
-Only two coordinates in the engine are frozen by zeroing an inverse mass rather
-than by a constraint object: a body's `static` and a vessel's `lenLock`. Both are
-deliberate and both are in the ledger. Nothing new should join them; see `SCENE.md`.
+**No coordinate is frozen by assertion.** `static` and `lenLock` still exist, but as
+*derived* fields recomputed every substep from the constraints present
+(`constraints.js` §06.2b `refreshFrozen`): a body is pinned by a rod welded at both
+ends to fixed ground (or to an already-pinned body), and a vessel's length is locked
+by a rod between two of its own material planes. Zeroing an inverse mass is an
+optimization -- it removes the coordinate from the system and lets islands split
+there -- and the constraint that earned it is compiled away (`_compiled`) rather than
+left as a row of zeros. Nothing may set either flag: not a tool, not the inspector,
+not a scene file. See `SCENE.md` §S.8.
 
 ## Adding or moving code
 

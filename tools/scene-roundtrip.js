@@ -103,7 +103,7 @@ console.log('\n2. every bundled example is a canonical scene file');
 // form and the checked-in text is not regenerated. Stripped of its comments and
 // blank lines, each one must be exactly the export. Run with --canon <name> to
 // print the canonical text of one, which is how you regenerate after a change.
-const strip = t => t.split('\n').filter(l=>l.trim() && !l.trim().startsWith('#')).join('\n')+'\n';
+const strip = run('sceneStrip');   // the reader's own definition, §17.5
 const canonArg = process.argv.indexOf('--canon');
 if(canonArg>=0){
   const name = process.argv[canonArg+1];
@@ -120,8 +120,8 @@ for(const ex of EXAMPLES){
 console.log('\n3. the file really carries the scene (spot checks on what it says)');
 const has=(ex,re,what)=>ok(`${ex.padEnd(12)}${what}`, re.test(texts[ex]||''),
   `not found in:\n${(texts[ex]||'').split('\n').map(l=>'        '+l).join('\n')}`);
-has('heatpair', /^rect \d+ .*\bstatic\b/m,           'the plate is a static rectangle');
-has('heatpair', /^vessel \d+ .*\blenlock\b/m,        'the reservoir is length-locked');
+has('heatpair', /^rod bg\(0,2\.15\) -- 1 .*weld=both/m, 'the plate is held by a ground weld, not a flag');
+has('heatpair', /^rod 2@\(0,-0\.5\) -- 2@\(0,0\.5\) len=1\.8$/m, 'the reservoir is a vessel with a strut in it');
 has('heatpair', /^heat body=\d+ vessel=\d+ k=2000$/m,'both heat interactions, with k');
 has('heatpair', /^rod bg\(1\.15,1\.75\) -- \d+ len=\S+ weld=both/m, 'the anchoring rod, welded both ends');
 has('pendulum', /^rod bg\(0,4\.4\) -- \d+ len=2\.6$/m,'an unwelded background rod (weld omitted = none)');
@@ -131,21 +131,67 @@ has('spinvessel',/^vessel \d+ .* w=9$/m,              'the initial spin');
 has('crank',    /^slot \d+ -- bg\([^)]*\) lock=B/m,  'the one-end-prismatic rail');
 has('skate',    /^knife \d+@\(0\.42,0\) dir=\(1,0\)$/m,'the knife heading');
 has('cable',    /^cable \d+ -- \d+ Ltot=\S+ localAngle=\S+$/m,'the cable, with its captured length');
+has('cable',    /^rod bg\(0,5\.1\) -- 1 .*weld=both/m,  'the spool is grounded by a rod');
 
-console.log('\n4. the reader accepts nothing the editor cannot build');
+// Nothing anywhere may still carry the removed flags: they are derived now, and a
+// file that set one would be freezing a coordinate by assertion again.
+for(const ex of EXAMPLES){
+  const bad = (texts[ex]||'').split('\n').filter(l=>!l.trim().startsWith('#') && /\b(static|lenlock)\b/.test(l));
+  ok(ex.padEnd(12)+'freezes nothing by assertion', bad.length===0, bad.join('\n        '));
+}
+
+console.log('\n4. freezing is derived from the constraints, per coordinate');
+// The rules (constraints.js §06.2b) and the cases that separate them. The vessel
+// rows are the point: a rod welded to a MID-WALL pins the pose and leaves the
+// length free, the same rod welded to a CAP pins neither, and only a strut between
+// two of a vessel's own planes locks the length.
+const frozen = () => run(`JSON.stringify(bodies.map(b=>[b.id,!!b.static,!!b.lenLock]))`);
+const cases = [
+  ['heatpair', 'plate on a ground weld is pinned',            b=>b[0][1]===true],
+  ['heatpair', 'reservoir with a strut: length locked, pose free',
+                                                              b=>b[1][1]===false && b[1][2]===true],
+  ['heatpair', 'vessel welded at its mid-wall: pose pinned, length FREE',
+                                                              b=>b[2][1]===true && b[2][2]===false],
+  ['gasspring','vessel welded at its CAP: nothing frozen',    b=>b[0][1]===false && b[0][2]===false],
+  ['cable',    'spool on a ground weld is pinned',            b=>b[0][1]===true],
+  ['cable',    'the hanging mass is not',                     b=>b[1][1]===false],
+  ['pendulum', 'a bob on a pin-ended rod is not pinned',      b=>b[0][1]===false],
+  ['integrator','a disk on a ONE-end weld is not pinned',     b=>b[0][1]===false],
+];
+for(const [ex, what, pred] of cases){
+  run(`loadExample(${JSON.stringify(ex)})`);
+  const b=JSON.parse(frozen());
+  ok((ex+' ').padEnd(12)+what, pred(b), JSON.stringify(b));
+}
+// Transitivity, and the constraint that does the freezing being compiled away.
+run(`(()=>{ clearScene();
+  const a=makeBody(0,1,0.3); bodies.push(a); const c=makeBody(1,1,0.3); bodies.push(c);
+  constraints.push(makeRodCon({id:null,off:[0,0]},{id:a.id,off:[0,0]},true,true));
+  constraints.push(makeRodCon({id:a.id,off:[0,0]},{id:c.id,off:[0,0]},true,true));
+  refreshFrozen(); })()`);
+ok('grounding is transitive through a double weld', frozen()==='[[1,true,false],[2,true,false]]', frozen());
+ok('both grounding rods are compiled away', run('JSON.stringify(constraints.map(c=>!!c._compiled))')==='[true,true]');
+// ...and that deleting the rod thaws the body again, which is the whole point of
+// freezing being derived rather than stored.
+run('constraints.length=0; refreshFrozen()');
+ok('deleting the rods thaws both bodies', frozen()==='[[1,false,false],[2,false,false]]', frozen());
+
+console.log('\n5. the reader accepts nothing the editor cannot build');
 run(`loadExample('pendulum')`);
 const before = run('exportScene()');
 const rejects = [
-  ['an unknown kind',            'scene 1\nrocket 1 x=0 y=0'],
-  ['an unknown field',           'scene 1\nbody 1 x=0 y=0 r=1 charge=3'],
-  ['a coordinate frozen by fiat','scene 1\nbody 1 x=0 y=0 r=1 xLocked'],
-  ['a dangling body reference',  'scene 1\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
-  ['a future version',           'scene 2\nbody 1 x=0 y=0 r=1'],
-  ['a missing separator',        'scene 1\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
-  ['a duplicate id',             'scene 1\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
-  ['a flag given a value',       'scene 1\nbody 1 x=0 y=0 r=1 static=yes'],
-  ['a prototype key',            'scene 1\nbody 1 x=0 y=0 r=1 constructor=1'],
-  ['a background pin',           'scene 1\nbody 1 x=0 y=0 r=1\npin 1 -- bg(0,1)'],
+  ['an unknown kind',            'scene 2\nrocket 1 x=0 y=0'],
+  ['an unknown field',           'scene 2\nbody 1 x=0 y=0 r=1 charge=3'],
+  ['a coordinate frozen by fiat','scene 2\nbody 1 x=0 y=0 r=1 xLocked'],
+  ['a dangling body reference',  'scene 2\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
+  ['a future version',           'scene 3\nbody 1 x=0 y=0 r=1'],
+  ['a version 1 file',           'scene 1\nbody 1 x=0 y=0 r=1'],
+  ['a missing separator',        'scene 2\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
+  ['a duplicate id',             'scene 2\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
+  ['an authored static flag',    'scene 2\nbody 1 x=0 y=0 r=1 static'],
+  ['an authored length lock',    'scene 2\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
+  ['a prototype key',            'scene 2\nbody 1 x=0 y=0 r=1 constructor=1'],
+  ['a background pin',           'scene 2\nbody 1 x=0 y=0 r=1\npin 1 -- bg(0,1)'],
 ];
 for(const [what, text] of rejects){
   let msg=null;
@@ -155,7 +201,7 @@ for(const [what, text] of rejects){
 }
 ok('a rejected file leaves the bench standing', run('exportScene()')===before);
 
-console.log('\n5. an imported scene runs the same as the scene it was exported from');
+console.log('\n6. an imported scene runs the same as the scene it was exported from');
 // Every check above compares what the file SAYS. This one compares what the file
 // DOES: two seconds of the real substep on the example the tools built and on the
 // world the reader rebuilt from its export, then the full state of both. A derived
@@ -196,7 +242,7 @@ for(const ex of EXAMPLES){
   ok(ex.padEnd(12)+'2 s of substeps agree  ', w1<1e-6,  `worst ${w1.toExponential(2)} (${e1})`);
 }
 
-console.log('\n6. Reset puts back exactly what was loaded');
+console.log('\n7. Reset puts back exactly what was loaded');
 // saveState/restoreState (§16.1) walk the same ledger as the file, over each row's
 // `state` list. This is the check that list is complete: load a scene, run it, press
 // R, and every field of every body -- including the derived ones the snapshot does

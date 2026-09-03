@@ -51,15 +51,15 @@ place the thing, then change one field in the inspector:
 derives the heading from a drag, so a player gets *a* heading, not that one. Minor,
 and the file format fixes it anyway by making the direction an authored number.
 
-**The pattern the user named, found in the wild.** "A coder constrains a coordinate
-to be constant without representing that with a constraint object" already exists
-twice in sanctioned form: `body.static` freezes `(x, y, th)` and `vessel.lenLock`
-freezes `len`, both by zeroing an inverse mass in `refreshInertia`/`refreshVessel`
-rather than by adding a constraint row. Both are defensible -- `static` is the most
-common single fact in any scene and paying three solver rows for it in every scene
-is a bad trade -- but they should be named as **the two sanctioned exceptions**,
-made first-class (serialized, inspector-editable, documented), and the door shut
-behind them: no new coordinate may be frozen by assignment.
+**The pattern named in the brief, found in the wild.** "A coder constrains a
+coordinate to be constant without representing that with a constraint object"
+already existed twice: `body.static` froze `(x, y, th)` and `vessel.lenLock` froze
+`len`, both by zeroing an inverse mass rather than by adding a constraint row.
+
+This note originally argued they should stay, as two sanctioned exceptions made
+first-class. That was wrong, and §S.8 replaces it: they are now derived from the
+constraints present. The optimization survives -- it is the reason to want them --
+but nothing asserts it.
 
 ---
 
@@ -373,12 +373,98 @@ code path by which a scene can contain something the editor cannot build.
   that references it. It converts that from a silently-wrong scene into a
   load-time error naming the line -- which is the fix that matters, but the example
   still has to be rewritten by hand.
-- **It does not make the two sanctioned coordinate freezes** (`static`, `lenLock`)
-  into constraint objects. §S.1 argues they should stay properties; the strategy
-  makes them explicit and serialized rather than eliminating them.
+- **It does not compute the general frozen set.** §S.8 recognizes two structural
+  patterns, not every arrangement that pins a body.
 - **It is not a save format for a running simulation.** Exporting the reset
   baseline (§S.3) is a deliberate narrowing; mid-run capture is a separate command
   if it is ever wanted.
 - **It does not anticipate the signal layer** (`DEVELOPMENT.md` §5). When signal
   wires arrive they are a new ledger row and a new line kind -- which is the test
   of whether the ledger was factored right.
+
+---
+
+## S.8 Freezing is derived, not asserted
+
+Version 2 of the format removed `static` and `lenlock`. They were the last two
+fields a file could use to freeze a coordinate by saying so, which made them exactly
+what the rest of this note exists to prevent. What replaced them keeps the
+optimization and drops the assertion: both flags are still there, but **derived**,
+recomputed every substep from the constraints actually present (`constraints.js`
+§06.2b `refreshFrozen`).
+
+### The two patterns
+
+- **A rod welded at both ends grounds its far end.** Both ends welded pins distance,
+  direction and orientation, so applied between fixed ground and a body it removes
+  all three of that body's coordinates. Transitively: a body double-welded to an
+  already-grounded body is grounded too.
+- **A rod with both ends on the same vessel locks its length.** Its two ends ride
+  different material planes, so its pose columns cancel exactly (which is also why
+  the same rod on a *rigid* body is degenerate, and why the tool refuses it there)
+  and what it holds is `len`. A reservoir is a vessel with a strut inside it.
+
+Both are **structural**: they depend on what is attached, never on the current
+configuration. Nothing freezes or thaws as a mechanism swings through a pose.
+
+### Freezing is per coordinate, and a vessel is where that shows
+
+A vessel's fourth coordinate moves its own material: a point at material fraction
+`f` sits `f*len` from the centre. So a double-welded ground rod pins a vessel's pose
+only at the **mid-plane**, `f = 0`, whose world position has no length dependence.
+Welded to a cap, it fixes the cap and not the body -- the centre still rides the
+length, which is the entire mechanism of the gas spring.
+
+This also fixed a real bug the brief pointed at. `refreshVessel` zeroed `invMu` on
+`static || lenLock`, so any fixed vessel also had a frozen length. It is now
+`lenLock` alone, and `invMdiag` no longer short-circuits all four coordinates on one
+flag. The heat pair's working vessel -- pose pinned, length entirely free -- could
+not have existed under the old rule; it is now what the mid-plane weld means.
+
+### The freezing constraint is compiled away
+
+A constraint that has frozen the coordinates it touches has nothing left to solve:
+every column it would write is zero. Left in, it is a row of zeros that only the
+Tikhonov term keeps solvable, reporting a reaction read off the regularizer rather
+than off the mechanism. So it is marked `_compiled` and skipped by both the substep's
+row assembly and the position projection. That is the "remove them from the equation"
+the brief asked for, applied to the row as well as the coordinate.
+
+Two consequences worth stating plainly:
+
+- **A grounding constraint reports no reaction.** It is not solved for, so there is
+  no multiplier to read. This is a real loss against a project whose stated
+  commitment is that the constraint library doubles as an instrumentation layer, and
+  it is the price of the optimization. It could be recovered -- for a fully frozen
+  body with a single anchor, the anchor carries exactly the net of everything else
+  acting on it, which the substep already computes -- but that is not built. The
+  affected joints are exactly the ground welds and vessel struts.
+- **A frozen body moved by hand needs its anchors recaptured.** Nothing in the solver
+  will pull them back, because the rows that would have are gone. `recaptureGrounding`
+  (§06.2b) does it, called from the drag path and the inspector's pose fields.
+
+### What is not recognized
+
+Other arrangements genuinely pin a body -- three pin-ended rods to the ground, or one
+pin-ended rod and one weld. They are simply not optimized: the solver holds them
+exactly as it always has, at the cost of the rows and the island split.
+
+Recognizing the general case means asking which coordinates lie outside the nullspace
+of the constraint Jacobian, which is a rank computation over the whole system every
+step. Three things make that the wrong trade here. It is **configuration-dependent**:
+a four-bar at a singular pose momentarily loses a degree of freedom, and freezing it
+would be wrong the instant it moves off. It cannot use the **nonholonomic** rows
+(knife, CVT) at all, which restrict velocity without restricting position. And it is
+**expensive** in exactly the place this project's dense solver is already the
+bottleneck. The structural rules above cost one pass over the constraint list.
+
+### Verified
+
+`tools/scene-roundtrip.js` §4 checks each rule and each case that separates them --
+the mid-wall weld that pins a pose and leaves a length free, the cap weld that pins
+neither, the strut that locks a length without pinning a pose, the one-ended weld
+that pins nothing, transitivity, compilation, and that deleting the rod thaws the
+body again. The migration was checked against the behaviour it replaced: nine of the
+eleven examples are bit-identical over three seconds of substeps, and the two that
+differ are the vessels that became pose-frozen, where the freeze is *more* exact than
+the solve it replaced (x = 1.15 rather than 1.1499999999958).

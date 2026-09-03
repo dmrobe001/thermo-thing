@@ -376,9 +376,9 @@ constraint work on it with no per-kind branching.
   bore,                          // fixed width
   mShell,                        // structural mass, user-editable like body.mass
   gas: { mass, gamma, Rs, kap }, // kap = P*V^gamma, the adiabat invariant (§V.4)
-  lenLock, static,               // either one zeroes invMu: a fixed-volume reservoir
   // derived, refreshed each substep (geometry.js §05.2d refreshVessel):
-  mass, mu, Alat, I, invM, invI, invMu, hw, hh
+  mass, mu, Alat, I, invM, invI, invMu, hw, hh,
+  static, lenLock                // also derived -- see below
 }
 ```
 
@@ -395,9 +395,27 @@ player-authored change to the gas's energy, exactly as typing a velocity into a
 body's panel is a deliberate change to its kinetic energy. Resizing keeps the gas
 sealed -- mass and temperature carry over, so the pressure follows the new volume.
 
-`lenLock` is the exact analogue of a body's `static` flag applied to one coordinate
-instead of three, and a **reservoir** is just a vessel with `lenLock` set and a large
-gas mass.
+`static` and `lenLock` are **derived, not authored** -- neither is a field a player
+sets or a scene file carries. They are read off the constraints present, every
+substep (`constraints.js` §06.2b `refreshFrozen`), and they are independent:
+
+- `static` (the pose) is set by a rod welded at both ends between fixed ground and
+  the vessel's **mid-plane**, `f = 0`. Only that plane pins the pose. A vessel's
+  fourth coordinate moves its own material, so a point at fraction `f` sits `f*len`
+  from the centre (§V.5): weld a *cap* and you have fixed the cap, not the body --
+  the centre still rides the length. That is precisely the difference between the
+  gas spring (welded at `f = -1/2`, and free to move as it breathes) and the heat
+  pair's working vessel (welded at `f = 0`, pose fixed, length free).
+- `lenLock` (the length) is set by a rod with **both ends on this same vessel** at
+  different material fractions -- a strut inside it. Its pose columns cancel exactly,
+  so what such a rod holds is the length and nothing else. A **reservoir** is that:
+  a vessel with a strut in it and a large gas mass.
+
+A fixed pose therefore says nothing about the length, and vice versa. (`refreshVessel`
+used to zero `invMu` on `static || lenLock`, which silently froze the length of any
+fixed vessel -- the working vessel above could not have existed.) Either constraint
+is compiled away once it has done its freezing: the coordinates it would write to no
+longer move, so its rows would be zeros.
 
 ## V.9 What this costs the engine
 

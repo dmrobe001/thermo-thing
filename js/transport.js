@@ -20,7 +20,12 @@ let saved=null;
 // What stays here is what is genuinely transport's own: clearing the solver's
 // per-element scratch, which is not state a snapshot carries but staleness a jump
 // back in time creates.
-function saveState(){ saved=snapshotState(); }
+// refreshFrozen first: saveState is the one hook every structural edit passes
+// through -- every tool that pushes or splices, every inspector commit and delete,
+// the keyboard delete -- so it is where the derived freezing (§06.2b) has to catch
+// up. Without it a strut just placed in a paused bench would not read as locked
+// until the next substep or projection happened to run.
+function saveState(){ refreshFrozen(); saved=snapshotState(); }
 function restoreState(){
   if(!saved) return;
   applyState(saved);

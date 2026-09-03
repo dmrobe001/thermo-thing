@@ -14,11 +14,17 @@
 //    §17.2  values          (formatting, tokenizing, endpoint syntax)
 //    §17.3  exportScene     (world -> text)
 //    §17.4  importScene     (text -> world)
-//    §17.5  panel UI        (the scene-file card, and file drag-drop)
 //    §17.6  state snapshot  (snapshotState/applyState -- what Reset restores)
+//    §17.5  panel UI        (the scene-file card, and file drag-drop)
 // ============================================================================
 
-const SCENE_VERSION = 1;
+// Version 2 dropped `static` and `lenlock`. They were fields a file could set on a
+// body directly, which made them exactly the thing this format exists to prevent: a
+// coordinate frozen by assertion rather than by an object in the scene. A pinned
+// body is now one with a double-welded rod to the ground, and a reservoir is a
+// vessel with a strut inside it -- both ordinary constraints, both visible, both
+// deletable (constraints.js §06.2b).
+const SCENE_VERSION = 2;
 
 // ---- §17.1 · the ledger ----
 // One row per kind of thing a scene can contain. Each row names:
@@ -35,8 +41,10 @@ const SCENE_VERSION = 1;
 // A field is one of three kinds, which is the whole of SCENE.md §S.3:
 //
 //   * DERIVED fields are simply absent from the table. mass and inertia on a
-//     vessel, invM/invI/mu, the adiabat invariant, every solver scratch field --
-//     all recomputed on load. Writing them out would let a file disagree with
+//     vessel, invM/invI/mu, the adiabat invariant, every solver scratch field, and
+//     -- since version 2 -- `static` and `lenLock`, which are read off the
+//     constraints present rather than set (constraints.js §06.2b) -- all recomputed
+//     on load. Writing them out would let a file disagree with
 //     itself and force the reader to pick a winner.
 //   * AUTHORED fields carry a `def` and are written only when they differ from
 //     it, so a default body is a short line. `def` may be a function of the
@@ -56,9 +64,7 @@ const F_POSE = () => ({
   vy: {t:'num', def:0, get:b=>b.vy, set:(b,v)=>{b.vy=v;}},
   w:  {t:'num', def:0, get:b=>b.w,  set:(b,v)=>{b.w=v;}},
 });
-// `static` is a constructor argument, so it has no setter -- build reads it
-// through q(). Same for every x/y/r/bore/len below.
-const F_STATIC = () => ({ static:{t:'flag', def:false, get:b=>b.static} });
+
 // A row's `state` list is the second thing the ledger defines: the fields a RUN can
 // change, which is exactly what Reset has to put back (§16.1). It is a separate list
 // from `fields` because the two answer different questions -- a body's radius is in
@@ -82,9 +88,9 @@ const SCENE_SCHEMA = [
       r:{t:'num', always:true, get:b=>b.r},
       // density 1, the disk factory's own convention (§05.2)
       mass:{t:'num', def:q=>Math.PI*q('r')*q('r'), get:b=>b.mass, set:(b,v)=>setBodyMass(b,v)},
-      ...F_STATIC(), ...F_POSE(),
+      ...F_POSE(),
     },
-    build:q=>makeBody(q('x'), q('y'), q('r'), q('static')),
+    build:q=>makeBody(q('x'), q('y'), q('r')),
     finish:o=>refreshInertia(o),
     state:S_POSE() },
 
@@ -97,9 +103,9 @@ const SCENE_SCHEMA = [
       width:{t:'num', always:true, get:b=>b.hw*2},
       height:{t:'num', always:true, get:b=>b.hh*2},
       mass:{t:'num', def:q=>q('width')*q('height'), get:b=>b.mass, set:(b,v)=>setBodyMass(b,v)},
-      ...F_STATIC(), ...F_POSE(),
+      ...F_POSE(),
     },
-    build:q=>makeRectBody(q('x'), q('y'), q('width')/2, q('height')/2, q('static')),
+    build:q=>makeRectBody(q('x'), q('y'), q('width')/2, q('height')/2),
     finish:o=>refreshInertia(o),
     state:S_POSE() },
 
@@ -119,11 +125,10 @@ const SCENE_SCHEMA = [
       // in finish(), after gamma, since kap depends on it.
       P:{t:'num', always:true, get:b=>gasP(b), set:null},
       T:{t:'num', always:true, get:b=>gasT(b), set:null},
-      lenlock:{t:'flag', def:false, get:b=>b.lenLock, set:(b,v)=>{b.lenLock=v;}},
-      ...F_STATIC(), ...F_POSE(),
+      ...F_POSE(),
       vlen:{t:'num', def:0, get:b=>b.vlen, set:(b,v)=>{b.vlen=v;}},
     },
-    build:q=>makeVessel(q('x'), q('y'), q('bore'), q('len'), q('static')),
+    build:q=>makeVessel(q('x'), q('y'), q('bore'), q('len')),
     finish:(o,f,q)=>{ setVesselGasPT(o, q('P'), q('T')); refreshVessel(o); },
     // The gas is snapshotted in the form the vessel STORES -- the adiabat invariant
     // and the mass -- not in the pressure and temperature the file writes. Those are
@@ -564,6 +569,7 @@ function clearScene(){
   bodies=[]; constraints=[]; cables=[]; springs=[]; rotSprings=[]; interactions=[];
   uid=1; sim.bathQ=0;
   ENERGY_BANK.clear();
+  refreshFrozen();
   clearSelection();
   eHist.length=0;
 }
@@ -607,6 +613,10 @@ function commitScene(parsed){
   // No position projection: the file's pose is the scene's pose. Projecting would
   // quietly move bodies off what the file says, which is the one thing a format
   // whose job is fidelity must not do.
+  // Which coordinates the scene has pinned is derived from what it contains
+  // (§06.2b) -- do it now so the first render, the first Reset baseline and any
+  // inspector readout all see the same answer the substep will.
+  refreshFrozen();
   clearSelection();
   saveState();
 }
@@ -656,17 +666,46 @@ function applyState(rec){
 }
 
 // ---- §17.5 · panel UI ----
-// The textarea's contents survive a renderInspector() -- which fires on every
-// selection change and every inspector edit -- so a scene pasted in and not yet
-// imported is not lost to a stray click.
-let sceneText = '';
-let sceneMsg = null;                        // {ok:bool, text} shown under the card
+// The card shows the LIVE bench. That matters more than it sounds: the textarea is
+// what Download writes and what Import reads, so text that lags the scene is text
+// that lies about it. It is regenerated on every panel render (which is every edit,
+// and cheap at these sizes -- and the card only exists while nothing is selected).
+//
+// Two things override the live text, in order:
+//   * a DRAFT -- anything the player typed or pasted -- which is theirs and is never
+//     overwritten. Import consumes it; Export discards it.
+//   * an ANNOTATED file, kept only while the bench still matches it line for line
+//     with comments stripped. That is what lets clicking an example show the
+//     example's own file, prose and all, and lets an imported file keep its
+//     comments -- while the first edit that actually changes the scene drops
+//     silently back to the plain export.
+let sceneText = null;                       // the annotated file, while it still fits
+let sceneDraft = null;                      // the player's own text, untouched
+let sceneMsg = null;                        // {ok, text} shown under the card
+
+// A scene file with its comments and blank lines removed -- the canonical content,
+// which is what "does this file still describe the bench" compares. Shared with
+// tools/scene-roundtrip.js.
+const sceneStrip = t =>
+  String(t).split('\n').filter(l=>l.trim() && !l.trim().startsWith('#')).join('\n')+'\n';
+
+// Pure -- it must not drop the annotated file as a side effect of being asked. This
+// runs mid-import too, at the moment clearScene has emptied the bench and nothing
+// matches anything; discarding then would throw away the file about to be loaded.
+// Leaving it in place also means undoing an edit brings its comments back.
+function sceneCardText(){
+  if(sceneDraft!==null) return sceneDraft;
+  let live;
+  try { live = exportScene(); }
+  catch(e){ return `# this bench cannot be written out: ${e.message||e}`; }
+  return (sceneText!==null && sceneStrip(sceneText)===sceneStrip(live)) ? sceneText : live;
+}
 
 function sceneCardHTML(){
   return `
     <div class="card"><div class="cardhead">scene file</div>
       <textarea id="sc_text" class="scenebox" spellcheck="false"
-        placeholder="Export writes the bench here. Paste a scene and press Import to load it — or drop a file on the canvas."></textarea>
+        placeholder="This bench, as a scene file. Edit or paste one and press Import to load it — or drop a file on the canvas."></textarea>
       <div class="scenebtns">
         <button id="sc_export">Export</button>
         <button id="sc_import">Import</button>
@@ -674,30 +713,31 @@ function sceneCardHTML(){
         <button id="sc_save">Download</button>
       </div>
       ${sceneMsg ? `<p class="${sceneMsg.ok?'muted':'scerr'}" style="margin:8px 0 0">${escHtml(sceneMsg.text)}</p>` : ''}
-      <p class="muted" style="margin:8px 0 0">A plain-text listing of every body, constraint, force element and interaction, with the ambient and the camera. It holds the reset baseline — what R restores to — not the mid-run pose.</p>
+      <p class="muted" style="margin:8px 0 0">A plain-text listing of every body, constraint, force element and interaction, with the ambient and the camera. It tracks the bench as you edit it, and holds the reset baseline — what R restores to — not the mid-run pose. Export discards your edits to the text and rewrites it from the bench.</p>
     </div>`;
 }
 const escHtml = s => String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 
 function wireSceneCard(){
   const ta=document.getElementById('sc_text'); if(!ta) return;
-  ta.value=sceneText;
-  ta.oninput=()=>{ sceneText=ta.value; };
+  ta.value=sceneCardText();
+  ta.oninput=()=>{ sceneDraft=ta.value; };
   const say=(ok,text)=>{ sceneMsg={ok,text}; renderInspector(); };
   document.getElementById('sc_export').onclick=()=>{
-    try { sceneText=exportScene(); say(true, `Exported ${bodies.length} bodies and ${constraints.length+cables.length+springs.length+rotSprings.length+interactions.length} couplings.`); }
-    catch(e){ say(false, String(e.message||e)); }
+    sceneDraft=null; sceneText=null;          // back to the plain live export
+    say(true, `${bodies.length} bodies and ${constraints.length+cables.length+springs.length+rotSprings.length+interactions.length} couplings.`);
   };
   document.getElementById('sc_import').onclick=()=>{
-    try { importScene(ta.value); sceneText=ta.value; say(true, `Loaded ${bodies.length} bodies.`); }
-    catch(e){ say(false, String(e.message||e)); }
+    const text=ta.value;
+    try { importScene(text); sceneDraft=null; sceneText=text; say(true, `Loaded ${bodies.length} bodies.`); }
+    catch(e){ sceneDraft=text; say(false, String(e.message||e)); }
   };
   document.getElementById('sc_copy').onclick=()=>{
     if(navigator.clipboard) navigator.clipboard.writeText(ta.value).then(()=>say(true,'Copied.'), ()=>say(false,'Clipboard refused; select the text and copy it.'));
     else { ta.select(); say(true,'Selected — press Ctrl/Cmd-C.'); }
   };
   document.getElementById('sc_save').onclick=()=>{
-    const blob=new Blob([ta.value||exportScene()], {type:'text/plain'});
+    const blob=new Blob([ta.value], {type:'text/plain'});
     const a=document.createElement('a');
     a.href=URL.createObjectURL(blob); a.download='bench.scene';
     a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
@@ -711,9 +751,8 @@ if(typeof cv!=='undefined' && cv){
     e.preventDefault();
     const file=e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if(!file) return;
     file.text().then(t=>{
-      sceneText=t;
-      try { importScene(t); sceneMsg={ok:true, text:`Loaded ${file.name}.`}; }
-      catch(err){ sceneMsg={ok:false, text:`${file.name}: ${err.message||err}`}; }
+      try { importScene(t); sceneDraft=null; sceneText=t; sceneMsg={ok:true, text:`Loaded ${file.name}.`}; }
+      catch(err){ sceneDraft=t; sceneMsg={ok:false, text:`${file.name}: ${err.message||err}`}; }
       clearSelection();
     });
   });

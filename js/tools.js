@@ -760,7 +760,15 @@ function runToolClick(wx,wy){
     const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
     const Aep=pending.ep;
     if(Aep.id==null && Bep.id==null) return; // a rod needs at least one real target -- keep pending, wait for a better second click
-    if(Aep.id!=null && Bep.id===Aep.id) return;    // can't rod a body to itself -- ditto
+    // A rod from a body to ITSELF is degenerate on a rigid body -- the distance
+    // between two of its points is already constant, and the row's columns cancel
+    // to nothing. On a vessel it is the length lock (constraints.js §06.2b): the
+    // two ends ride different material planes, so what it holds is `len`. Allow it
+    // there, and only between planes that actually differ.
+    if(Aep.id!=null && Bep.id===Aep.id){
+      const b=bodies[bodyIndex(Aep.id)];
+      if(!b || b.shape!=='vessel' || Aep.off[1]===Bep.off[1]) return;
+    }
     pending=null;
     // A rod touching the background defaults to both ends welded -- a rigid
     // strut out of the wall -- since that's the anchoring use case; the user
@@ -868,6 +876,10 @@ cv.addEventListener('pointermove',e=>{
     if(G.static){
       // move the root kinematically; the island follows it
       const [gx,gy]=epWorldPt(G,drag.off); G.x+=mouseWorld[0]-gx; G.y+=mouseWorld[1]-gy;
+      // Its grounding rod's rows are compiled away, so nothing in the solver will
+      // pull the anchor back into agreement -- recapture it from the new pose
+      // instead, exactly as creating the rod would have (§06.2b).
+      recaptureGrounding(G);
       projectPositions(8);
     } else {
       // pull the grabbed point toward the cursor; the island articulates to comply.
