@@ -122,9 +122,22 @@ const SCENE_SCHEMA = [
       // The gas is written as pressure and temperature -- the two faces of it a
       // person reasons about, and a complete encoding at a known volume: mass and
       // the adiabat invariant both follow (§05.2d setVesselGasPT). Applied together
-      // in finish(), after gamma, since kap depends on it.
+      // in finish(), after gamma, since kap depends on it. Both are `always` here
+      // because that is what finish() below actually consumes -- but a line need
+      // not literally write them: resolveVesselFill (§17.4) runs ahead of this
+      // table and fills in whichever of len/P/T a line left for it to compute from
+      // the other two of {P, T, gasMass}, so by the time `always` is checked they
+      // are already there.
       P:{t:'num', always:true, get:b=>gasP(b), set:null},
       T:{t:'num', always:true, get:b=>gasT(b), set:null},
+      // A third way to name the gas's fill, alongside P and T -- consumed straight
+      // off the raw parsed fields by resolveVesselFill, so it needs no real get/set
+      // of its own here; the entry only exists so readKeyed (§17.4) recognizes the
+      // key. get/def are fixed and equal so emitFields never writes it back out: P
+      // and T alone are already this format's complete, canonical encoding of the
+      // gas (SCENE.md S.3) -- gasMass is something a person may write, never
+      // something the tool emits.
+      gasMass:{t:'num', def:0, get:()=>0, set:null},
       ...F_POSE(),
       vlen:{t:'num', def:0, get:b=>b.vlen, set:(b,v)=>{b.vlen=v;}},
     },
@@ -215,21 +228,31 @@ const SCENE_SCHEMA = [
   // positionally: they are not symmetric (one side is always the mediating body,
   // the other the vessel or the background) and saying so in the file is worth
   // four characters. See VESSEL.md §V.10.
+  //
+  // `body` is `ep-centre`, not a plain `ref`: "every constraint, spring and cable
+  // endpoint is an {id, off} pair" (geometry.js §05.2c) and an interaction's
+  // mediating side is no exception -- it just has nowhere yet to put a nonzero
+  // one, so it round-trips as ordinary body-frame coordinates at (0,0), same as a
+  // pin or rod anchored on a body's own centre (fmtEp omits the redundant
+  // "@(0,0)"; `id@(0,0)` on import is accepted as identical to a bare id). See
+  // resolveVesselFill above for why `vessel` stays a plain ref-bg: the background
+  // side names no specific point, only "the ambient," so it has no anchor to
+  // spell out in the first place.
   { kind:'heat', list:'interactions', match:i=>i.type==='heat',
     fields:{
-      body:{t:'ref', always:true, get:i=>i.body.id},
+      body:{t:'ep-centre', always:true, get:i=>i.body},
       vessel:{t:'ref-bg', always:true, get:i=>i.vessel.id},
       k:{t:'num', def:1000, get:i=>i.k, set:(i,v)=>{i.k=v;}},
     },
-    build:q=>makeInteraction('heat', q('body'), q('vessel')) },
+    build:q=>makeInteraction('heat', q('body').id, q('vessel')) },
 
   { kind:'flow', list:'interactions', match:i=>i.type==='flow',
     fields:{
-      body:{t:'ref', always:true, get:i=>i.body.id},
+      body:{t:'ep-centre', always:true, get:i=>i.body},
       vessel:{t:'ref-bg', always:true, get:i=>i.vessel.id},
       k:{t:'num', def:1e-5, get:i=>i.k, set:(i,v)=>{i.k=v;}},
     },
-    build:q=>makeInteraction('flow', q('body'), q('vessel')) },
+    build:q=>makeInteraction('flow', q('body').id, q('vessel')) },
 ];
 
 // The two singletons. Solver tuning (h, beta, reg, maxSub) and view toggles
@@ -257,8 +280,11 @@ const CAM_FIELDS = {
 // The one constructor interactions did not have. Kept here rather than in §06
 // because an interaction is not a constraint -- it carries no row -- but it obeys
 // the same one-constructor rule (SCENE.md §S.2); the tool dispatch calls it too.
+// `body` carries an `off` like every other endpoint in the engine (geometry.js
+// §05.2c) even though nothing yet sets it to anything but [0,0] -- see the heat/
+// flow schema rows above.
 function makeInteraction(type, bodyId, vesselId){
-  return { id:uid++, type, body:{id:bodyId}, vessel:{id:vesselId},
+  return { id:uid++, type, body:{id:bodyId, off:[0,0]}, vessel:{id:vesselId},
            k: type==='heat'?1000:1e-5, sel:false };
 }
 
@@ -342,6 +368,10 @@ function fmtVal(fd, v){
     case 'ends':   return v;
     case 'ref':    return String(v);
     case 'ref-bg': return v==null ? 'bg' : String(v);
+    // A KEYED field (body=...), not one of the positional `ends` above, but the
+    // same {id, off} shape and the same fmtEp -- so it reads and writes exactly
+    // like every other body-frame anchor in the format (§17.2).
+    case 'ep-centre': return fmtEp(v, 'ep-body');
   }
   throw new SceneError(0, `no formatter for field type ${fd.t}`);
 }
@@ -361,6 +391,16 @@ function parseVal(fd, name, tok, ln){
       throw new SceneError(ln, `${name}: expected none, A, B or both, got "${tok}"`);
     case 'ref': return idTok(tok, ln, name);
     case 'ref-bg': return tok==='bg' ? null : idTok(tok, ln, name);
+    // Nothing yet gives an interaction a real off-centre anchor (physics.js
+    // §08.0b's contact area is a whole-body overlap, not a point), so a nonzero
+    // offset here can't mean anything the engine can build -- reject it rather
+    // than silently keep it and have it do nothing, the same rule §17 opens with.
+    case 'ep-centre': {
+      const ep = parseEp(tok, 'ep-body', ln, name);
+      if(ep.off[0]!==0 || ep.off[1]!==0)
+        throw new SceneError(ln, `${name}: an interaction only anchors at a body's centre (0,0) for now`);
+      return ep;
+    }
   }
   throw new SceneError(ln, `${name}: no parser for field type ${fd.t}`);
 }
@@ -466,6 +506,41 @@ function exportScene(){
   return L.join('\n') + '\n';
 }
 
+// A vessel's fourth coordinate (len) and its gas (P, T, mass) are related by
+// exactly one equation at a fixed bore -- P*(bore*len) = mass*Rs*T -- so a line
+// may give any TWO of {P, T, gasMass} alongside len (the third follows), or, with
+// len left out entirely, all THREE of them (len is then exactly the length they
+// imply). Anything short of that leaves the state underdetermined; anything past
+// it over-determines it -- both are load-time errors, not a silent guess. Mutates
+// the raw parsed fields in place so len, P and T (all `always` in the vessel row,
+// §17.1) are unconditionally present by the time the ordinary fieldReader / build
+// / finish pipeline runs below, whatever subset of the four the file actually
+// wrote. Runs as its own pass after the whole file is read (not inline in the
+// per-line loop) so a `sim` line naming a non-default ambient is already known
+// here, wherever in the file it appears.
+function resolveVesselFill(f, ln, bgP, bgT){
+  if(f.bore===undefined) throw new SceneError(ln, `vessel: missing required field "bore"`);
+  const has = k => f[k]!==undefined;
+  const nGas = ['P','T','gasMass'].filter(has).length;
+  if(has('len')){
+    if(nGas===0){ f.P=bgP; f.T=bgT; return; }                 // ambient, same as a freshly placed vessel
+    if(nGas===1) throw new SceneError(ln, `vessel: len given with only one of P, T, gasMass -- give two of them, or none for ambient`);
+    if(nGas===3) throw new SceneError(ln, `vessel: len, P, T and gasMass together over-determine the gas -- give at most two of P, T, gasMass when len is set`);
+    if(has('P') && has('T')) return;                          // already exactly what finish() below expects
+    const V = f.bore*f.len*VESSEL_DEPTH;
+    if(!(V>0)) throw new SceneError(ln, `vessel: bore and len must be positive`);
+    if(has('T') && has('gasMass')) f.P = f.gasMass*GAS_AIR.Rs*f.T/V;
+    else { if(!(f.gasMass>0)) throw new SceneError(ln, `vessel: gasMass must be positive to compute T from P and gasMass`);
+      f.T = f.P*V/(f.gasMass*GAS_AIR.Rs); }
+    return;
+  }
+  if(nGas!==3) throw new SceneError(ln, `vessel: no len given -- provide len, or all three of P, T and gasMass so length can be computed`);
+  if(!(f.P>0)) throw new SceneError(ln, `vessel: P must be positive to compute len from P, T and gasMass`);
+  const V = f.gasMass*GAS_AIR.Rs*f.T/f.P;
+  if(!(V>0)) throw new SceneError(ln, `vessel: P, T and gasMass do not imply a positive length`);
+  f.len = V/(f.bore*VESSEL_DEPTH);
+}
+
 // ---- §17.4 · importScene (text -> world) ----
 // Two passes, and the split matters. parseScene reads the whole file and validates
 // everything it can without touching the world -- syntax, unknown kinds and keys,
@@ -529,13 +604,23 @@ function parseScene(text){
 
   if(out.version===null) throw new SceneError(0, 'empty scene file');
 
+  // Resolve every vessel's fill now that the whole file (in particular a `sim`
+  // line naming a non-default ambient, wherever it appears) has been read.
+  {
+    const bgP = out.sim['bg.P']!==undefined ? out.sim['bg.P'] : SIM_FIELDS['bg.P'].def;
+    const bgT = out.sim['bg.T']!==undefined ? out.sim['bg.T'] : SIM_FIELDS['bg.T'].def;
+    for(const it of out.items) if(it.row.kind==='vessel') resolveVesselFill(it.f, it.ln, bgP, bgT);
+  }
+
   // Every body id anything names has to exist. Checked here, before the bench is
   // touched, so a typo in an endpoint is a message rather than a wrecked scene.
   for(const it of out.items){
     const refs=[];
     for(const [name] of (it.row.ends||[])) if(it.ends[name].id!=null) refs.push([it.ends[name].id, `end ${name}`]);
-    for(const [name, fd] of Object.entries(it.row.fields))
+    for(const [name, fd] of Object.entries(it.row.fields)){
       if((fd.t==='ref' || fd.t==='ref-bg') && it.f[name]!=null) refs.push([it.f[name], name]);
+      if(fd.t==='ep-centre' && it.f[name]!=null) refs.push([it.f[name].id, name]);
+    }
     for(const [id, what] of refs)
       if(!bodyIds.has(id)) throw new SceneError(it.ln, `${it.row.kind} ${what} names body ${id}, which this file does not define`);
   }
@@ -689,16 +774,35 @@ let sceneMsg = null;                        // {ok, text} shown under the card
 const sceneStrip = t =>
   String(t).split('\n').filter(l=>l.trim() && !l.trim().startsWith('#')).join('\n')+'\n';
 
+// exportScene() itself just walks the LIVE world arrays, which mid-run are the
+// running pose, not the reset baseline (SCENE.md S.3: "export should write the
+// reset baseline... offer 'export current state' as an explicit second command if
+// it is wanted" -- Capture, below, is that command). To write the baseline instead,
+// swap `saved` onto the live objects, export, then swap the live pose straight
+// back. That round trip only ever touches the STATE-list fields (§17.6) -- pose,
+// velocity, a vessel's gas -- never structure, so nothing else the format writes
+// (shape, mass, weld flags, ...) can differ between the two swaps. It is safe
+// across a running sim too: this all happens inside one synchronous click handler,
+// so no frame or substep can land between the two applyState() calls and see the
+// bench in its borrowed, mid-swap state.
+function sceneBaselineText(){
+  if(!saved) return exportScene();
+  const live = snapshotState();
+  applyState(saved);
+  try { return exportScene(); }
+  finally { applyState(live); }
+}
+
 // Pure -- it must not drop the annotated file as a side effect of being asked. This
 // runs mid-import too, at the moment clearScene has emptied the bench and nothing
 // matches anything; discarding then would throw away the file about to be loaded.
 // Leaving it in place also means undoing an edit brings its comments back.
 function sceneCardText(){
   if(sceneDraft!==null) return sceneDraft;
-  let live;
-  try { live = exportScene(); }
+  let baseline;
+  try { baseline = sceneBaselineText(); }
   catch(e){ return `# this bench cannot be written out: ${e.message||e}`; }
-  return (sceneText!==null && sceneStrip(sceneText)===sceneStrip(live)) ? sceneText : live;
+  return (sceneText!==null && sceneStrip(sceneText)===sceneStrip(baseline)) ? sceneText : baseline;
 }
 
 function sceneCardHTML(){
@@ -708,12 +812,13 @@ function sceneCardHTML(){
         placeholder="This bench, as a scene file. Edit or paste one and press Import to load it — or drop a file on the canvas."></textarea>
       <div class="scenebtns">
         <button id="sc_export">Export</button>
+        <button id="sc_capture">Capture</button>
         <button id="sc_import">Import</button>
         <button id="sc_copy">Copy</button>
         <button id="sc_save">Download</button>
       </div>
       ${sceneMsg ? `<p class="${sceneMsg.ok?'muted':'scerr'}" style="margin:8px 0 0">${escHtml(sceneMsg.text)}</p>` : ''}
-      <p class="muted" style="margin:8px 0 0">A plain-text listing of every body, constraint, force element and interaction, with the ambient and the camera. It tracks the bench as you edit it, and holds the reset baseline — what R restores to — not the mid-run pose. Export discards your edits to the text and rewrites it from the bench.</p>
+      <p class="muted" style="margin:8px 0 0">A plain-text listing of every body, constraint, force element and interaction, with the ambient and the camera. Export (and the panel itself) hold the reset baseline — what R restores to — not the mid-run pose. Capture instead freezes the exact current state, mid-run included. Either way, pressing it discards your edits to the text and rewrites the field from the bench.</p>
     </div>`;
 }
 const escHtml = s => String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -724,8 +829,15 @@ function wireSceneCard(){
   ta.oninput=()=>{ sceneDraft=ta.value; };
   const say=(ok,text)=>{ sceneMsg={ok,text}; renderInspector(); };
   document.getElementById('sc_export').onclick=()=>{
-    sceneDraft=null; sceneText=null;          // back to the plain live export
-    say(true, `${bodies.length} bodies and ${constraints.length+cables.length+springs.length+rotSprings.length+interactions.length} couplings.`);
+    sceneDraft=null; sceneText=null;          // back to the plain baseline export
+    say(true, `${bodies.length} bodies and ${constraints.length+cables.length+springs.length+rotSprings.length+interactions.length} couplings, at the reset baseline.`);
+  };
+  document.getElementById('sc_capture').onclick=()=>{
+    let text;
+    try { text = exportScene(); }
+    catch(e){ say(false, String(e.message||e)); return; }
+    sceneDraft=text; sceneText=null;          // held as a draft so a later re-render can't fall back to the baseline
+    say(true, `Captured the exact current state (${bodies.length} bodies) — not the reset baseline.`);
   };
   document.getElementById('sc_import').onclick=()=>{
     const text=ta.value;

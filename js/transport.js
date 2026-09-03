@@ -49,8 +49,17 @@ function restoreState(){
 
 // ---- §16.2 · transport (play / step / reset) ----
 const btnPlay=document.getElementById('btnPlay');
+// Starting a run must NOT resave the baseline: every edit already calls
+// saveState() itself (drag, inspector commit, tool dispatch, §16.1's own header),
+// so `saved` already reflects whatever pose the bench is in the moment Play is
+// pressed. Resaving here too used to mean a second Play (after a Pause with no
+// edit in between) silently re-baselined onto the mid-run pose the first run left
+// behind, so a load -> play -> pause -> play -> pause -> Reset cycle landed back
+// on that paused-mid-run pose instead of the scene as loaded. Only the very first
+// Play of a session -- before anything, even boot, has ever saved a baseline --
+// still needs to establish one.
 function setRunning(r){ sim.running=r; btnPlay.textContent=r?'Pause':'Play'; btnPlay.classList.toggle('on',r);
-  if(r){ saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; hover=null; hoverHandle=null; hoverSnap=null; } }
+  if(r){ if(!saved) saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; hover=null; hoverHandle=null; hoverSnap=null; } }
 btnPlay.onclick=()=>setRunning(!sim.running);
 document.getElementById('btnStep').onclick=()=>{ if(sim.running)return; if(!saved)saveState(); projectPositions(20); substep(sim.h); };
 document.getElementById('btnReset').onclick=()=>{ setRunning(false); restoreState(); eHist.length=0; };
