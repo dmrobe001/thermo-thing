@@ -606,10 +606,17 @@ cv.addEventListener('pointerdown',e=>{
       // cable handle check first: allows winding control in edit mode, but only
       // once the cable is already the selection -- a click on an unselected
       // cable's handle just selects it, matching how constraint handles behave.
+      // Arm the drag but don't apply it yet -- applying here, at the raw
+      // pointerdown point, would resnap/reposition the control point even for a
+      // tap that never moves (movedFar stays false), which is exactly the
+      // gesture a rod/slot end uses to toggle its weld/prismatic lock in place
+      // (§13.7 endPointer) rather than relocate. Deferring to pointermove (§13.6)
+      // means a pure tap never calls apply*Handle at all -- the point only ever
+      // moves once the drag actually does.
       const ch=pickCableHandle(wx,wy);
-      if(ch){ if(ch.cb.sel){ anchorDrag=ch; applyCableHandle(ch,wx,wy); return; } selectCable(ch.cbi); return; }
+      if(ch){ if(ch.cb.sel){ anchorDrag=ch; return; } selectCable(ch.cbi); return; }
       const h=pickHandle(wx,wy);
-      if(h){ if(h.con.sel){ anchorDrag=h; applyHandle(h,wx,wy); return; }
+      if(h){ if(h.con.sel){ anchorDrag=h; return; }
         if(h.arr==='springs') selectSpring(h.ci); else selectConstraint(h.ci); return; }
       // the selected body's rim (or, for a rectangle, a corner) -- drag to
       // resize (§13.6 applyBodyResize)
@@ -925,7 +932,14 @@ cv.addEventListener('pointermove',e=>{
   else updateHover(mouseWorld[0],mouseWorld[1]);
   if(tool==='select') cv.style.cursor = resizeDrag ? 'grabbing' : (hoverHandle && hoverHandle.kind==='resize') ? 'grab' : 'default';
 
-  if(anchorDrag){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); return; }
+  if(anchorDrag){
+    // Only once the gesture has actually moved (§13.5's deferred apply) -- a tap
+    // that never crosses movedFar's threshold must leave the control point
+    // exactly where it was, so endPointer's toggle (§13.7) is the only thing
+    // that happens.
+    if(movedFar){ if(anchorDrag.cb) applyCableHandle(anchorDrag,mouseWorld[0],mouseWorld[1]); else applyHandle(anchorDrag, mouseWorld[0], mouseWorld[1]); saveState(); }
+    return;
+  }
   if(resizeDrag){ applyBodyResize(resizeDrag, mouseWorld[0], mouseWorld[1]); return; }
   if(panning){ cam.x=panning.cx-(e.clientX-panning.sx)/cam.scale; cam.y=panning.cy+(e.clientY-panning.sy)/cam.scale; return; }
   if(bodyPreview){

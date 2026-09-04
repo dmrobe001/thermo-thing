@@ -396,7 +396,7 @@ function drawInteraction(it){
 // ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
 // Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
 function drawConstraint(con){
-  const viol = !sim.running && conMaxC(con) > 2e-3;
+  const viol = !sim.running && conMaxC(con) > CON_DRIFT_TOL;
   if(viol) violCount++;
   const sel = con.sel; const hoverOn = !sel && hover===con;
   const col = viol ? '#ec5b52' : (sel? '#5aa9f0': hoverOn? '#8fc4f7':'#8a94a6');

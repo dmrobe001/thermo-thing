@@ -709,13 +709,17 @@ function commitScene(parsed){
 
   // No position projection: the file's pose is the scene's pose. Projecting would
   // quietly move bodies off what the file says, which is the one thing a format
-  // whose job is fidelity must not do.
+  // whose job is fidelity must not do. saveState(force) for the same reason --
+  // a file that describes an unsatisfied constraint still becomes the reset
+  // baseline exactly as written (the drift shows up as the usual red highlight
+  // instead), rather than saveState()'s ordinary guard (transport.js §16.1)
+  // silently keeping whatever baseline predates the import.
   // Which coordinates the scene has pinned is derived from what it contains
   // (§06.2b) -- do it now so the first render, the first Reset baseline and any
   // inspector readout all see the same answer the substep will.
   refreshFrozen();
   clearSelection();
-  saveState();
+  saveState(true);
 }
 
 // The whole of it: parse (throws on anything wrong), then commit.
