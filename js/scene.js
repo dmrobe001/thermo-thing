@@ -15,6 +15,7 @@
 //    §17.3  exportScene     (world -> text)
 //    §17.4  importScene     (text -> world)
 //    §17.6  state snapshot  (snapshotState/applyState -- what Reset restores)
+//    §17.7  fragments       (exportFragment/pasteFragment -- part of a bench)
 //    §17.5  panel UI        (the scene-file card, and file drag-drop)
 // ============================================================================
 
@@ -584,36 +585,49 @@ function fieldReader(fields, f, ln){
 }
 
 // ---- §17.3 · exportScene (world -> text) ----
+// One object, one line. Split out of exportScene so the fragment writer (§17.7)
+// emits exactly the line a whole-scene export would, and "how is a rod written"
+// keeps one answer.
+function emitSceneLine(list, o){
+  const r = SCENE_SCHEMA.find(x => x.list===list && x.match(o));
+  if(!r) throw new SceneError(0, `nothing in the scene table matches a ${list} entry of type "${o.type||o.shape}"`);
+  const parts=[r.kind];
+  if(r.id) parts.push(String(o.id));
+  if(r.ends){
+    const toks = r.ends.map(([name,spec]) => fmtEp(o[name], spec));
+    parts.push(toks.length>1 ? toks.join(' -- ') : toks[0]);
+  }
+  return parts.concat(emitFields(r.fields, o)).join(' ');
+}
+// The sections a listing is written in, in order, with the titles they carry.
+const SCENE_SECTIONS = [['bodies','bodies'], ['constraints','constraints'], ['cables','cables'],
+  ['springs','springs'], ['rotational springs','rotSprings'], ['interactions','interactions']];
+// The listing half of a file: one section per non-empty list. `pick(list)` says
+// which objects of that list to write -- the whole world for exportScene below, a
+// selected subset for exportFragment (§17.7).
+function emitSceneBody(pick){
+  const L=[];
+  for(const [title, list] of SCENE_SECTIONS){
+    const arr = pick(list) || [];
+    if(!arr.length) continue;
+    L.push('', `# ${title}`);
+    for(const o of arr) L.push(emitSceneLine(list, o));
+  }
+  return L;
+}
+// The live world arrays by their ledger `list` name. Read at call time, never
+// closed over: they are top-level `let` bindings (§04.2) that every filter-delete
+// reassigns. SCENE_LISTS below is the push-only twin of this.
+const worldList = name => ({bodies, constraints, cables, springs, rotSprings, interactions})[name];
+
 // Bodies first, then everything that refers to them. The reader does not require
 // that order (it builds bodies in a first pass), but a file a person reads should
 // introduce a thing before mentioning it.
 function exportScene(){
-  const rowFor = (list, o) => SCENE_SCHEMA.find(r => r.list===list && r.match(o));
-  const emit = (list, o) => {
-    const r = rowFor(list, o);
-    if(!r) throw new SceneError(0, `nothing in the scene table matches a ${list} entry of type "${o.type||o.shape}"`);
-    const parts=[r.kind];
-    if(r.id) parts.push(String(o.id));
-    if(r.ends){
-      const toks = r.ends.map(([name,spec]) => fmtEp(o[name], spec));
-      parts.push(toks.length>1 ? toks.join(' -- ') : toks[0]);
-    }
-    return parts.concat(emitFields(r.fields, o)).join(' ');
-  };
   const L = [`scene ${SCENE_VERSION}`, ''];
   L.push(['sim', ...emitFields(SIM_FIELDS, sim)].join(' '));
   L.push(['cam', ...emitFields(CAM_FIELDS, cam)].join(' '));
-  const section = (title, list, arr) => {
-    if(!arr.length) return;
-    L.push('', `# ${title}`);
-    for(const o of arr) L.push(emit(list, o));
-  };
-  section('bodies', 'bodies', bodies);
-  section('constraints', 'constraints', constraints);
-  section('cables', 'cables', cables);
-  section('springs', 'springs', springs);
-  section('rotational springs', 'rotSprings', rotSprings);
-  section('interactions', 'interactions', interactions);
+  L.push(...emitSceneBody(worldList));
   return L.join('\n') + '\n';
 }
 
@@ -789,20 +803,29 @@ const SCENE_LISTS = {
   interactions:o=>interactions.push(o),
 };
 
+// Build ONE parsed item into the world: the constructor the ledger names, then the
+// fields the line carried, then the row's own finishing work. Shared by commitScene
+// below and by pasteFragment (§17.7), which is the whole difference between the two
+// -- a file's ids are the scene's ids, a pasted fragment's are renumbered, so
+// `fresh` leaves the constructor's own freshly-allocated id standing.
+function buildItem(it, fresh){
+  const q = fieldReader(it.row.fields, it.f, it.ln);
+  const o = it.row.build(q, it.ends);
+  if(it.row.id && !fresh) o.id = it.id;     // the file's ids are the scene's ids
+  applyFields(it.row.fields, o, it.f);
+  if(it.row.finish) it.row.finish(o, it.f, q);
+  SCENE_LISTS[it.row.list](o);
+  return o;
+}
+const itemIsBody = it => it.row.list==='bodies';
+
 function commitScene(parsed){
   clearScene();
   // Bodies first, whatever order the file used: every constructor below this line
   // resolves endpoints through the live `bodies` array (§06.1 epWorld), and a belt
   // or cable reads its spool's radius at construction.
-  const build = it => {
-    const q = fieldReader(it.row.fields, it.f, it.ln);
-    const o = it.row.build(q, it.ends);
-    if(it.row.id) o.id = it.id;             // the file's ids are the scene's ids
-    applyFields(it.row.fields, o, it.f);
-    if(it.row.finish) it.row.finish(o, it.f, q);
-    SCENE_LISTS[it.row.list](o);
-  };
-  const isBody = it => it.row.list==='bodies';
+  const build = it => buildItem(it);
+  const isBody = itemIsBody;
   for(const it of parsed.items) if(isBody(it)) build(it);
   uid = bodies.reduce((m,b)=>Math.max(m,b.id), 0) + 1;
   for(const it of parsed.items) if(!isBody(it)) build(it);
@@ -830,6 +853,69 @@ function commitScene(parsed){
 
 // The whole of it: parse (throws on anything wrong), then commit.
 function importScene(text){ commitScene(parseScene(text)); }
+
+// ---- §17.7 · fragments (a subset out, a paste back in) ----
+// A FRAGMENT is a scene file holding part of a bench rather than all of it: the same
+// grammar, the same ledger, the same reader -- just no `sim` and no `cam` line, since
+// a piece of a machine has no opinion about gravity or about where you are looking.
+// That is the whole of what a stashed widget is (select.js §18.4), and the whole of
+// what copy and paste move around. Two consequences worth stating:
+//
+//   * a fragment IS a legal scene file. Paste one, or drop it on the canvas and load
+//     it as a scene on its own -- the reader cannot tell, and `sim`/`cam` simply fall
+//     back to their defaults on the second path (applyFieldsFresh, §17.4).
+//   * a fragment is checked by the same reader before anything is touched, so a
+//     paste that names a body it does not define is a message, not a wrecked bench.
+//
+// Ids are the one thing that cannot survive verbatim. A fragment's body ids are
+// whatever the bench it was cut from happened to be using, and the bench it lands in
+// is using its own -- so a paste RENUMBERS: each body takes a fresh id from `uid`,
+// and every reference to it follows through remapItem below.
+function exportFragment(sel){
+  return [`scene ${SCENE_VERSION}`, ...emitSceneBody(list => sel[list])].join('\n') + '\n';
+}
+
+// Rewrite every body id a parsed item names, through `map`. The places an id can
+// hide are exactly the ones parseScene's dangling-reference check walks: the
+// positional ends, a `ref`/`ref-bg`/`ep-centre` field, and each extra control
+// point's own endpoint. Copies rather than mutates -- the parse is not ours to edit,
+// and a fragment may be pasted more than once.
+function remapItem(it, map){
+  const at = id => (id!=null && map.has(id)) ? map.get(id) : id;
+  const ends = {};
+  for(const [name] of (it.row.ends || [])) ends[name] = Object.assign({}, it.ends[name], {id: at(it.ends[name].id)});
+  const f = Object.create(null);
+  for(const k of Object.keys(it.f)) f[k] = it.f[k];
+  for(const [name, fd] of Object.entries(it.row.fields)){
+    if(f[name]===undefined) continue;
+    if(fd.t==='ref' || fd.t==='ref-bg') f[name] = at(f[name]);
+    else if(fd.t==='ep-centre') f[name] = Object.assign({}, f[name], {id: at(f[name].id)});
+    else if(fd.t==='pts') f[name] = f[name].map(pt =>
+      Object.assign({}, pt, {ep: Object.assign({}, pt.ep, {id: at(pt.ep.id)})}));
+  }
+  return { row:it.row, ln:it.ln, id:it.id, ends, f };
+}
+
+// Read a fragment and ADD it to the bench -- the one import path that does not
+// clear first. Returns what it built, per list, which is what the caller selects and
+// then moves into place (select.js §18.4). Any `sim`/`cam` line the text carries is
+// parsed (so a whole scene file pastes as a fragment) and then ignored: a paste adds
+// parts, it does not take over the world they land in.
+function pasteFragment(text){
+  const parsed = parseScene(text);          // strict: throws before anything is touched
+  const map = new Map();
+  const made = { bodies:[], constraints:[], cables:[], springs:[], rotSprings:[], interactions:[] };
+  // Bodies first, and their new ids come from the constructors themselves, so the
+  // bench's own `uid` stays the single allocator (§04.2).
+  for(const it of parsed.items) if(itemIsBody(it)){
+    const o = buildItem(it, true); map.set(it.id, o.id); made.bodies.push(o);
+  }
+  for(const it of parsed.items) if(!itemIsBody(it)){
+    const o = buildItem(remapItem(it, map)); made[it.row.list].push(o);
+  }
+  refreshFrozen();
+  return made;
+}
 
 // ---- §17.6 · the state snapshot (what Reset restores) ----
 // Walks the same ledger, over each row's `state` list. Structure is not captured --

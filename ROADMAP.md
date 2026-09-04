@@ -29,7 +29,7 @@ The gaps are catalogued in **Status (as built)** notes throughout `DEVELOPMENT.m
 - **Driven and modulated constraints** -- every row currently drives its residual to zero; no motors, actuators, or driven ratios (DEVELOPMENT.md §4.4).
 - **The signal-wire layer** -- absent entirely, which also blocks the flyball-governed drive (DEVELOPMENT.md §5).
 - **Power instrumentation** -- forces are exposed; power crossing joints is not yet surfaced (DEVELOPMENT.md §7).
-- **The feature-first editing model** -- the editor is tool-first, with no persistent named features or relation menu (DEVELOPMENT.md §8).
+- **The feature-first editing model** -- the editor is tool-first, with no persistent named features or relation menu (DEVELOPMENT.md §8). Bulk editing has since landed on top of it: a lasso selection with a transform box, and a stash of reusable widgets held as scene fragments (`SCENE.md` §S.9).
 - **Locating a flow port** -- mass exchange conserves linear momentum exactly but not angular momentum, because nothing yet names the point the gas crossed at (`VESSEL.md` §V.11, §V.12); the mediating body already is that point, so routing the transfer's impulse through its endpoint columns would close it.
 - **A load-controlled cycle** -- heat and mass exchange are live, and a reservoir-driven working vessel already turns heat into stroke, but running a *cycle* means switching the couplings in step with the motion, which waits on the signal layer (§5) exactly as the governed drive does.
 - **The reference machine** -- neither stage is assembled; machine 1 needs its drivetrain wired, machine 2 additionally waits on the signal layer (§9 above).

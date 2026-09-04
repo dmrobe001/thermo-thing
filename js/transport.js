@@ -55,6 +55,11 @@ function restoreState(){
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
     c._Lallow=null; c._spoolAngle=undefined;
   });
+  // A selection box describes a pose that Reset has just replaced, so re-fit it
+  // around the same bodies at the restored one (select.js §18.1 regroup) rather
+  // than leave a frame whose next drag would snap the scene back to a pose that
+  // no longer exists.
+  if(selGroup) regroup();
 }
 
 // ---- §16.2 · transport (play / step / reset) ----
@@ -69,6 +74,11 @@ const btnPlay=document.getElementById('btnPlay');
 // Play of a session -- before anything, even boot, has ever saved a baseline --
 // still needs to establish one.
 function setRunning(r){ sim.running=r; btnPlay.textContent=r?'Pause':'Play'; btnPlay.classList.toggle('on',r);
+  // A selection box holds its bodies' poses against a frame captured when the
+  // selection was made (select.js §18.2). A run moves those bodies out from under
+  // it, so the box would be describing a pose that no longer exists -- drop it at
+  // the moment the run starts rather than draw a stale frame.
+  if(r && selGroup) clearSelection();
   if(r){ if(!saved) saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; hover=null; hoverHandle=null; hoverSnap=null; } }
 btnPlay.onclick=()=>setRunning(!sim.running);
 document.getElementById('btnStep').onclick=()=>{ if(sim.running)return; if(!saved)saveState(); projectPositions(20); substep(sim.h); };
@@ -83,12 +93,21 @@ gv.oninput=e=>{ sim.g=parseFloat(e.target.value); document.getElementById('gravR
 
 // ---- §16.4 · keyboard shortcuts ----
 window.addEventListener('keydown',e=>{
-  if(e.target.tagName==='INPUT')return;
+  // TEXTAREA as well as INPUT: the scene card and the stash card are both text
+  // areas, and every single-letter branch below is a tool shortcut that would
+  // otherwise fire while someone is typing a scene into one.
+  if(e.target.tagName==='INPUT' || e.target.tagName==='TEXTAREA')return;
+  // Copy and place a selection (select.js §18.4). Checked ahead of every plain-key
+  // branch below, since 'c' and 'v' are themselves tool shortcuts.
+  if((e.ctrlKey||e.metaKey) && !e.altKey && (e.key==='c'||e.key==='C')){ e.preventDefault(); stashMsg=copySelection(); renderInspector(); return; }
+  if((e.ctrlKey||e.metaKey) && !e.altKey && (e.key==='v'||e.key==='V')){ e.preventDefault(); pasteHere(); return; }
+  if(e.ctrlKey||e.metaKey) return;                 // leave every other browser shortcut alone
   if(e.code==='Space'){ e.preventDefault(); setRunning(!sim.running); }
   else if(e.key==='r'||e.key==='R'){ setRunning(false); restoreState(); eHist.length=0; }
   else if(e.key==='s'||e.key==='S'){ if(!sim.running){ if(!saved)saveState(); substep(sim.h);} }
-  else if(e.key==='Escape'){ pending=null; bodyPreview=null; setTool('select'); }
-  else if(e.key==='Delete'||e.key==='Backspace'){ if(selBody){const id=selBody.id;
+  else if(e.key==='Escape'){ pending=null; bodyPreview=null; lasso=null; setTool('select'); }
+  else if(e.key==='Delete'||e.key==='Backspace'){ if(selGroup){ deleteGroup(); }
+      else if(selBody){const id=selBody.id;
       dropBodyFromConstraints(id);
       springs=springs.filter(s=>s.a.id!==id&&!(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
@@ -100,6 +119,25 @@ window.addEventListener('keydown',e=>{
       else if(selInteraction){ interactions=interactions.filter(x=>x!==selInteraction); clearSelection(); saveState(); } }
   else { const t=TOOLS.find(t=>t.key===e.key); if(t) setTool(t.id); }
 });
+
+// Ctrl/Cmd-V, and the one place that decides where a pasted widget lands: under the
+// cursor if it is over the canvas, else the middle of the view. The internal
+// clipboard is preferred over the system one because it is synchronous and needs no
+// permission; the system clipboard is only consulted when nothing has been copied in
+// this bench yet, and then asynchronously (select.js §18.4).
+function pasteHere(){
+  const at = (mouseWorld && isFinite(mouseWorld[0])) ? mouseWorld : viewCentre();
+  if(widgetClip){ stashMsg=pasteWidget(widgetClip, at[0], at[1]); renderInspector(); return; }
+  if(typeof navigator!=='undefined' && navigator.clipboard && navigator.clipboard.readText){
+    navigator.clipboard.readText().then(t=>{
+      if(!t || !t.trim()){ stashMsg={ok:false, text:'Nothing to paste.'}; renderInspector(); return; }
+      widgetClip=t; stashMsg=pasteWidget(t, at[0], at[1]); renderInspector();
+    }, ()=>{ stashMsg={ok:false, text:'Nothing copied here, and the system clipboard is not readable.'}; renderInspector(); });
+    return;
+  }
+  stashMsg={ok:false, text:'Nothing to paste -- copy a selection first.'};
+  renderInspector();
+}
 
 // ---- §16.5 · boot (initial tool, ledger wiring, first frame) ----
 setTool('select'); renderInspector();

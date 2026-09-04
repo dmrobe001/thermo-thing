@@ -7,9 +7,13 @@
 // ============================================================================
 // ---- §14.1 · selection state ----
 let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null, selInteraction=null;
+// `selGroup` (select.js §18.1) is the seventh: a MANY-body selection with a box
+// around it. It is cleared here with the rest -- one selection at a time is the
+// invariant every select* below keeps, and a group is a selection like any other.
 function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); cables.forEach(c=>c.sel=false);
   springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false); interactions.forEach(i=>i.sel=false);
   selBody=null; selConstraint=null; selCable=null; selSpring=null; selRotSpring=null; selInteraction=null;
+  selGroup=null; groupDrag=null;
   renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
@@ -156,6 +160,9 @@ function bindConPointsCard(c){
 }
 function renderInspector(){
   const p=document.getElementById('panelBody');
+  // A group is checked first: it is a selection of many bodies, so none of the
+  // single-object branches below can speak for it (select.js §18.5).
+  if(selGroup){ p.innerHTML=groupInspectorHTML(selGroup); wireGroupCard(); return; }
   if(selBody && selBody.shape==='vessel'){ renderVesselInspector(selBody); return; }
   if(selBody){
     const b=selBody; const isRect=b.shape==='rect';
@@ -396,10 +403,12 @@ function renderInspector(){
         </div>
       </div>
       <div class="card"><div class="cardhead">controls</div>
-        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/f/g/h/k/v/c/q tools</p>
+        <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/f/g/h/k/l/v/c/q/t tools · lasso (l) to select many, then drag inside the box to move it, a corner to scale, the stem to turn · Ctrl/Cmd-C copies a selection, Ctrl/Cmd-V places it</p>
       </div>
+      ${stashCardHTML()}
       ${sceneCardHTML()}`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
+    wireStashCard();
     wireSceneCard();
   }
 }
@@ -408,6 +417,7 @@ function renderInspector(){
 // it focused -- clobbering mid-edit would fight their keystrokes
 function setLive(id,v){ const el=document.getElementById(id); if(el && document.activeElement!==el) el.value=v; }
 function updateInspectorLive(){
+  if(selGroup){ updateGroupLive(); return; }
   if(selBody && selBody.shape==='vessel' && document.getElementById('v_len')){
     const v=selBody, P=gasP(v), T=gasT(v);
     setLive('v_len',v.len.toFixed(4)); setLive('v_bore',v.bore.toFixed(3));

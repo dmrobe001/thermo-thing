@@ -69,7 +69,7 @@ function updateHUD(){
     `${sim.running?'running':'paused'} · ${bodies.length} bodies · ${constraints.length} constraints`
     + (!sim.running && violCount ? ` · [!] ${violCount} unsatisfied` : '');
   if(sim.running){ eHist.push(tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
-  if(selBody||selConstraint||selCable||selSpring||selRotSpring||selInteraction) updateInspectorLive();
+  if(selGroup||selBody||selConstraint||selCable||selSpring||selRotSpring||selInteraction) updateInspectorLive();
 }
 // ---- §12.3 · drawSpark ----
 function drawSpark(){

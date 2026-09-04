@@ -21,12 +21,13 @@ js/tools.js         §13 tool palette & pointer handling
 js/inspector.js     §14 selection state & right-panel inspector
 js/examples.js      §15 prebuilt example machines
 js/scene.js         §17 the scene file (ledger, exportScene, importScene)
+js/select.js        §18 selection groups, the transform box, the widget stash
 js/transport.js     §16 transport controls, snapshots, keyboard shortcuts, boot
 ```
 
-`js/scene.js` loads before `js/transport.js` despite its higher number: transport's
-boot calls `renderInspector()`, which draws the scene-file card. Load order is
-dependency order; the section numbers are names.
+`js/scene.js` and `js/select.js` load before `js/transport.js` despite their higher
+numbers: transport's boot calls `renderInspector()`, which draws the scene-file card
+and the stash card. Load order is dependency order; the section numbers are names.
 
 All scripts are plain globals -- no ES modules. Load order matters; `index.html` loads them in dependency order.
 
@@ -60,6 +61,15 @@ All mutable world state lives in `js/state.js` (§04):
 - `interactions` -- array of heat and mass-exchange couplings, `{type:'heat'|'flow', body:{id}, vessel:{id}, k, sel}` (`vessel.id === null` is the background). They carry no force and no constraint row; two of the same kind sharing a `body` are a *pair* and couple what they each name through it. See `VESSEL.md` §V.10 and `js/physics.js` §08.0b.
 - `sim` -- simulation parameters (`h`, `beta`, `reg`, `running`, `gravity`, `g`, `bathQ`, ...).
 - `cam` -- camera state (`x`, `y`, `scale`).
+- `selGroup` -- the many-body selection, or null (`select.js` §18.1). It is a
+  *selection*, not a scene object: nothing about it is serialized or solved. While it
+  is up it owns the pose of every body it holds -- each body's position and angle are
+  fixed to the box's frame, so the box's translation, rotation and uniform scale write
+  them from one capture taken when the selection was made. Which couplings come with
+  the bodies is derived by one rule: **every body an element names must be in the
+  selection**; a background anchor does not disqualify it and travels with the box.
+  Body sizes never change, so a scale spreads the parts apart, and the captured
+  geometry of the members is re-read rather than multiplied (§18.2).
 
 ## Scenes are built from the scene file, not from code
 
@@ -107,7 +117,7 @@ Give new code a home in an existing section (and register it in that section's s
 |---|---|---|
 | `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `cables`, `springs`, `rotSprings`, `interactions`; `sim` (incl. `sim.bg`, the ambient atmosphere, and `sim.bathQ`); `cam` |
 | `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshInertia`, `setBodyMass`, `w2s`/`s2w`; §05.2d `makeVessel`/`refreshVessel`/gas state, §05.2c `epLocal`/`epWorldPt`/`epOffOf` (material endpoint offsets), §05.2e `bodyPolygon`/`clipPoly`/`contactArea` (interaction contact area) |
-| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `epFrame` (endpoint velocity columns, incl. a vessel's length column), `twoPointFrame`, `cableFrame`, `rowsFor`, §06.2c extra control points (`conPoints`, `makeConPoint`, `linePointRows`, `conEndpoints`), §06.2d posable rods (`beginPosing`/`endPosing`, `withPosing`, `rodPosing`/`rodReleased`, `recapturePosable`), `makeSpringCon`, `makeRotSpringCon`, `rotSpringSpiralGeom` |
+| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `epFrame` (endpoint velocity columns, incl. a vessel's length column), `twoPointFrame`, `cableFrame`, `rowsFor`, §06.2b `recaptureConAngles`/`recaptureConPose` (re-read what a line joint holds off the live geometry), §06.2c extra control points (`conPoints`, `makeConPoint`, `linePointRows`, `conEndpoints`), §06.2d posable rods (`beginPosing`/`endPosing`, `withPosing`, `rodPosing`/`rodReleased`, `recapturePosable`), `makeSpringCon`, `makeRotSpringCon`, `rotSpringSpiralGeom` |
 | `js/solver.js` | §07 | `solveLinear` -- dense Gauss-Jordan on the Schur complement |
 | `js/physics.js` | §08 | `substep` -- §08.0b `vesselExchangeStep` (heat & mass, at frozen geometry, ahead of everything) -> forces (gravity, drag, springs, vessel centrifugal) -> §08.1b `vesselGasStep` -> constraint solve -> position integration -> energy-conservation rescale |
 | `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` |
@@ -117,5 +127,6 @@ Give new code a home in an existing section (and register it in that section's s
 | `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
 | `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
 | `js/examples.js` | §15 | `SCENES` -- every prebuilt machine as scene-file text, with its own reasoning as `#` comments; `loadExample` is `importScene` and nothing else |
-| `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, carrying both the serialized `fields` and the `state` a run can change), `exportScene`/`importScene`, `clearScene`, the scene-file panel card, §17.6 `snapshotState`/`applyState` |
-| `js/transport.js` | §16 | `saveState`/`restoreState` (the ledger walk of §17.6 plus solver-scratch clearing), `setRunning`, keyboard shortcuts, boot |
+| `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, carrying both the serialized `fields` and the `state` a run can change), `exportScene`/`importScene`, `clearScene`, the scene-file panel card, §17.6 `snapshotState`/`applyState`, §17.7 fragments (`exportFragment`/`pasteFragment` -- part of a bench, out and back in) |
+| `js/select.js` | §18 | §18.1 the group (`selGroup`, `groupMembers`, `makeGroup`, `selectGroup`), §18.2 the transform box (`groupApply`, `groupRecapture`, the handles and their drag), §18.3 the lasso (`lassoSelect`, `lassoToggle`), §18.4 widgets (`selectionFragment`, `copySelection`, `pasteWidget`, the stash), §18.5 the group inspector and stash cards |
+| `js/transport.js` | §16 | `saveState`/`restoreState` (the ledger walk of §17.6 plus solver-scratch clearing), `setRunning`, keyboard shortcuts (incl. copy/paste, §18.4), boot |
