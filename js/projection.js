@@ -91,6 +91,18 @@ function projectPositions(iters, extra, baseline){
 }
 // ---- §09.2 · conMaxC ----
 function conMaxC(con){ if(con._compiled) return 0; let m=0; for(const r of rowsFor(con)){ if(r.nh) continue; const a=Math.abs(r.C); if(a>m)m=a; } return m; }
+// Same drift tolerance the HUD/canvas use (render.js §11.5) to flag a constraint as
+// visibly unsatisfied -- shared here so the reset baseline can apply the identical
+// standard (§16.1 saveState) rather than drifting out of step with what the red
+// highlight already tells the player is wrong.
+const CON_DRIFT_TOL = 2e-3;
+// Whether every constraint currently holds within that tolerance -- the gate
+// saveState() uses to decide whether the live pose is fit to become the reset
+// baseline (transport.js §16.1).
+function constraintsSatisfied(){
+  for(const con of constraints){ if(conMaxC(con) > CON_DRIFT_TOL) return false; }
+  return true;
+}
 // ---- §09.3 · reactionOf ----
 function reactionOf(con){
   const l=con._lam; const h=sim.h; if(!l||!l.length) return null;

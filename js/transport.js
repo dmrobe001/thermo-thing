@@ -25,7 +25,17 @@ let saved=null;
 // the keyboard delete -- so it is where the derived freezing (§06.2b) has to catch
 // up. Without it a strut just placed in a paused bench would not read as locked
 // until the next substep or projection happened to run.
-function saveState(){ refreshFrozen(); saved=snapshotState(); }
+//
+// An edit that leaves a constraint visibly unsatisfied (the same red-highlight
+// drift the canvas/HUD already flag, projection.js §09.2) must not become the
+// reset baseline or the exported scene -- Reset would then "restore" a pose that
+// was never actually valid, and an exported file would silently bake the error
+// in. So the snapshot here is gated on constraintsSatisfied(): an edit that drags
+// a mechanism somewhere it can't fully reach just leaves `saved` at the last pose
+// that WAS satisfied, until an edit brings it back into agreement. `force` is the
+// one deliberate exception: importScene (scene.js §17.4) treats the file's pose as
+// the one thing a fidelity-first format must not second-guess, violated or not.
+function saveState(force){ refreshFrozen(); if(force || constraintsSatisfied()) saved=snapshotState(); }
 function restoreState(){
   if(!saved) return;
   applyState(saved);
