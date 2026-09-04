@@ -617,22 +617,40 @@ function dropBodyFromConstraints(id){
 // it depends on is the gesture in progress, never the configuration, so nothing still
 // freezes or thaws as a mechanism swings through a pose (SCENE.md §S.8).
 //
+// Two pieces of state, because the release answers two questions on two different
+// timescales, and conflating them is what a canvas frame drawn BETWEEN pointermoves
+// exposes:
+//
+//   posingRoot  the body a pose GESTURE is dragging, held for the whole gesture --
+//               pointerdown to pointerup. This is what the rod IS to the player, and
+//               so it is what the canvas draws (render.js §11.5).
+//   posing      whether we are inside the row-building scope right now. This is what
+//               the rod HOLDS. Between two pointermoves it is zero and the rod is a
+//               rigid rod again, which is what makes the recapture meaningful and
+//               keeps conMaxC, the violation highlight and saveState honest.
+//
+// Both live here rather than in the tool layer so that render.js -- which loads
+// BEFORE tools.js -- never has to reach forward for them. It did once, and a forward
+// reference that fails to resolve throws inside render(), which kills the rAF chain
+// in §10 outright: the page stops redrawing and never starts again.
+//
 // `posing` is a depth counter rather than a flag so that a nested projection (or a
-// caller that wraps another) cannot clear it early; `posingRoot` is the id of the
-// body being dragged, saved and restored alongside it for the same reason.
+// caller that wraps another) cannot clear it early. `posingRoot` is set and cleared
+// by the tool layer wherever it sets and clears its own `drag` (§13.5/§13.7); a stale
+// one would only draw a rail nobody is riding, since the rows still need `posing`.
 let posing = 0, posingRoot = null;
-function withPosing(rootId, fn){
-  posing++; const prev=posingRoot; posingRoot = rootId==null ? null : rootId;
-  try { return fn(); } finally { posing--; posingRoot=prev; }
-}
+function beginPosing(rootId){ posingRoot = rootId==null ? null : rootId; }
+function endPosing(){ posingRoot = null; }
+function withPosing(fn){ posing++; try { return fn(); } finally { posing--; } }
 // Whether a drag on body `rootId` would release this rod -- the predicate on its own,
-// with no reference to whether a posing scope is currently open. rowsFor asks it
-// through rodReleased below; the canvas asks it directly (render.js §11.5), because
-// a frame is drawn between pointermoves rather than inside one and the rail motif
-// has to be up for the whole gesture, not for the instant the rows are built.
+// with no reference to any of the state above, so a check can ask it about a gesture
+// that is not happening (tools/posable-check.js does).
 const rodPosableFor = (con, rootId) => con.type==='rod' && !!con.posable && rootId!=null
   && conEndpoints(con).some(ep => ep.id===rootId);
-const rodReleased = con => posing>0 && rodPosableFor(con, posingRoot);
+// Released by the gesture in progress (what the canvas draws) ...
+const rodPosing = con => rodPosableFor(con, posingRoot);
+// ... and released right now, in the rows being built (what the solver sees).
+const rodReleased = con => posing>0 && rodPosing(con);
 
 // Once the drag step has settled, a released rod re-reads what it holds from the
 // pose the player just produced (§06.2b recaptureRodPose): the length, the welds'
@@ -646,9 +664,9 @@ const rodReleased = con => posing>0 && rodPosableFor(con, posingRoot);
 // that load, since a released rod is not holding anything for the projection to
 // fight: an adjustable member has no preload to speak of, and that is what marking
 // one posable declares it to be.
-function recapturePosable(rootId){
+function recapturePosable(){
   for(const con of constraints)
-    if(rodPosableFor(con, rootId)) recaptureRodPose(con);
+    if(rodPosing(con)) recaptureRodPose(con);
 }
 
 // ---- §06.3 · cableFrame ----

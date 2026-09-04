@@ -519,7 +519,7 @@ const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
 let clickArmed=false;   // non-select tools: the tap-committed click (§13.5/§13.7)
 let anchorDrag=null, lastSnap=null, resizeDrag=null;
-function cancelSingle(){ drag=null; grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; clickArmed=false; }
+function cancelSingle(){ drag=null; endPosing(); grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; clickArmed=false; }
 
 // `hover` highlights whatever body/interaction sits under the cursor when it
 // isn't already selected; `hoverHandle` highlights a control point of the
@@ -702,7 +702,10 @@ cv.addEventListener('pointerdown',e=>{
     const bi=pickBody(wx,wy);
     if(bi>=0){ selectBody(bi);
       if(sim.running){ grab={bi, off:localOff(bi,wx,wy)}; }
-      else { drag={bi, off:localOff(bi,wx,wy)}; }
+      // beginPosing names the body a posable rod is released around for the whole
+      // gesture (constraints.js §06.2d) -- what the canvas draws as a rail. It goes
+      // wherever `drag` goes, here and at both of its clears below.
+      else { drag={bi, off:localOff(bi,wx,wy)}; beginPosing(bodies[bi].id); }
       return; }
     panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y,candidate:true};   // one-finger background pan; a tap deselects
     return;
@@ -1083,13 +1086,13 @@ cv.addEventListener('pointermove',e=>{
 // without synthesizing pointer events (tools/posable-check.js), the same seam
 // runToolClick gives the click paths (§13.5).
 function poseDragTo(wx,wy){
-  const root = bodies[drag.bi];
-  // Posing is the mode a `posable` rod jointed to the dragged body is released in
+  // Posing is the scope a `posable` rod jointed to the dragged body is released in
   // (constraints.js §06.2d): for the length of this call such a rod is a bare rail,
-  // holding neither its length nor its welds, and grounding nothing. Everything that
-  // reads the rows has to sit inside the scope, refreshFrozen included -- G.static is
-  // read below, and a body whose only anchor is a released rod is free to be posed.
-  withPosing(root.id, ()=>{
+  // holding neither its length nor its welds, and grounding nothing. Which body the
+  // gesture is on was named by beginPosing at pointerdown. Everything that reads the
+  // rows has to sit inside the scope, refreshFrozen included -- G.static is read
+  // below, and a body whose only anchor is a released rod is free to be posed.
+  withPosing(()=>{
     refreshFrozen();
     const G=bodies[drag.bi];
     if(G.static){
@@ -1131,17 +1134,8 @@ function poseDragTo(wx,wy){
   // freezes again, at the geometry the drag left. Leaving that to the caller's
   // saveState would work but would make every reader of `static` between here and
   // there -- render, the HUD, the inspector -- see the released world.
-  recapturePosable(root.id);
+  recapturePosable();
   refreshFrozen();
-}
-
-// The body a live pose drag is pulling, or null when nothing is being posed. The
-// canvas reads it (render.js §11.5) to draw a rod as a rail exactly while it is one:
-// the posing scope above is open only inside a pointermove, and frames are drawn
-// between them. Nothing else may key off it -- what a rod HOLDS is decided by the
-// scope, never by this.
-function poseDragRoot(){
-  return (drag && !sim.running && bodies[drag.bi]) ? bodies[drag.bi].id : null;
 }
 
 // ---- §13.7 · pointerup / cancel / wheel ----
@@ -1190,7 +1184,7 @@ function endPointer(e){
   }
   clickArmed=false;
   if(panning){ if(panning.candidate && !movedFar) clearSelection(); panning=null; }
-  drag=null; grab=null; downScreen=null;
+  drag=null; endPosing(); grab=null; downScreen=null;
 }
 cv.addEventListener('pointerup',endPointer);
 cv.addEventListener('pointercancel',endPointer);
