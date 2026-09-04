@@ -61,12 +61,13 @@ const near=(a,b,tol)=>Math.abs(a-b)<=tol;
 run(`var poseDrag = (id, from, to, steps) => {
   const bi = bodyIndex(id);
   drag = { bi, off: localOff(bi, from[0], from[1]) };
+  beginPosing(id);                     // §13.5 does, alongside setting drag
   const n = steps || 20;
   for(let i=1;i<=n;i++){
     poseDragTo(from[0]+(to[0]-from[0])*i/n, from[1]+(to[1]-from[1])*i/n);
     saveState();                       // §13.6 does, after every move
   }
-  drag = null;
+  drag = null; endPosing();            // §13.7 does, alongside clearing drag
 };`);
 // The world-space cursor cap (§05.4) is a SCREEN-space distance, so the camera has
 // to be somewhere sane for a drag to reach where it is aimed.
@@ -117,8 +118,9 @@ const wasStatic = run(`bodies[0].static===true`);
 ok('a double-welded rod grounds its far end when nothing is being dragged', wasStatic);
 run(WELDED(true));
 ok('and a posable one does too, until the drag starts', run(`bodies[0].static===true`));
-ok('inside a posing scope rooted on its own body it grounds nothing',
-   run(`withPosing(1, ()=>{ refreshFrozen(); return bodies[0].static===false; })`));
+ok('inside a posing gesture on its own body it grounds nothing',
+   run(`(()=>{ beginPosing(1); const r=withPosing(()=>{ refreshFrozen(); return bodies[0].static===false; });
+        endPosing(); return r; })()`));
 run(`refreshFrozen()`);
 
 // A body pinned to ground by one welded-background rod, dragged around the anchor:
@@ -185,15 +187,14 @@ run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
   constraints.push(makeRodCon({id:null,off:[0,0]}, {id:1,off:[0,0]}, true, false, true));
   constraints.push(makeRodCon({id:1,off:[0,0]}, {id:2,off:[0,0]}, false, false, true));
   refreshFrozen(); saveState(true); })()`);
+run(`var rowsUnder = (rootId, ci) => { beginPosing(rootId);
+  const n = withPosing(()=>rowsFor(constraints[ci]).length); endPosing(); return n; };`);
 ok('a rod naming the dragged body is released',
-   run(`withPosing(1, ()=>rowsFor(constraints[0]).length===0)`),
-   run(`withPosing(1, ()=>JSON.stringify(rowsFor(constraints[0]).length))`));
-ok('and so is one that names it as its FAR end',
-   run(`withPosing(1, ()=>rowsFor(constraints[1]).length===0)`));
+   run(`rowsUnder(1,0)===0`), run(`String(rowsUnder(1,0))`));
+ok('and so is one that names it as its FAR end', run(`rowsUnder(1,1)===0`));
 // Rigid, that rod is two rows: its distance, and the weld on its background end.
 ok('a drag on the far body leaves the ground rod rigid',
-   run(`withPosing(2, ()=>rowsFor(constraints[0]).length===2)`),
-   run(`withPosing(2, ()=>JSON.stringify(rowsFor(constraints[0]).length))`));
+   run(`rowsUnder(2,0)===2`), run(`String(rowsUnder(2,0))`));
 // Three in a row, so there is a posable rod two joints away from the grab.
 run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
   bodies.push(makeBody(1,0,0.2)); bodies.push(makeBody(2,0,0.2)); bodies.push(makeBody(3,0,0.2));
@@ -269,17 +270,23 @@ console.log('\n8. the canvas shows the rail only while the rod is one');
 run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
   const b=makeBody(1,0,0.2); bodies.push(b);
   constraints.push(makeRodCon({id:null,off:[0,0]}, {id:b.id,off:[0,0]}, true, false, true));
-  refreshFrozen(); selectConstraint(0); drag=null; })()`);
-ok('a posable rod nobody is dragging draws as a plain rod',
-   run(`poseDragRoot()===null && rodPosableFor(constraints[0], poseDragRoot())===false`));
-run(`drag={bi:0, off:[0,0]}; sim.running=false;`);
-ok('and as a rail for as long as the drag on its body lasts',
-   run(`poseDragRoot()===1 && rodPosableFor(constraints[0], poseDragRoot())===true`));
-run(`sim.running=true;`);
-ok('never while the sim is running -- that is a play grab, not a pose',
-   run(`poseDragRoot()===null`));
-run(`sim.running=false; render(); renderInspector(); updateInspectorLive(); drag=null;`);
+  refreshFrozen(); selectConstraint(0); cancelSingle(); })()`);
+ok('a posable rod nobody is dragging draws as a plain rod', run(`rodPosing(constraints[0])===false`));
+run(`beginPosing(1)`);
+ok('and as a rail for as long as the gesture on its body lasts', run(`rodPosing(constraints[0])===true`));
+ok('but its ROWS are only released inside the scope the solver runs in',
+   run(`rowsFor(constraints[0]).length===2 && withPosing(()=>rowsFor(constraints[0]).length)===0`),
+   run(`JSON.stringify([rowsFor(constraints[0]).length, withPosing(()=>rowsFor(constraints[0]).length)])`));
+run(`endPosing()`);
+ok('the gesture ending puts the rail away', run(`rodPosing(constraints[0])===false`));
+run(`render(); renderInspector(); updateInspectorLive();`);
 ok('render and the inspector run clean over a posable rod', true);
+// render.js loads BEFORE tools.js: anything it calls that lives in the tool layer is
+// a forward reference, and one that fails to resolve throws inside render(), which
+// kills the §10 rAF chain outright -- the page stops redrawing for good. Everything
+// the canvas needs about a released rod therefore lives in §06.2d.
+ok('the canvas reads the release from the constraint layer, not the tool layer',
+   !fs.readFileSync(path.join(ROOT,'js/render.js'),'utf8').includes('poseDragRoot'));
 
 function firstDiff(a,b){
   if(a===b) return '';

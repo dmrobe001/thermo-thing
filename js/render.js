@@ -414,7 +414,7 @@ function drawConstraint(con){
     // Only while it is released: a posable rod nobody is dragging holds its length
     // and its welds exactly as any other rod does, so it must look like one. The flag
     // is a property, and the panel that sets it is where a property belongs.
-    if(rodPosableFor(con, poseDragRoot())){
+    if(rodPosing(con)){
       const L=Math.hypot(bx-ax,by-ay)||1;
       const nx=-(by-ay)/L, ny=(bx-ax)/L, off=4;
       ctx.lineWidth=1;
