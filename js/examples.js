@@ -121,20 +121,28 @@ slot 2 -- bg(-10,2.6) lock=B restAngB=0
 cvt 1 -- 2
 `,
 
-gear: `scene 2
-# Rack-and-pinion, via the rolling/gear constraint (constraints.js §06.2, gearFrame).
-# The cart's control point sits at its own centre (off is exactly (0,0), so it
-# never visibly detaches as the cart translates -- a body's own centre is
-# trivially unaffected by the point's own "never rotates with its body" rule
-# anyway), and the traction line is frozen horizontal (angle=0). The gear's
-# rotation is coupled to the cart's speed along that line at the LIVE traction
-# radius -- the perpendicular distance from the gear's centre to the line, here
-# 1.0, deliberately different from the gear's own drawn radius (0.4): the
-# traction radius is a property of the geometry, not of the gear body itself.
+rack: `scene 2
+# A rack and pinion. The cart carries the RACK -- an infinite, massless toothed
+# line welded to it, anchored at its centre and running along its own local +x
+# (angle omitted = 0). The rack is part of the cart, so it turns with the cart:
+# what keeps this rack horizontal is not the world frame but the slot, whose two
+# prismatic ends lock the cart's orientation as well as confining it to the rail.
+# Tilt that rail and the rack tilts with it.
 #
-# The gear is held in place exactly as the wheel integrator's disk is: a short
-# rod to a fixed background point, welded only at that end, pins its centre
-# while leaving it free to spin (see the integrator example's own comment).
+# The pinion meshes with the rack wherever it sits -- perfect traction, no
+# tangency required. Its PITCH RADIUS is its own perpendicular distance from the
+# rack line, here 1.0, deliberately unlike its drawn radius (0.4): the pitch
+# radius is a fact about where the two bodies are, not about how big the pinion
+# is. Slide the pinion nearer the rack and the ratio changes -- which is what
+# makes this row nonholonomic, exactly as the wheel integrator's contact is.
+#
+# The pinion is held exactly as that integrator's disk is: a short rod to a fixed
+# background point, welded only at that end, pins its centre and leaves it free
+# to spin (see the integrator example's own comment).
+#
+# The cart starts moving and nothing damps it, so the pair simply runs: the only
+# transient is the first step, where the rack takes up the cart's head start and
+# spins the pinion up to match.
 sim gravity=off
 cam x=-1 y=2 scale=64
 
@@ -143,9 +151,9 @@ body 1 x=-1 y=2.6 r=0.3 vx=1.4
 body 2 x=-1 y=1.6 r=0.4
 
 # constraints
-slot 1 -- bg(-10,2.6) lock=B restAngB=0
+slot 1 -- bg(-10,2.6) lock=both restAngA=0 restAngB=0
 rod bg(-1.5,1.6) -- 2 len=0.5 weld=A restAngA=-3.14159265359
-gear 1 -- 2 angle=0
+rack 1 -- 2
 `,
 
 cable: `scene 2

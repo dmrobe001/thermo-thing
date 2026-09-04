@@ -99,8 +99,12 @@ function renderVesselInspector(v){
   document.getElementById('v_gam').onchange=()=>{ const g=num('v_gam');
     if(isFinite(g)&&g>1.001){ const Pk=gasP(v), Tk=gasT(v)||sim.bg.T; v.gas.gamma=g; setVesselGasPT(v,Pk,Tk); } commit(); };
   const commitPose=()=>{ const x=num('v_x'), y=num('v_y'), th=num('v_th');
-    if(isFinite(x)&&isFinite(y)&&isFinite(th)){ v.x=x; v.y=y; v.th=th;
-      recaptureGrounding(v); projectPositions(8); } commit(); };
+    if(isFinite(x)&&isFinite(y)&&isFinite(th)){
+      // Snapshot first: a typed pose is a rigid move like any other, so a rolling
+      // pair attached to this body has to take it up as slip (projection.js §09.1).
+      const q0=poseSnapshot();
+      v.x=x; v.y=y; v.th=th;
+      recaptureGrounding(v); projectPositions(8,null,q0); } commit(); };
   ['v_x','v_y','v_th'].forEach(id=>document.getElementById(id).onchange=commitPose);
   const commitVel=()=>{ const vx=num('v_vx'), vy=num('v_vy'), w=num('v_w'), vl=num('v_vlen');
     if(isFinite(vx)&&isFinite(vy)&&isFinite(w)&&isFinite(vl)){ v.vx=vx; v.vy=vy; v.w=w; v.vlen=vl; } commit(); };
@@ -159,8 +163,11 @@ function renderInspector(){
       renderInspector(); saveState(); };
     const commitPose=()=>{ const x=parseFloat(document.getElementById('f_x').value),
         y=parseFloat(document.getElementById('f_y').value), th=parseFloat(document.getElementById('f_th').value);
-      if(isFinite(x)&&isFinite(y)&&isFinite(th)){ b.x=x; b.y=y; b.th=th;
-        recaptureGrounding(b); projectPositions(8); }
+      if(isFinite(x)&&isFinite(y)&&isFinite(th)){
+        // Snapshot first -- see the vessel's own commitPose above.
+        const q0=poseSnapshot();
+        b.x=x; b.y=y; b.th=th;
+        recaptureGrounding(b); projectPositions(8,null,q0); }
       renderInspector(); saveState(); };
     document.getElementById('f_x').onchange=commitPose;
     document.getElementById('f_y').onchange=commitPose;
@@ -183,9 +190,9 @@ function renderInspector(){
     const isRod=c.type==='rod', isSlot=c.type==='slot';
     const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
                 : ({pin:'Pin · hinge',rod:'Rigid rod',
-                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',gear:'Rolling / gear'})[c.type];
+                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',rack:'Rack and pinion'})[c.type];
     const showTorque = (isRod && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
-    const isBelt=c.type==='belt', isCvt=c.type==='cvt', isGear=c.type==='gear';
+    const isBelt=c.type==='belt', isCvt=c.type==='cvt', isRack=c.type==='rack';
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
@@ -193,14 +200,14 @@ function renderInspector(){
         <div class="field"><span class="lab">wrap rB</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rB" value="${c.rB.toFixed(3)}"></div>
         <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
-    if(isGear) extra=`<div class="field"><span class="lab">traction radius</span><span class="val" id="f_gearR">--</span></div>`;
+    if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
-               : isGear ? 'Nonholonomic: the control point translates with its body but never rotates with it, so the traction line stays at a fixed angle; drag its handles to move or re-aim it. The gear\u2019s rotation is coupled to the control point\u2019s speed along the line, at the live traction radius.'
+               : isRack ? 'Nonholonomic: an infinite, massless rack welded to its body \u2014 it translates AND turns with that body, so whatever fixes the body\u2019s orientation fixes the rack\u2019s. Drag its handles to move the anchor or aim the rack within that body\u2019s frame. The pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
                : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
                : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
@@ -333,7 +340,7 @@ function renderInspector(){
           <button data-ex="crank">Slider-crank mechanism</button>
           <button data-ex="skate">Skate (knife-edge)</button>
           <button data-ex="integrator">Wheel integrator (CVT)</button>
-          <button data-ex="gear">Rack and pinion (gear)</button>
+          <button data-ex="rack">Rack and pinion</button>
           <button data-ex="cable">Cable ratchet</button>
           <button data-ex="gasspring">Gas spring (vessel on ground)</button>
           <button data-ex="spinvessel">Spinning vessel (free)</button>
@@ -388,8 +395,8 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); }
-    if(c.type==='gear'){ const f=gearFrame(c); const er=document.getElementById('f_gearR');
-      if(er && f.B) er.textContent=Math.abs(f.R).toFixed(3); } }
+    if(c.type==='rack'){ const f=rackFrame(c); const er=document.getElementById('f_pitchR');
+      if(er && f.B) er.textContent=Math.abs(f.rho).toFixed(3); } }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);
