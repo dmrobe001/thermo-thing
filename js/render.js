@@ -405,12 +405,16 @@ function drawConstraint(con){
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
     ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-    // A posable rod (constraints.js §06.2d) is drawn with the slot's own track
-    // motif flanking the bar -- two thin parallel lines -- because that is exactly
-    // what it becomes the moment the player drags something: a rail. Bounded to the
-    // rod's own span, where a slot's rail spans the viewport, since the rod is still
-    // a rod between its two ends and not an infinite line.
-    if(con.posable){
+    // A rod RELEASED by the pose drag in progress (constraints.js §06.2d) is drawn
+    // with the slot's own track motif flanking the bar -- two thin parallel lines --
+    // because for the length of that gesture it is a rail. Bounded to the rod's own
+    // span, where a slot's rail spans the viewport, since the rod is still a rod
+    // between its two ends and not an infinite line.
+    //
+    // Only while it is released: a posable rod nobody is dragging holds its length
+    // and its welds exactly as any other rod does, so it must look like one. The flag
+    // is a property, and the panel that sets it is where a property belongs.
+    if(rodPosableFor(con, poseDragRoot())){
       const L=Math.hypot(bx-ax,by-ay)||1;
       const nx=-(by-ay)/L, ny=(bx-ax)/L, off=4;
       ctx.lineWidth=1;

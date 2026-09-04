@@ -9,6 +9,8 @@
 //      posed to, rather than snapping back when the drag ends.
 //   2. the release drops the WELDS too: a body welded to a posable rod turns freely
 //      while it is dragged, which is what "all joined bodies pinned" means.
+//   3b. it reaches exactly as far as the hand: a posable rod is released only when it
+//      names the dragged body among its own ends, and one further out stays rigid.
 //   3. an extra control point rides the released bar as a slot's rider does -- held
 //      on the line, free to slide off its station -- and holds its new station once
 //      the rod is rigid again.
@@ -19,8 +21,8 @@
 //   6. none of this reaches the running physics: a posable rod and a plain one
 //      integrate the same trajectory, step for step.
 //   7. `posable` round-trips through the scene file, and defaults to off.
-//   8. the canvas and the panel draw one without throwing (the rail motif and the
-//      checkbox are the two places a posable rod is visible before it is dragged).
+//   8. the canvas shows a rod as a rail exactly while it is released, and never
+//      otherwise -- a posable rod nobody is dragging is drawn as the rigid rod it is.
 const fs=require('fs'), path=require('path'), vm=require('vm');
 const ROOT=path.join(__dirname,'..');
 
@@ -115,8 +117,8 @@ const wasStatic = run(`bodies[0].static===true`);
 ok('a double-welded rod grounds its far end when nothing is being dragged', wasStatic);
 run(WELDED(true));
 ok('and a posable one does too, until the drag starts', run(`bodies[0].static===true`));
-ok('inside the posing scope it grounds nothing',
-   run(`withPosing(()=>{ refreshFrozen(); return bodies[0].static===false; })`));
+ok('inside a posing scope rooted on its own body it grounds nothing',
+   run(`withPosing(1, ()=>{ refreshFrozen(); return bodies[0].static===false; })`));
 run(`refreshFrozen()`);
 
 // A body pinned to ground by one welded-background rod, dragged around the anchor:
@@ -172,6 +174,40 @@ run(`poseDrag(3, [1,0], [1.5,0])`);
 ok('on a plain rod the rider cannot slide at all -- its station holds it',
    near(+run(`conPoints(constraints[0])[0].s`), s0, 1e-9) && near(+run(`bodies[2].x`), 1, 1e-3),
    run(`JSON.stringify([conPoints(constraints[0])[0].s, bodies[2].x])`));
+
+console.log('\n3b. the release reaches exactly as far as the hand does');
+// Two posable rods, only one of them jointed to the body under the cursor. A drag on
+// body 1 must release the rod that names it and leave the other one rigid -- length,
+// welds and all -- however posable it is.
+run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  bodies.push(makeBody(1,0,0.2));                       // 1: dragged
+  bodies.push(makeBody(2.5,0,0.2));                     // 2: one joint further out
+  constraints.push(makeRodCon({id:null,off:[0,0]}, {id:1,off:[0,0]}, true, false, true));
+  constraints.push(makeRodCon({id:1,off:[0,0]}, {id:2,off:[0,0]}, false, false, true));
+  refreshFrozen(); saveState(true); })()`);
+ok('a rod naming the dragged body is released',
+   run(`withPosing(1, ()=>rowsFor(constraints[0]).length===0)`),
+   run(`withPosing(1, ()=>JSON.stringify(rowsFor(constraints[0]).length))`));
+ok('and so is one that names it as its FAR end',
+   run(`withPosing(1, ()=>rowsFor(constraints[1]).length===0)`));
+// Rigid, that rod is two rows: its distance, and the weld on its background end.
+ok('a drag on the far body leaves the ground rod rigid',
+   run(`withPosing(2, ()=>rowsFor(constraints[0]).length===2)`),
+   run(`withPosing(2, ()=>JSON.stringify(rowsFor(constraints[0]).length))`));
+// Three in a row, so there is a posable rod two joints away from the grab.
+run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  bodies.push(makeBody(1,0,0.2)); bodies.push(makeBody(2,0,0.2)); bodies.push(makeBody(3,0,0.2));
+  constraints.push(makeRodCon({id:null,off:[0,0]}, {id:1,off:[0,0]}, true, false, true));
+  constraints.push(makeRodCon({id:2,off:[0,0]}, {id:3,off:[0,0]}, false, false, true));
+  refreshFrozen(); saveState(true); })()`);
+const farLen0 = +run(`constraints[1].len`);
+run(`poseDrag(1, [1,0], [1.7,0])`);
+ok('a posable rod the drag never reached keeps its length',
+   near(+run(`constraints[1].len`), farLen0, 1e-12),
+   `${farLen0} -> ${run('String(constraints[1].len)')}`);
+ok('and its bodies did not move',
+   near(+run(`bodies[1].x`),2,1e-12) && near(+run(`bodies[2].x`),3,1e-12),
+   run(`JSON.stringify([bodies[1].x, bodies[2].x])`));
 
 console.log('\n4. a posable ground strut can be posed, and re-grounds where it lands');
 run(WELDED(true));
@@ -229,12 +265,20 @@ ok('an unmarked rod defaults to off and writes no key',
    run(`constraints[0].posable===false`) && !run('exportScene()').includes('posable'),
    run('exportScene()'));
 
-console.log('\n8. the editing surface draws and binds');
+console.log('\n8. the canvas shows the rail only while the rod is one');
 run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
   const b=makeBody(1,0,0.2); bodies.push(b);
   constraints.push(makeRodCon({id:null,off:[0,0]}, {id:b.id,off:[0,0]}, true, false, true));
-  refreshFrozen(); selectConstraint(0); })()`);
-run(`render(); renderInspector(); updateInspectorLive();`);
+  refreshFrozen(); selectConstraint(0); drag=null; })()`);
+ok('a posable rod nobody is dragging draws as a plain rod',
+   run(`poseDragRoot()===null && rodPosableFor(constraints[0], poseDragRoot())===false`));
+run(`drag={bi:0, off:[0,0]}; sim.running=false;`);
+ok('and as a rail for as long as the drag on its body lasts',
+   run(`poseDragRoot()===1 && rodPosableFor(constraints[0], poseDragRoot())===true`));
+run(`sim.running=true;`);
+ok('never while the sim is running -- that is a play grab, not a pose',
+   run(`poseDragRoot()===null`));
+run(`sim.running=false; render(); renderInspector(); updateInspectorLive(); drag=null;`);
 ok('render and the inspector run clean over a posable rod', true);
 
 function firstDiff(a,b){
