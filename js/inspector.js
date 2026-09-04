@@ -110,7 +110,7 @@ function renderVesselInspector(v){
     if(isFinite(vx)&&isFinite(vy)&&isFinite(w)&&isFinite(vl)){ v.vx=vx; v.vy=vy; v.w=w; v.vlen=vl; } commit(); };
   ['v_vx','v_vy','v_w','v_vlen'].forEach(id=>document.getElementById(id).onchange=commitVel);
   document.getElementById('v_del').onclick=()=>{ const id=v.id;
-    constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+    dropBodyFromConstraints(id);
     springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
     rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
     cables=cables.filter(c=>c.spool.id!==id && c.tether.id!==id);
@@ -121,6 +121,39 @@ function renderVesselInspector(v){
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, cable, spring, rotational
 // spring, or the empty bench.
+// ---- the extra control points a joint carries (constraints.js §06.2c) ----
+// One row per point: what it is bound to, its rotation lock as a checkbox (the same
+// flag a tap on its canvas handle toggles), and a button to take it off again. Only
+// the EXTRA points are listed -- the base pair has its own named checkboxes above,
+// because on a rod or a slot those two are the constraint rather than passengers on
+// it. A joint carrying none shows no card at all.
+function conPointsCard(c){
+  if(!conTakesPoints(c)) return '';
+  const pts=conPoints(c);
+  if(!pts.length) return '';
+  const lockWord = c.type==='slot' ? 'prismatic' : 'welded';
+  const rows=pts.map((pt,k)=>{
+    const where = pt.ep.id==null ? 'background' : ('body '+pt.ep.id);
+    const what = pt.kind==='pinion' ? 'pinion' : (c.type==='pin' ? 'at the pivot'
+               : conPointHasStation(c) ? `station ${pt.s.toFixed(3)}` : 'rides the rail');
+    const lock = conPointLockable(c,pt)
+      ? `<label class="chk"><input type="checkbox" data-ptlock="${k}" ${pt.lock?'checked':''}> ${lockWord}</label>` : '';
+    return `<div class="field"><span class="lab">${where}</span><span class="val">${what}</span></div>
+            ${lock}<button class="del" data-ptdel="${k}">Remove this point</button>`;
+  }).join('');
+  return `<div class="card"><div class="cardhead">extra control points</div>${rows}</div>`;
+}
+function bindConPointsCard(c){
+  for(const el of document.querySelectorAll('[data-ptlock]')){
+    const k=Number(el.dataset.ptlock);
+    el.onchange=ev=>{ const pt=conPoints(c)[k]; if(pt) setConPointLock(c, pt, ev.target.checked);
+      renderInspector(); saveState(); };
+  }
+  for(const el of document.querySelectorAll('[data-ptdel]')){
+    const k=Number(el.dataset.ptdel);
+    el.onclick=()=>{ c.pts.splice(k,1); renderInspector(); saveState(); };
+  }
+}
 function renderInspector(){
   const p=document.getElementById('panelBody');
   if(selBody && selBody.shape==='vessel'){ renderVesselInspector(selBody); return; }
@@ -180,7 +213,7 @@ function renderInspector(){
     document.getElementById('f_vy').onchange=commitVel;
     document.getElementById('f_w').onchange=commitVel;
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
-      constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      dropBodyFromConstraints(id);
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       dropInteractionsOn(id);
@@ -191,8 +224,8 @@ function renderInspector(){
     const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
                 : ({pin:'Pin · hinge',rod:'Rigid rod',
                     belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',rack:'Rack and pinion'})[c.type];
-    const showTorque = (isRod && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
     const isBelt=c.type==='belt', isCvt=c.type==='cvt', isRack=c.type==='rack';
+    const showTorque = ((isRod||isRack) && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
@@ -200,14 +233,16 @@ function renderInspector(){
         <div class="field"><span class="lab">wrap rB</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rB" value="${c.rB.toFixed(3)}"></div>
         <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
-    if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>`;
+    if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>
+        <label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> pin A welded${c.a.id==null?' (background)':''}</label>
+        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> pin B welded${c.b.id==null?' (background)':''}</label>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
-               : isRack ? 'Nonholonomic: an infinite, massless rack welded to its body \u2014 it translates AND turns with that body, so whatever fixes the body\u2019s orientation fixes the rack\u2019s. Drag its handles to move the anchor or aim the rack within that body\u2019s frame. The pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
+               : isRack ? 'Nonholonomic: an infinite, massless rack line named by its two pins \u2014 pin A locates it, pin B aims it, and drag either to move the rack. Put both on one body and the rack rides that body\u2019s frame. A welded pin also locks its body\u2019s rotation to the rack\u2019s heading; tap a pin on the canvas to toggle it. Each pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
                : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
                : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
@@ -220,7 +255,9 @@ function renderInspector(){
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
       </div>
+      ${conPointsCard(c)}
       <button class="del" id="f_del">Delete constraint</button>`;
+    bindConPointsCard(c);
     if(isBelt){
       // recapturing restPhase against the *current* body angles after a wrap-radius
       // edit is the same trick the crossed-belt toggle already uses just below --
@@ -234,6 +271,10 @@ function renderInspector(){
         recapturePhase(); renderInspector(); saveState(); };
       document.getElementById('f_rA').onchange=commitWrap;
       document.getElementById('f_rB').onchange=commitWrap;
+    }
+    if(isRack){
+      document.getElementById('f_weldA').onchange=ev=>{ setRackWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
+      document.getElementById('f_weldB').onchange=ev=>{ setRackWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
     }
     if(isRod){
       document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
@@ -395,8 +436,9 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); }
-    if(c.type==='rack'){ const f=rackFrame(c); const er=document.getElementById('f_pitchR');
-      if(er && f.B) er.textContent=Math.abs(f.rho).toFixed(3); } }
+    if(c.type==='rack'){ const er=document.getElementById('f_pitchR');
+      if(er){ const pt=rackFirstPinion(c); const g=pt?rackPitch(rackFrame(c),pt):null;
+        er.textContent = g ? Math.abs(g.rho).toFixed(3) : '--'; } } }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);

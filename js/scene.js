@@ -24,7 +24,16 @@
 // body is now one with a double-welded rod to the ground, and a reservoir is a
 // vessel with a strut inside it -- both ordinary constraints, both visible, both
 // deletable (constraints.js §06.2b).
-const SCENE_VERSION = 2;
+//
+// Version 3 added the `pt` field -- the third and further ends a pin, rod, slot or
+// rack may carry (constraints.js §06.2c) -- and, with it, rewrote the rack. A rack
+// line used to be `rack <anchor> -- <pinion> angle=...`, one endpoint plus a heading
+// in that body's frame; it is now `rack <pin> -- <pin> pt=<pinion>/pinion`, two
+// ordinary endpoints naming the line and its pinions among the control points. The
+// version had to move because the old two-token form still parses under the new
+// reading and means something else (a rack with no pinion at all), which is exactly
+// the silent reinterpretation a version number exists to prevent.
+const SCENE_VERSION = 3;
 
 // ---- §17.1 · the ledger ----
 // One row per kind of thing a scene can contain. Each row names:
@@ -79,6 +88,15 @@ const S_POSE = () => [
   ['th', b=>b.th, (b,v)=>{b.th=v;}],  ['vx', b=>b.vx, (b,v)=>{b.vx=v;}],
   ['vy', b=>b.vy, (b,v)=>{b.vy=v;}],  ['w',  b=>b.w,  (b,v)=>{b.w=v;}],
 ];
+
+// The repeatable `pt` field, one row's worth of the extra control points a joint
+// carries. `kind` is the constraint kind it sits on, which is what parsePt validates
+// each token against: only a rod and a rack station their points, only a rack has
+// pinions, and a pin's points carry nothing but an endpoint. Every point is CAPTURED
+// (SCENE.md §S.3) -- a station and a rest angle are read off the geometry at
+// creation and never recomputed, so the pose in the file does not imply them.
+const PT_FIELD = kind => ({ t:'pts', kind, always:true, get:c=>conPoints(c),
+  set:(c,arr)=>{ for(const o of arr) makeConPoint(c, o.ep, o); } });
 
 const SCENE_SCHEMA = [
   { kind:'body', list:'bodies', id:true, match:b=>b.shape==='circle',
@@ -154,9 +172,16 @@ const SCENE_SCHEMA = [
             ['gas',  v=>[v.gas.kap, v.gas.mass], (v,a)=>{v.gas.kap=a[0]; v.gas.mass=a[1];}] ],
     restore:v=>{ v._vlen0=v.vlen; refreshVessel(v); } },
 
+  // `pt` is the third-and-further ends a joint carries (constraints.js §06.2c). It
+  // is the one REPEATABLE key in the format: a line writes one `pt=` per extra
+  // point, in order, and each token carries that point's whole record -- its
+  // endpoint, its captured station along the line where it holds one, and its own
+  // rotation lock. See fmtPt/parsePt (§17.2) for the grammar, and note that the
+  // per-kind validation there is what keeps a pin from claiming a station or a slot
+  // from claiming a pinion.
   { kind:'pin', list:'constraints', match:c=>c.type==='pin',
     ends:[['a','ep-body'], ['b','ep-body']],
-    fields:{},
+    fields:{ pt:PT_FIELD('pin') },
     build:(q,e)=>makePinCon(e.a, e.b) },
 
   { kind:'rod', list:'constraints', match:c=>c.type==='rod',
@@ -166,6 +191,7 @@ const SCENE_SCHEMA = [
       weld:{t:'ends', def:'none', get:c=>endsWord(c.weldA,c.weldB)},
       restAngA:{t:'num', always:true, when:c=>c.weldA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
       restAngB:{t:'num', always:true, when:c=>c.weldB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
+      pt:PT_FIELD('rod'),
     },
     build:(q,e)=>{ const [A,B]=endsFlags(q('weld')); return makeRodCon(e.a, e.b, A, B); } },
 
@@ -175,6 +201,7 @@ const SCENE_SCHEMA = [
       lock:{t:'ends', def:'none', get:c=>endsWord(c.prismaticA,c.prismaticB)},
       restAngA:{t:'num', always:true, when:c=>c.prismaticA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
       restAngB:{t:'num', always:true, when:c=>c.prismaticB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
+      pt:PT_FIELD('slot'),
     },
     build:(q,e)=>{ const [A,B]=endsFlags(q('lock')); return makeSlotCon(e.a, e.b, A, B); } },
 
@@ -193,17 +220,21 @@ const SCENE_SCHEMA = [
     fields:{},
     build:(q,e)=>makeCvtCon(e.a.id, e.b.id) },
 
-  // 'a' is an ordinary endpoint: the rack is welded to that body, so its anchor
-  // rides the body frame like every other {id, off} in the format. `angle` is the
-  // rack's heading in that body's OWN frame -- AUTHORED, not captured: the
-  // constructor's 0 (along the body's local +x) is a real default rather than
-  // something read off the pose at creation, so a line that omits it means that.
+  // Both ends are ordinary endpoints, and between them they say where the rack line
+  // is and which way it points -- there is no heading field, because the heading is
+  // the pair. `weld` reads exactly as a rod's does (constraints.js §06.2), and every
+  // pinion and jointed body is a `pt`. Put both ends on the same body and the rack
+  // rides that body's frame, which is what the old single-anchor-plus-angle form
+  // could say and all it could say.
   { kind:'rack', list:'constraints', match:c=>c.type==='rack',
-    ends:[['a','ep'], ['b','id']],
+    ends:[['a','ep'], ['b','ep']],
     fields:{
-      angle:{t:'num', def:0, get:c=>c.angle, set:(c,v)=>{c.angle=v;}},
+      weld:{t:'ends', def:'none', get:c=>endsWord(c.weldA,c.weldB)},
+      restAngA:{t:'num', always:true, when:c=>c.weldA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
+      restAngB:{t:'num', always:true, when:c=>c.weldB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
+      pt:PT_FIELD('rack'),
     },
-    build:(q,e)=>makeRackCon(e.a.id, e.a.off, e.b.id) },
+    build:(q,e)=>{ const [A,B]=endsFlags(q('weld')); return makeRackCon(e.a, e.b, A, B); } },
 
   { kind:'knife', list:'constraints', match:c=>c.type==='knife',
     ends:[['a','ep-body']],
@@ -370,6 +401,64 @@ function parseEp(tok, spec, ln, what){
   throw new SceneError(ln, `${what}: expected an endpoint (7, 7@(x,y) or bg(x,y)), got "${tok}"`);
 }
 
+// Extra-control-point syntax, the format's one repeatable key (constraints.js
+// §06.2c). A `pt=` token is a whole point in one word -- no spaces, because the line
+// tokenizes on whitespace -- built from the endpoint syntax above plus this joint's
+// own vocabulary, slash-separated:
+//
+//   pt=3                     body 3, jointed at the pivot (a pin's extra end)
+//   pt=3@(0,0.2)/s=1.25      ...at station 1.25 along a rod's or a rack's line
+//   pt=3/s=1.25/lock/restAng=0.4   ...and rotation-locked to that line
+//   pt=bg(2,1)/lock/restAng=0      a slot rider on the background (no station:
+//                                  a rider slides)
+//   pt=3/pinion              a rack's pinion: body 3, meshing wherever it sits
+//
+// Which of those a token may say depends on the kind it sits on, and saying anything
+// else is a load error rather than a field quietly ignored -- the same rule the
+// unknown-key check enforces for a line's own fields (SCENE.md §S.2).
+function fmtPt(fd, pt){
+  if(pt.kind==='pinion') return `${fmtEp(pt.ep,'id')}/pinion`;
+  const parts=[fmtEp(pt.ep,'ep')];
+  if(fd.kind==='rod' || fd.kind==='rack') parts.push(`s=${fmtNum(pt.s||0)}`);
+  if(pt.lock) parts.push('lock', `restAng=${fmtNum(pt.restAng||0)}`);
+  return parts.join('/');
+}
+function parsePt(fd, name, tok, ln){
+  const kind=fd.kind;
+  const parts=String(tok).split('/');
+  const out={};
+  const rest=parts.slice(1);
+  const takes = kind==='pin' ? [] : kind==='slot' ? ['lock','restAng']
+              : kind==='rod' ? ['s','lock','restAng'] : ['s','lock','restAng','pinion'];
+  for(const seg of rest){
+    const eq=seg.indexOf('=');
+    const key = eq<0 ? seg : seg.slice(0,eq);
+    if(!takes.includes(key))
+      throw new SceneError(ln, `${name}: a ${kind}'s point takes ${takes.join(', ')||'no options'}, got "${key}"`);
+    if(out[key]!==undefined) throw new SceneError(ln, `${name}: "${key}" given twice`);
+    if(key==='lock' || key==='pinion'){
+      if(eq>=0) throw new SceneError(ln, `${name}: "${key}" is a flag -- write it on its own`);
+      out[key]=true;
+    } else {
+      if(eq<0) throw new SceneError(ln, `${name}: "${key}" needs a value, as ${key}=...`);
+      out[key]=numTok(seg.slice(eq+1), ln, `${name} ${key}`);
+    }
+  }
+  if(out.pinion){
+    if(out.s!==undefined || out.lock)
+      throw new SceneError(ln, `${name}: a pinion meshes wherever it sits -- it takes no station and no lock`);
+    return {ep:parseEp(parts[0], 'id', ln, name), kind:'pinion'};
+  }
+  const ep=parseEp(parts[0], 'ep', ln, name);
+  if((kind==='rod' || kind==='rack') && out.s===undefined)
+    throw new SceneError(ln, `${name}: a ${kind}'s point needs its captured station, as s=...`);
+  if(out.lock && out.restAng===undefined)
+    throw new SceneError(ln, `${name}: a locked point needs its captured rest angle, as restAng=...`);
+  if(!out.lock && out.restAng!==undefined)
+    throw new SceneError(ln, `${name}: restAng means nothing on a point that is not locked`);
+  return {ep, kind:'point', s:out.s, lock:!!out.lock, restAng:out.restAng};
+}
+
 // A field's value -> its token text, and back. `flag` fields have no token: they
 // are the bare word itself, present or absent.
 function fmtVal(fd, v){
@@ -384,6 +473,9 @@ function fmtVal(fd, v){
     // same {id, off} shape and the same fmtEp -- so it reads and writes exactly
     // like every other body-frame anchor in the format (§17.2).
     case 'ep-centre': return fmtEp(v, 'ep-body');
+    // A whole list in one string, for the field-by-field comparisons that read
+    // through fmtVal; emitFields below writes it as one `pt=` token per point.
+    case 'pts':    return v.map(pt=>fmtPt(fd,pt)).join(' ');
   }
   throw new SceneError(0, `no formatter for field type ${fd.t}`);
 }
@@ -435,6 +527,9 @@ function emitFields(fields, o){
     if(fd.when && !fd.when(o)) continue;
     const v = fd.get(o);
     if(fd.t==='flag'){ if(v) out.push(name); continue; }
+    // The one repeatable key: one token per point, and nothing at all when a joint
+    // carries none (so an ordinary two-ended constraint's line is unchanged).
+    if(fd.t==='pts'){ for(const pt of v) out.push(`${name}=${fmtPt(fd,pt)}`); continue; }
     if(!fd.always){
       const d = typeof fd.def==='function' ? fd.def(q) : fd.def;
       if(isDefault(fd, v, d)) continue;
@@ -632,6 +727,8 @@ function parseScene(text){
     for(const [name, fd] of Object.entries(it.row.fields)){
       if((fd.t==='ref' || fd.t==='ref-bg') && it.f[name]!=null) refs.push([it.f[name], name]);
       if(fd.t==='ep-centre' && it.f[name]!=null) refs.push([it.f[name].id, name]);
+      if(fd.t==='pts' && it.f[name]) for(const pt of it.f[name])
+        if(pt.ep.id!=null) refs.push([pt.ep.id, name]);
     }
     for(const [id, what] of refs)
       if(!bodyIds.has(id)) throw new SceneError(it.ln, `${it.row.kind} ${what} names body ${id}, which this file does not define`);
@@ -646,6 +743,11 @@ function readKeyed(fields, tok, ln, kind){
     const name = eq<0 ? t : t.slice(0, eq);
     const fd = fieldOf(fields, name);
     if(!fd) throw new SceneError(ln, `${kind}: unknown field "${name}" -- this kind takes ${Object.keys(fields).join(', ')||'no fields'}`);
+    if(fd.t==='pts'){
+      if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
+      (f[name] || (f[name]=[])).push(parsePt(fd, name, t.slice(eq+1), ln));
+      continue;                       // the one key a line may repeat, once per point
+    }
     if(f[name]!==undefined) throw new SceneError(ln, `${kind}: "${name}" given twice`);
     if(fd.t==='flag'){
       if(eq>=0) throw new SceneError(ln, `${kind}: "${name}" is a flag -- write it on its own, with no value`);

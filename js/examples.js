@@ -15,7 +15,7 @@
 // ============================================================================
 const SCENES = {
 
-pendulum: `scene 2
+pendulum: `scene 3
 # A disk on a rigid rod, swinging from a fixed point. The rod's background end is
 # a plain pin, not the tool's welded default -- tap the end to free it, or untick
 # "end A welded" in the inspector.
@@ -29,7 +29,7 @@ body 1 x=2.6 y=4.4 r=0.38
 rod bg(0,4.4) -- 1 len=2.6
 `,
 
-double: `scene 2
+double: `scene 3
 # Two links, both pinned at both ends. The classic chaotic pair, and the case the
 # Baumgarte gain (§04.3) was tuned against: drift is largest at the extremes of a
 # swing, which is where a low gain bleeds energy visibly.
@@ -45,7 +45,7 @@ rod bg(0,4.6) -- 1 len=1.8
 rod 1 -- 2 len=1.8
 `,
 
-fourbar: `scene 2
+fourbar: `scene 3
 # Two grounded cranks joined by a coupler -- the fourth bar is the ground itself,
 # the fixed distance between the two background anchors. Nothing states that
 # distance: it is implied by where the two anchors are.
@@ -62,7 +62,7 @@ rod 1 -- 2 len=2.50199920064
 rod bg(1.6,1.2) -- 2 len=1.72626765016
 `,
 
-crank: `scene 2
+crank: `scene 3
 # Slider-crank: a crank pin, a connecting rod, and a piston confined to a
 # horizontal line.
 #
@@ -83,7 +83,7 @@ rod 1 -- 2 len=2.7
 slot 2 -- bg(-8.3,2.4) lock=B restAngB=0
 `,
 
-skate: `scene 2
+skate: `scene 3
 # A knife-edge wheel in zero gravity: the contact point cannot move sideways, but
 # slides freely along its heading and pivots freely about it. Nonholonomic -- the
 # constraint is on velocity and has no position form to integrate.
@@ -97,7 +97,7 @@ body 1 x=0 y=2.6 r=0.45
 knife 1@(0.42,0) dir=(1,0)
 `,
 
-integrator: `scene 2
+integrator: `scene 3
 # A wheel-on-disk integrator: the follower rolls on the big disk's face, so the
 # ratio is its distance from the centre. Slide it in or out and the ratio changes
 # continuously -- a CVT with no gear teeth anywhere.
@@ -121,13 +121,16 @@ slot 2 -- bg(-10,2.6) lock=B restAngB=0
 cvt 1 -- 2
 `,
 
-rack: `scene 2
-# A rack and pinion. The cart carries the RACK -- an infinite, massless toothed
-# line welded to it, anchored at its centre and running along its own local +x
-# (angle omitted = 0). The rack is part of the cart, so it turns with the cart:
-# what keeps this rack horizontal is not the world frame but the slot, whose two
-# prismatic ends lock the cart's orientation as well as confining it to the rail.
-# Tilt that rail and the rack tilts with it.
+rack: `scene 3
+# A rack and pinion. The RACK -- an infinite, massless toothed line -- is named by
+# TWO pins, and here both of them ride the cart: one at its centre and one on its
+# own local +x. Two pins on one body make the rack part of that body, so it turns
+# with the cart, and what keeps this rack horizontal is not the world frame but the
+# slot, whose two prismatic ends lock the cart's orientation as well as confining
+# it to the rail. Tilt that rail and the rack tilts with it.
+#
+# Neither pin is welded (weld omitted = none): with both on the same body there is
+# nothing left for a weld to hold, since the body already fixes the heading.
 #
 # The pinion meshes with the rack wherever it sits -- perfect traction, no
 # tangency required. Its PITCH RADIUS is its own perpendicular distance from the
@@ -153,10 +156,10 @@ body 2 x=-1 y=1.6 r=0.4
 # constraints
 slot 1 -- bg(-10,2.6) lock=both restAngA=0 restAngB=0
 rod bg(-1.5,1.6) -- 2 len=0.5 weld=A restAngA=-3.14159265359
-rack 1 -- 2
+rack 1@(0.5,0) -- 1 pt=2/pinion
 `,
 
-cable: `scene 2
+cable: `scene 3
 # A mass hanging from a cable wound on a fixed spool. Tension only: the cable goes
 # slack rather than pushing, and the wrap point tracks around the rim as it winds.
 # Ltot is the free span at creation -- a captured field, which is why it is written
@@ -177,7 +180,7 @@ rod bg(0,5.1) -- 1 len=0.5 weld=both restAngA=-1.57079632679 restAngB=-1.5707963
 cable 2 -- 1 Ltot=0.830662386292 localAngle=-0.218668945874
 `,
 
-gasspring: `scene 2
+gasspring: `scene 3
 # A vessel standing on the ground: its lower cap -- the material plane f = -1/2 --
 # is welded to a fixed world point, which pins that cap and locks the vessel's
 # rotation, leaving the length as the only free coordinate.
@@ -198,7 +201,7 @@ vessel 1 x=0 y=1.1 bore=0.5 len=1.2 P=101325 T=293.15
 rod bg(0,0.15) -- 1@(0,-0.5) len=0.35 weld=both restAngA=1.57079632679 restAngB=1.57079632679
 `,
 
-spinvessel: `scene 2
+spinvessel: `scene 3
 # A free vessel with nothing attached, spinning in zero gravity. I(len) grows as it
 # stretches, so the spin slows and the centrifugal generalized force (physics.js
 # §08.1) trades against the gas -- the vessel breathes. Angular momentum and total
@@ -211,7 +214,7 @@ cam x=0 y=2.6 scale=64
 vessel 1 x=0 y=2.6 bore=0.4 len=1 P=101325 T=293.15 w=9
 `,
 
-heatpair: `scene 2
+heatpair: `scene 3
 # A hot reservoir warming a working vessel through a fixed plate. Nothing here is a
 # "heat exchanger" primitive: the plate is an ordinary rectangle, pinned by an
 # ordinary rod welded to the ground, and what
@@ -259,7 +262,7 @@ heat body=1 vessel=2 k=2000
 heat body=1 vessel=3 k=2000
 `,
 
-flowpair: `scene 2
+flowpair: `scene 3
 # The mass-transfer counterpart, in the same layout: a pressurized strutted
 # reservoir feeding a free vessel through a port body, with a pair of FLOW
 # interactions on it. Gas crosses until the pressures match, carrying its source's
@@ -292,7 +295,7 @@ flow body=1 vessel=3 k=0.00003
 
 // An empty bench is not a special case in the loader -- it is a scene with nothing
 // in it, which is exactly what "clear" means.
-clear: `scene 2
+clear: `scene 3
 sim gravity=on
 cam x=0 y=2.6 scale=64
 `,

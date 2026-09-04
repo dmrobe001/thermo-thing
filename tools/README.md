@@ -12,11 +12,12 @@ implementation and then compared against it.
 | `vessel-check-massmatrix.js` | the centred one-body formulation reproduces the exact gas mass matrix, where a fixed `m/3` cap mass is right only when the head is welded | `VESSEL.md` §V.3 |
 | `vessel-check-exchange.js` | the heat and mass relaxations are the exact solutions of their ODEs at any step size, a finite mass transfer is the exact integral of the differential one, and a transfer conserves energy and linear momentum | `VESSEL.md` §V.10 |
 | `scene-roundtrip.js` | every bundled example is a canonical scene file that round-trips byte-for-byte, reloads to the same state and runs the same; the reader rejects everything outside its ledger; and Reset puts back exactly what was loaded | `SCENE.md` §S.2, §S.6 |
-| `rack-check.js` | the rack rides its body's frame, meshes without slip at the right ratio, and -- with every other rolling row -- articulates a *paused* edit through the projection's delta form, including the ball-and-disk case that must re-ratio without turning anything | `DEVELOPMENT.md` §4.2 |
+| `rack-check.js` | the rack rides its body's frame when both pins sit on it, meshes without slip at the right ratio, aims from its far pin when that one rides something else, and -- with every other rolling row -- articulates a *paused* edit through the projection's delta form, including the ball-and-disk case that must re-ratio without turning anything | `DEVELOPMENT.md` §4.2 |
+| `multipoint-check.js` | a joint's extra control points do what each kind says they do: a rod's is rigid to the bar (and turns with it when locked), a slot's rides the rail and slides, a pin's joins the pivot, a rack's jointed body travels with the rack; plus the lock a new point inherits, the island an extra point couples into, and -- the only script that reaches the TOOL layer -- the placement gesture that creates them | `DEVELOPMENT.md` §4.1b |
 
 Run any of them with `node tools/<script>`.
 
-`scene-roundtrip.js` and `rack-check.js` are the exceptions to the "do not import the simulator" rule
+`scene-roundtrip.js`, `rack-check.js` and `multipoint-check.js` are the exceptions to the "do not import the simulator" rule
 above: its claim is about the real reader and writer, so a reimplementation would
 test nothing. It loads the engine's source files into a bare context with a stub
 DOM. Its last check runs the real `substep` on both the example the tools built and
