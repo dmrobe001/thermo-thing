@@ -1,10 +1,78 @@
 // ============================================================================
 //  §14 · SELECTION & INSPECTOR
 //  What is selected, and the right-hand panel that reflects and edits it.
+//    §14.0  numeric fields (numRow/numVal -- one editable number, as arithmetic)
 //    §14.1  selection state (clearSelection, select*, pickCable)
 //    §14.2  renderInspector    (build the panel DOM per selection type)
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
+// ---- §14.0 · numeric fields ----
+// Every editable number in the panel is built and read through this pair. What a
+// person may type in one is an EXPRESSION (§19): `2*pi/3`, `bg.P/2`, `b3.x+b3.r`
+// -- so that the geometry you declare can be declared exactly, rather than as
+// whatever the arithmetic rounded to on the way to the keyboard. `worldExprEnv`
+// (scene.js §17.8) says what the names mean, and they are the scene file's own
+// names, so a field and a file speak the same vocabulary.
+//
+// Two consequences of that, one in each direction.
+//
+// The input is `type="text"`, not `type="number"`. A number input hands back an
+// empty string for anything it cannot read as a literal, so `2*pi` would be gone
+// before this file ever saw it. What it costs is the spinner, so the arrow keys are
+// wired back on below -- they step the VALUE the field currently says, which is why
+// stepping a field holding `2*pi` leaves a number behind.
+//
+// What is committed is the number. Nothing keeps the text, and nothing re-evaluates
+// it later: type `b3.x` into a body's x and it lands where body 3 is *now*, and
+// stays there when body 3 moves. A value that has to keep following another value
+// is a constraint or an interaction -- that is what those are for.
+const EXPR_HINT = 'Arithmetic allowed: 2*pi/3, bg.P/2, b3.x+b3.r. Up/Down arrows step the value.';
+function numIn(id, value, o={}){
+  const step = o.step!==undefined ? o.step : 0.1;
+  return `<input class="numin" type="text" spellcheck="false" autocomplete="off" id="${id}"`
+       + ` value="${value}" data-step="${step}"${o.min!==undefined ? ` data-min="${o.min}"` : ''}`
+       + ` title="${EXPR_HINT}">`;
+}
+const numRow = (lab, id, value, o={}) =>
+  `<div class="field${o.cls?' '+o.cls:''}"><span class="lab">${lab}</span>${numIn(id, value, o)}</div>`;
+
+// Read one field. `ok` is what this particular field accepts (a radius is positive,
+// a temperature is above zero); a value that fails it is refused exactly as a
+// malformed expression is. Either way the field is MARKED and keeps the text it
+// holds -- the panel does not silently revert what you typed -- and NaN comes back,
+// which is what every caller already tests for.
+function numVal(id, ok){
+  const el = document.getElementById(id);
+  if(!el) return NaN;
+  let v = NaN, msg = null;
+  try { v = evalExpr(el.value, worldExprEnv()); }
+  catch(e){ msg = String(e.message || e); }
+  if(msg===null && ok && !ok(v)) msg = `${fmtLoose(v)} is not a value this field can take`;
+  el.classList.toggle('bad', msg!==null);
+  el.title = msg===null ? EXPR_HINT : msg;
+  return msg===null ? v : NaN;
+}
+const fmtLoose = v => String(Number(v.toPrecision(12)));
+
+// The arrow keys, put back by hand since the field is no longer a spinner. They
+// step what the field EVALUATES to, so they work on an expression as readily as on
+// a digit string (and leave a number behind, because that is what a step of a value
+// is). Shift steps by ten of them. `change` is dispatched because the panel's edits
+// are wired to it, and a spinner's arrows fire it too.
+function wireNumIns(){
+  for(const el of document.querySelectorAll('#panelBody .numin[data-step]')){
+    el.onkeydown = ev => {
+      const d = ev.key==='ArrowUp' ? 1 : ev.key==='ArrowDown' ? -1 : 0;
+      if(!d) return;
+      ev.preventDefault();
+      let v; try { v = evalExpr(el.value, worldExprEnv()); } catch(e){ return; }
+      const step = Number(el.dataset.step) || 0.1;
+      const min  = el.dataset.min!==undefined ? Number(el.dataset.min) : -Infinity;
+      el.value = fmtLoose(Math.max(min, v + d*step*(ev.shiftKey?10:1)));
+      el.dispatchEvent(new Event('change'));
+    };
+  }
+}
 // ---- §14.1 · selection state ----
 let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null, selInteraction=null;
 // `selGroup` (select.js §18.1) is the seventh: a MANY-body selection with a box
@@ -50,10 +118,10 @@ function renderVesselInspector(v){
   p.innerHTML=`
     <h3>Vessel ${v.id}</h3><p class="sub">gas vessel &middot; fixed bore, variable length</p>
     <div class="card"><div class="cardhead">geometry</div>
-      <div class="field"><span class="lab">bore</span><input class="numin" type="number" step="0.02" min="0.02" id="v_bore" value="${v.bore.toFixed(3)}"></div>
-      <div class="field"><span class="lab">length</span><input class="numin" type="number" step="0.02" min="0.001" id="v_len" value="${v.len.toFixed(4)}"></div>
+      ${numRow('bore', 'v_bore', v.bore.toFixed(3), {step:0.02, min:0.02})}
+      ${numRow('length', 'v_len', v.len.toFixed(4), {step:0.02, min:0.001})}
       <div class="field"><span class="lab">volume</span><span class="val" id="v_V">${V.toFixed(4)}</span></div>
-      <div class="field"><span class="lab">shell mass</span><input class="numin" type="number" step="1" min="0.001" id="v_shell" value="${v.mShell.toFixed(3)}"></div>
+      ${numRow('shell mass', 'v_shell', v.mShell.toFixed(3), {step:1, min:0.001})}
       <div class="field"><span class="lab">total mass</span><span class="val" id="v_mass">${v.mass.toFixed(3)}</span></div>
       <div class="field"><span class="lab">inertia</span><span class="val" id="v_I">${v.I.toFixed(4)}</span></div>
       <div class="field"><span class="lab">length inertia</span><span class="val" id="v_mu">${v.mu.toFixed(4)}</span></div>
@@ -62,57 +130,66 @@ function renderVesselInspector(v){
       <p class="muted" style="margin:8px 0 0">Both are read off the scene, not set here. A vessel's pose is pinned by a rod welded at both ends to its mid-wall (f&nbsp;=&nbsp;0) and to the background; its length is locked by a rod between two of its own material planes &mdash; a strut inside it. Delete that rod and the coordinate is free again.</p>
     </div>
     <div class="card"><div class="cardhead">gas</div>
-      <div class="field"><span class="lab">pressure</span><input class="numin" type="number" step="1000" min="0" id="v_P" value="${P.toFixed(1)}"></div>
-      <div class="field"><span class="lab">temperature</span><input class="numin" type="number" step="5" min="0.1" id="v_T" value="${T.toFixed(2)}"></div>
-      <div class="field"><span class="lab">gas mass</span><input class="numin" type="number" step="0.01" min="0" id="v_gm" value="${v.gas.mass.toFixed(5)}"></div>
-      <div class="field"><span class="lab">gamma</span><input class="numin" type="number" step="0.05" min="1.01" id="v_gam" value="${v.gas.gamma.toFixed(3)}"></div>
+      ${numRow('pressure', 'v_P', P.toFixed(1), {step:1000, min:0})}
+      ${numRow('temperature', 'v_T', T.toFixed(2), {step:5, min:0.1})}
+      ${numRow('gas mass', 'v_gm', v.gas.mass.toFixed(5), {step:0.01, min:0})}
+      ${numRow('gamma', 'v_gam', v.gas.gamma.toFixed(3), {step:0.05, min:1.01})}
       <div class="field"><span class="lab">internal energy</span><span class="val" id="v_U">${gasU(v).toFixed(1)}</span></div>
       <div class="field force"><span class="lab">cap force</span><span class="val" id="v_F">${((P-sim.bg.P)*vesselCapArea(v)).toFixed(1)}</span></div>
       <p class="muted" style="margin:8px 0 0">SI throughout: Pa, K, kg, m, J. Ambient is ${(sim.bg.P/1000).toFixed(1)} kPa at ${sim.bg.T.toFixed(2)} K. Editing temperature holds the gas mass; editing pressure or mass holds the temperature. Resizing keeps the gas sealed, so the pressure follows the new volume.</p>
     </div>
     <div class="card"><div class="cardhead">state</div>
-      <div class="field"><span class="lab">x</span><input class="numin" type="number" step="0.1" id="v_x" value="${v.x.toFixed(3)}"></div>
-      <div class="field"><span class="lab">y</span><input class="numin" type="number" step="0.1" id="v_y" value="${v.y.toFixed(3)}"></div>
-      <div class="field"><span class="lab">theta</span><input class="numin" type="number" step="0.05" id="v_th" value="${v.th.toFixed(3)}"></div>
-      <div class="field"><span class="lab">vx</span><input class="numin" type="number" step="0.1" id="v_vx" value="${v.vx.toFixed(3)}"></div>
-      <div class="field"><span class="lab">vy</span><input class="numin" type="number" step="0.1" id="v_vy" value="${v.vy.toFixed(3)}"></div>
-      <div class="field"><span class="lab">w</span><input class="numin" type="number" step="0.1" id="v_w" value="${v.w.toFixed(3)}"></div>
-      <div class="field"><span class="lab">len rate</span><input class="numin" type="number" step="0.1" id="v_vlen" value="${v.vlen.toFixed(3)}"></div>
+      ${numRow('x', 'v_x', v.x.toFixed(3), {step:0.1})}
+      ${numRow('y', 'v_y', v.y.toFixed(3), {step:0.1})}
+      ${numRow('theta', 'v_th', v.th.toFixed(3), {step:0.05})}
+      ${numRow('vx', 'v_vx', v.vx.toFixed(3), {step:0.1})}
+      ${numRow('vy', 'v_vy', v.vy.toFixed(3), {step:0.1})}
+      ${numRow('w', 'v_w', v.w.toFixed(3), {step:0.1})}
+      ${numRow('len rate', 'v_vlen', v.vlen.toFixed(3), {step:0.1})}
     </div>
     <button class="del" id="v_del">Delete vessel</button>`;
-  const num=id=>parseFloat(document.getElementById(id).value);
   const commit=()=>{ renderInspector(); saveState(); };
   // Geometry edits go through resizeVessel, which keeps the gas sealed (mass and
   // temperature carry over) and scales the shell mass with the footprint to hold
   // its density -- the same convention resizeBody uses for an ordinary body.
-  const commitGeom=()=>{ const bore=num('v_bore'), len=num('v_len');
-    if(isFinite(bore)&&bore>0&&isFinite(len)&&len>0) resizeVessel(v,bore,len);
+  // A field whose text cannot be used stops the edit here and keeps that text, so
+  // the re-render below never silently reverts what was typed (§14.0 numVal).
+  const commitGeom=()=>{ const bore=numVal('v_bore',x=>x>0), len=numVal('v_len',x=>x>0);
+    if(!isFinite(bore) || !isFinite(len)) return;
+    resizeVessel(v,bore,len);
     projectPositions(8); commit(); };
   document.getElementById('v_bore').onchange=commitGeom;
   document.getElementById('v_len').onchange=commitGeom;
-  document.getElementById('v_shell').onchange=()=>{ const m=num('v_shell');
-    if(isFinite(m)&&m>0){ v.mShell=m; refreshVessel(v); } commit(); };
-  document.getElementById('v_P').onchange=()=>{ const Pn=num('v_P');
-    if(isFinite(Pn)&&Pn>=0) setVesselGasPT(v,Pn,gasT(v)||sim.bg.T); commit(); };
-  document.getElementById('v_T').onchange=()=>{ const Tn=num('v_T');
-    if(isFinite(Tn)&&Tn>0) setVesselGasMT(v,v.gas.mass,Tn); commit(); };
-  document.getElementById('v_gm').onchange=()=>{ const mn=num('v_gm');
-    if(isFinite(mn)&&mn>=0) setVesselGasMT(v,mn,gasT(v)||sim.bg.T); commit(); };
+  document.getElementById('v_shell').onchange=()=>{ const m=numVal('v_shell',x=>x>0);
+    if(!isFinite(m)) return;
+    v.mShell=m; refreshVessel(v); commit(); };
+  document.getElementById('v_P').onchange=()=>{ const Pn=numVal('v_P',x=>x>=0);
+    if(!isFinite(Pn)) return;
+    setVesselGasPT(v,Pn,gasT(v)||sim.bg.T); commit(); };
+  document.getElementById('v_T').onchange=()=>{ const Tn=numVal('v_T',x=>x>0);
+    if(!isFinite(Tn)) return;
+    setVesselGasMT(v,v.gas.mass,Tn); commit(); };
+  document.getElementById('v_gm').onchange=()=>{ const mn=numVal('v_gm',x=>x>=0);
+    if(!isFinite(mn)) return;
+    setVesselGasMT(v,mn,gasT(v)||sim.bg.T); commit(); };
   // gamma changes c_v, hence the internal energy at the same P and V. Hold P and T
   // (the measurable state) and let U follow, rather than the reverse.
-  document.getElementById('v_gam').onchange=()=>{ const g=num('v_gam');
-    if(isFinite(g)&&g>1.001){ const Pk=gasP(v), Tk=gasT(v)||sim.bg.T; v.gas.gamma=g; setVesselGasPT(v,Pk,Tk); } commit(); };
-  const commitPose=()=>{ const x=num('v_x'), y=num('v_y'), th=num('v_th');
-    if(isFinite(x)&&isFinite(y)&&isFinite(th)){
-      // Snapshot first: a typed pose is a rigid move like any other, so a rolling
-      // pair attached to this body has to take it up as slip (projection.js §09.1).
-      const q0=poseSnapshot();
-      v.x=x; v.y=y; v.th=th;
-      recaptureGrounding(v); projectPositions(8,null,q0); } commit(); };
+  document.getElementById('v_gam').onchange=()=>{ const g=numVal('v_gam',x=>x>1.001);
+    if(!isFinite(g)) return;
+    const Pk=gasP(v), Tk=gasT(v)||sim.bg.T; v.gas.gamma=g; setVesselGasPT(v,Pk,Tk); commit(); };
+  const commitPose=()=>{ const x=numVal('v_x'), y=numVal('v_y'), th=numVal('v_th');
+    if(!isFinite(x) || !isFinite(y) || !isFinite(th)) return;
+    // Snapshot first: a typed pose is a rigid move like any other, so a rolling
+    // pair attached to this body has to take it up as slip (projection.js §09.1).
+    const q0=poseSnapshot();
+    v.x=x; v.y=y; v.th=th;
+    recaptureGrounding(v); projectPositions(8,null,q0); commit(); };
   ['v_x','v_y','v_th'].forEach(id=>document.getElementById(id).onchange=commitPose);
-  const commitVel=()=>{ const vx=num('v_vx'), vy=num('v_vy'), w=num('v_w'), vl=num('v_vlen');
-    if(isFinite(vx)&&isFinite(vy)&&isFinite(w)&&isFinite(vl)){ v.vx=vx; v.vy=vy; v.w=w; v.vlen=vl; } commit(); };
+  const commitVel=()=>{ const vx=numVal('v_vx'), vy=numVal('v_vy'), w=numVal('v_w'), vl=numVal('v_vlen');
+    if(!isFinite(vx) || !isFinite(vy) || !isFinite(w) || !isFinite(vl)) return;
+    v.vx=vx; v.vy=vy; v.w=w; v.vlen=vl; commit(); };
   ['v_vx','v_vy','v_w','v_vlen'].forEach(id=>document.getElementById(id).onchange=commitVel);
+  wireNumIns();
   document.getElementById('v_del').onclick=()=>{ const id=v.id;
     dropBodyFromConstraints(id);
     springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
@@ -170,51 +247,53 @@ function renderInspector(){
       <h3>Body ${b.id}</h3><p class="sub">${isRect?'rigid rectangle':'rigid disk'}</p>
       <div class="card"><div class="cardhead">properties</div>
         ${isRect
-          ? `<div class="field"><span class="lab">width</span><input class="numin" type="number" step="0.05" min="0.16" id="f_rw" value="${(b.hw*2).toFixed(3)}"></div>
-             <div class="field"><span class="lab">height</span><input class="numin" type="number" step="0.05" min="0.16" id="f_rh" value="${(b.hh*2).toFixed(3)}"></div>`
-          : `<div class="field"><span class="lab">radius</span><input class="numin" type="number" step="0.05" min="0.08" id="f_r" value="${b.r.toFixed(3)}"></div>`}
-        <div class="field"><span class="lab">mass</span><input class="numin" type="number" step="0.05" min="0.001" id="f_mass" value="${b.mass.toFixed(3)}"></div>
+          ? `${numRow('width', 'f_rw', (b.hw*2).toFixed(3), {step:0.05, min:0.16})}
+             ${numRow('height', 'f_rh', (b.hh*2).toFixed(3), {step:0.05, min:0.16})}`
+          : `${numRow('radius', 'f_r', b.r.toFixed(3), {step:0.05, min:0.08})}`}
+        ${numRow('mass', 'f_mass', b.mass.toFixed(3), {step:0.05, min:0.001})}
         <div class="field"><span class="lab">inertia</span><span class="val" id="f_I">${b.I.toFixed(3)}</span></div>
         <div class="field"><span class="lab">pose</span><span class="val">${b.static?'pinned':'free'}</span></div>
         ${b.static?'<p class="muted" style="margin:8px 0 0">Pinned by a rod welded at both ends to fixed ground &mdash; not a property set here. Delete or unweld that rod and the body is free.</p>':''}
       </div>
       <div class="card"><div class="cardhead">state</div>
-        <div class="field"><span class="lab">x</span><input class="numin" type="number" step="0.1" id="f_x" value="${b.x.toFixed(3)}"></div>
-        <div class="field"><span class="lab">y</span><input class="numin" type="number" step="0.1" id="f_y" value="${b.y.toFixed(3)}"></div>
-        <div class="field"><span class="lab">theta</span><input class="numin" type="number" step="0.05" id="f_th" value="${b.th.toFixed(3)}"></div>
-        <div class="field"><span class="lab">vx</span><input class="numin" type="number" step="0.1" id="f_vx" value="${b.vx.toFixed(3)}"></div>
-        <div class="field"><span class="lab">vy</span><input class="numin" type="number" step="0.1" id="f_vy" value="${b.vy.toFixed(3)}"></div>
-        <div class="field"><span class="lab">w</span><input class="numin" type="number" step="0.1" id="f_w" value="${b.w.toFixed(3)}"></div>
+        ${numRow('x', 'f_x', b.x.toFixed(3), {step:0.1})}
+        ${numRow('y', 'f_y', b.y.toFixed(3), {step:0.1})}
+        ${numRow('theta', 'f_th', b.th.toFixed(3), {step:0.05})}
+        ${numRow('vx', 'f_vx', b.vx.toFixed(3), {step:0.1})}
+        ${numRow('vy', 'f_vy', b.vy.toFixed(3), {step:0.1})}
+        ${numRow('w', 'f_w', b.w.toFixed(3), {step:0.1})}
       </div>
       <button class="del" id="f_del">Delete body</button>`;
     if(isRect){
-      const commitSize=()=>{ const w=parseFloat(document.getElementById('f_rw').value), h=parseFloat(document.getElementById('f_rh').value);
-        if(isFinite(w)&&w>0.16&&isFinite(h)&&h>0.16) resizeRectAxes(b,w/2,h/2);
+      const commitSize=()=>{ const w=numVal('f_rw',x=>x>0.16), h=numVal('f_rh',x=>x>0.16);
+        if(!isFinite(w) || !isFinite(h)) return;
+        resizeRectAxes(b,w/2,h/2);
         renderInspector(); saveState(); };
       document.getElementById('f_rw').onchange=commitSize;
       document.getElementById('f_rh').onchange=commitSize;
     } else {
-      document.getElementById('f_r').onchange=ev=>{ const v=parseFloat(ev.target.value);
-        if(isFinite(v)&&v>0.08) resizeBody(b,v);
+      document.getElementById('f_r').onchange=()=>{ const v=numVal('f_r',x=>x>0.08);
+        if(!isFinite(v)) return;
+        resizeBody(b,v);
         renderInspector(); saveState(); };
     }
-    document.getElementById('f_mass').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>0.001) setBodyMass(b,v);
+    document.getElementById('f_mass').onchange=()=>{ const v=numVal('f_mass',x=>x>0.001);
+      if(!isFinite(v)) return;
+      setBodyMass(b,v);
       renderInspector(); saveState(); };
-    const commitPose=()=>{ const x=parseFloat(document.getElementById('f_x').value),
-        y=parseFloat(document.getElementById('f_y').value), th=parseFloat(document.getElementById('f_th').value);
-      if(isFinite(x)&&isFinite(y)&&isFinite(th)){
-        // Snapshot first -- see the vessel's own commitPose above.
-        const q0=poseSnapshot();
-        b.x=x; b.y=y; b.th=th;
-        recaptureGrounding(b); projectPositions(8,null,q0); }
+    const commitPose=()=>{ const x=numVal('f_x'), y=numVal('f_y'), th=numVal('f_th');
+      if(!isFinite(x) || !isFinite(y) || !isFinite(th)) return;
+      // Snapshot first -- see the vessel's own commitPose above.
+      const q0=poseSnapshot();
+      b.x=x; b.y=y; b.th=th;
+      recaptureGrounding(b); projectPositions(8,null,q0);
       renderInspector(); saveState(); };
     document.getElementById('f_x').onchange=commitPose;
     document.getElementById('f_y').onchange=commitPose;
     document.getElementById('f_th').onchange=commitPose;
-    const commitVel=()=>{ const vx=parseFloat(document.getElementById('f_vx').value),
-        vy=parseFloat(document.getElementById('f_vy').value), w=parseFloat(document.getElementById('f_w').value);
-      if(isFinite(vx)&&isFinite(vy)&&isFinite(w)){ b.vx=vx; b.vy=vy; b.w=w; }
+    const commitVel=()=>{ const vx=numVal('f_vx'), vy=numVal('f_vy'), w=numVal('f_w');
+      if(!isFinite(vx) || !isFinite(vy) || !isFinite(w)) return;
+      b.vx=vx; b.vy=vy; b.w=w;
       renderInspector(); saveState(); };
     document.getElementById('f_vx').onchange=commitVel;
     document.getElementById('f_vy').onchange=commitVel;
@@ -236,8 +315,8 @@ function renderInspector(){
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
-        <div class="field"><span class="lab">wrap rA</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rA" value="${c.rA.toFixed(3)}"></div>
-        <div class="field"><span class="lab">wrap rB</span><input class="numin" type="number" step="0.02" min="0.02" id="f_rB" value="${c.rB.toFixed(3)}"></div>
+        ${numRow('wrap rA', 'f_rA', c.rA.toFixed(3), {step:0.02, min:0.02})}
+        ${numRow('wrap rB', 'f_rB', c.rB.toFixed(3), {step:0.02, min:0.02})}
         <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
     if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>
@@ -259,7 +338,7 @@ function renderInspector(){
       <div class="card"><div class="cardhead">reaction</div>
         <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">--</span></div>
         ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>':''}
-        ${isRod?`<div class="field"><span class="lab">length</span><input class="numin" type="number" step="0.05" min="0.01" id="f_len" value="${c.len.toFixed(3)}"></div>`:''}
+        ${isRod?`${numRow('length', 'f_len', c.len.toFixed(3), {step:0.05, min:0.01})}`:''}
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
       </div>
@@ -273,9 +352,9 @@ function renderInspector(){
       const recapturePhase=()=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
         c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; };
       document.getElementById('f_cross').onchange=ev=>{ c.sense=ev.target.checked?-1:1; recapturePhase(); renderInspector(); saveState(); };
-      const commitWrap=()=>{ const rA=parseFloat(document.getElementById('f_rA').value), rB=parseFloat(document.getElementById('f_rB').value);
-        if(isFinite(rA)&&rA>0.02) c.rA=rA;
-        if(isFinite(rB)&&rB>0.02) c.rB=rB;
+      const commitWrap=()=>{ const rA=numVal('f_rA',x=>x>0.02), rB=numVal('f_rB',x=>x>0.02);
+        if(!isFinite(rA) || !isFinite(rB)) return;
+        c.rA=rA; c.rB=rB;
         recapturePhase(); renderInspector(); saveState(); };
       document.getElementById('f_rA').onchange=commitWrap;
       document.getElementById('f_rB').onchange=commitWrap;
@@ -291,8 +370,9 @@ function renderInspector(){
       document.getElementById('f_posable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
       document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
       document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_len').onchange=ev=>{ const v=parseFloat(ev.target.value);
-        if(isFinite(v)&&v>0.01){ c.len=v; projectPositions(8); }
+      document.getElementById('f_len').onchange=()=>{ const v=numVal('f_len',x=>x>0.01);
+        if(!isFinite(v)) return;
+        c.len=v; projectPositions(8);
         renderInspector(); saveState(); };
     }
     if(isSlot){
@@ -316,15 +396,16 @@ function renderInspector(){
         <div class="field"><span class="lab">partners on body</span><span class="val" id="i_pair">${partners}</span></div>
       </div>
       <div class="card"><div class="cardhead">${isHeat?'conductivity':'flow conductance'}</div>
-        <div class="field"><span class="lab">k</span><input class="numin" type="number" step="${isHeat?'50':'1e-6'}" min="0" id="i_k" value="${it.k}"></div>
+        ${numRow('k', 'i_k', it.k, {step:isHeat?'50':'1e-6', min:0})}
         <p class="muted" style="margin:8px 0 0">${isHeat
           ? 'Heat transfer coefficient, W/(m&sup2;&middot;K). Rate = k_eff &middot; area &middot; (T_far &minus; T_near), solved in closed form over the substep, so it approaches equilibrium exponentially and can never overshoot it at any step size.'
           : 'Flow conductance, kg/(s&middot;m&sup2;&middot;Pa). Rate = k_eff &middot; area &middot; (P_far &minus; P_near) -- the same closed-form relaxation with pressure and mass in place of temperature and capacity. Gas that crosses carries its source&rsquo;s enthalpy, so the emptying side cools along its own isentrope.'}</p>
         <p class="muted" style="margin:8px 0 0">Two interactions of the same kind on the same body are a <em>pair</em>: that body is the wall between what they each name, and the rate uses their k&rsquo;s in series and the smaller of the two contact areas. One on its own moves nothing.</p>
       </div>
       <button class="del" id="i_del">Delete interaction</button>`;
-    document.getElementById('i_k').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>=0) it.k=v; renderInspector(); saveState(); };
+    document.getElementById('i_k').onchange=()=>{ const v=numVal('i_k',x=>x>=0);
+      if(!isFinite(v)) return;
+      it.k=v; renderInspector(); saveState(); };
     document.getElementById('i_del').onclick=()=>{ interactions=interactions.filter(x=>x!==it); clearSelection(); saveState(); };
   } else if(selCable){
     const cb=selCable;
@@ -332,15 +413,16 @@ function renderInspector(){
       <h3>Cable</h3><p class="sub">tetherball · tension only</p>
       <div class="card"><div class="cardhead">state</div>
         <div class="field force"><span class="lab">tension</span><span class="val" id="cb_T">--</span></div>
-        <div class="field"><span class="lab">total length</span><input class="numin" type="number" step="0.1" min="0.01" id="cb_Ltot" value="${cb.Ltot.toFixed(3)}"></div>
+        ${numRow('total length', 'cb_Ltot', cb.Ltot.toFixed(3), {step:0.1, min:0.01})}
         <div class="field"><span class="lab">current length</span><span class="val" id="cb_Lcur">--</span></div>
         <div class="field"><span class="lab">paid out</span><span class="val" id="cb_L">--</span></div>
         <div class="field"><span class="lab">wound turns</span><span class="val" id="cb_W">--</span></div>
         <p class="muted" style="margin:8px 0 0">Fixed total length. Drag the anchor handle to wind/unwind. The spool angle encodes which side the cable winds around and accumulates without bound.</p>
       </div>
       <button class="del" id="cb_del">Delete cable</button>`;
-    document.getElementById('cb_Ltot').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>0.01) cb.Ltot=v;
+    document.getElementById('cb_Ltot').onchange=()=>{ const v=numVal('cb_Ltot',x=>x>0.01);
+      if(!isFinite(v)) return;
+      cb.Ltot=v;
       renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
   } else if(selSpring){
@@ -350,16 +432,18 @@ function renderInspector(){
       <div class="card"><div class="cardhead">state</div>
         <div class="field force"><span class="lab">|force|</span><span class="val" id="sp_F">--</span></div>
         <div class="field"><span class="lab">length</span><span class="val" id="sp_L">--</span></div>
-        <div class="field"><span class="lab">rest length</span><input class="numin" type="number" step="0.05" min="0.05" id="sp_rest" value="${sp.restLen.toFixed(3)}"></div>
-        <div class="field"><span class="lab">spring constant k</span><input class="numin" type="number" step="0.5" min="0" id="sp_k" value="${sp.k.toFixed(2)}"></div>
+        ${numRow('rest length', 'sp_rest', sp.restLen.toFixed(3), {step:0.05, min:0.05})}
+        ${numRow('spring constant k', 'sp_k', sp.k.toFixed(2), {step:0.5, min:0})}
         <p class="muted" style="margin:8px 0 0">Hookean force element, not a rigid constraint -- it stores and releases energy rather than being solved exactly. Drag the dashed control point (visible while selected) to set rest length, or type it here.</p>
       </div>
       <button class="del" id="sp_del">Delete spring</button>`;
-    document.getElementById('sp_rest').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>0.05) sp.restLen=v;
+    document.getElementById('sp_rest').onchange=()=>{ const v=numVal('sp_rest',x=>x>0.05);
+      if(!isFinite(v)) return;
+      sp.restLen=v;
       renderInspector(); saveState(); };
-    document.getElementById('sp_k').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>=0) sp.k=v;
+    document.getElementById('sp_k').onchange=()=>{ const v=numVal('sp_k',x=>x>=0);
+      if(!isFinite(v)) return;
+      sp.k=v;
       renderInspector(); saveState(); };
     document.getElementById('sp_del').onclick=()=>{ springs=springs.filter(x=>x!==sp); clearSelection(); saveState(); };
   } else if(selRotSpring){
@@ -369,16 +453,18 @@ function renderInspector(){
       <div class="card"><div class="cardhead">state</div>
         <div class="field force"><span class="lab">|torque|</span><span class="val" id="rs_T">--</span></div>
         <div class="field"><span class="lab">relative angle</span><span class="val" id="rs_ang">--</span></div>
-        <div class="field"><span class="lab">rest angle</span><input class="numin" type="number" step="0.05" id="rs_rest" value="${rs.restAngle.toFixed(3)}"></div>
-        <div class="field"><span class="lab">spring constant k</span><input class="numin" type="number" step="0.5" min="0" id="rs_k" value="${rs.k.toFixed(2)}"></div>
+        ${numRow('rest angle', 'rs_rest', rs.restAngle.toFixed(3), {step:0.05})}
+        ${numRow('spring constant k', 'rs_k', rs.k.toFixed(2), {step:0.5, min:0})}
         <p class="muted" style="margin:8px 0 0">Torsional force element between the two bodies' frame angles (the background reads as a fixed theta=0). Not a rigid constraint.</p>
       </div>
       <button class="del" id="rs_del">Delete rotational spring</button>`;
-    document.getElementById('rs_rest').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)) rs.restAngle=v;
+    document.getElementById('rs_rest').onchange=()=>{ const v=numVal('rs_rest');
+      if(!isFinite(v)) return;
+      rs.restAngle=v;
       renderInspector(); saveState(); };
-    document.getElementById('rs_k').onchange=ev=>{ const v=parseFloat(ev.target.value);
-      if(isFinite(v)&&v>=0) rs.k=v;
+    document.getElementById('rs_k').onchange=()=>{ const v=numVal('rs_k',x=>x>=0);
+      if(!isFinite(v)) return;
+      rs.k=v;
       renderInspector(); saveState(); };
     document.getElementById('rs_del').onclick=()=>{ rotSprings=rotSprings.filter(x=>x!==rs); clearSelection(); saveState(); };
   } else {
@@ -405,12 +491,28 @@ function renderInspector(){
       <div class="card"><div class="cardhead">controls</div>
         <p class="muted">Wheel to zoom · middle-drag or Alt-drag to pan · Space play/pause · R reset · keys 1-9, b/f/g/h/k/l/v/c/q/t tools · lasso (l) to select many, then drag inside the box to move it, a corner to scale, the stem to turn · Ctrl/Cmd-C copies a selection, Ctrl/Cmd-V places it</p>
       </div>
+      <div class="card"><div class="cardhead">typing numbers</div>
+        <p class="muted">Any number field &mdash; here or in a scene file &mdash; takes arithmetic:
+        <code>2*pi/3</code>, <code>0.4*sqrt(2)</code>, <code>bg.P/2</code>, <code>b3.x+b3.r</code>.
+        Names are <code>pi tau e deg</code>, the ambient <code>bg.P</code> and <code>bg.T</code>,
+        <code>g</code>, <code>air.Rs</code>, <code>air.gamma</code>, and any body's own fields as
+        <code>b&lt;id&gt;.&lt;field&gt;</code> &mdash; the same names the scene file uses.
+        Functions: <code>sin cos tan asin acos atan atan2 sqrt cbrt exp ln log log2 abs sign
+        floor ceil round pow mod clamp min max hypot</code>. Angles are radians, so
+        <code>30*deg</code> is a degree measure.</p>
+        <p class="muted">What is stored is the number it works out to, not the expression: it
+        fixes the value once, at the moment you type it. Something that must keep tracking
+        another value as the scene moves is a constraint or an interaction, not a formula.</p>
+      </div>
       ${stashCardHTML()}
       ${sceneCardHTML()}`;
     p.querySelectorAll('[data-ex]').forEach(btn=>btn.onclick=()=>loadExample(btn.dataset.ex));
     wireStashCard();
     wireSceneCard();
   }
+  // Every branch above that drew editable numbers ends here (the group and the
+  // vessel return early and wire their own), so one call covers the lot.
+  wireNumIns();
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----
 // refresh an input's value from live sim state, but never while the user has

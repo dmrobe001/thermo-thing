@@ -33,6 +33,15 @@ are re-read where the transform changed their geometry. A selection can be copie
 to drop into any later bench. A widget is just a scene fragment, so a scene string
 pasted into the stash card becomes a part too. See `SCENE.md` §S.9.
 
+Numbers can be typed as arithmetic, in the inspector fields and in a scene file
+alike: `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`, `b3.x+b3.r` -- the constants, the usual
+mathematical functions, the ambient pressure and temperature, and any body's own
+properties by the same names the scene file uses. It is a way to declare *initial*
+geometry exactly rather than as whatever it rounded to; what gets stored is the
+number, so nothing keeps following anything afterwards. Keeping two things related
+as the scene moves is what constraints and interactions are for. See `SCENE.md`
+§S.10.
+
 Any bench can be written out as a **scene file** -- a plain-text listing of every body with its state, every constraint, force element and interaction, plus the ambient and the camera. Export, import and download it from the scene-file card at the bottom of that same panel, or drop a scene file onto the canvas. The bundled examples *are* scene files, so clicking one shows you its source. The format is also the definitive statement of what a scene may contain: it can express exactly what the tools can build, and nothing else. See `SCENE.md`.
 
 **Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or

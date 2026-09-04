@@ -39,7 +39,7 @@ const ctx = vm.createContext({
 ctx.globalThis = ctx;
 vm.runInContext(`function clearSelection(){} function renderInspector(){}
                  function setTool(){} var TOOLS=[];`, ctx);
-for(const f of ['js/state.js','js/geometry.js','js/constraints.js','js/solver.js',
+for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js','js/solver.js',
                 'js/physics.js','js/projection.js','js/loop.js','js/hud.js','js/scene.js',
                 'js/examples.js','js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});

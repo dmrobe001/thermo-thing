@@ -44,7 +44,7 @@ const ctx = vm.createContext({
   requestAnimationFrame:()=>{}, setTimeout:()=>{},
 });
 ctx.globalThis = ctx;
-for(const f of ['js/state.js','js/geometry.js','js/constraints.js','js/solver.js',
+for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js','js/solver.js',
                 'js/physics.js','js/projection.js','js/loop.js','js/render.js','js/hud.js',
                 'js/tools.js','js/inspector.js','js/examples.js','js/scene.js','js/select.js','js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});

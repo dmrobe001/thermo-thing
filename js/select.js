@@ -457,10 +457,10 @@ function groupInspectorHTML(g){
   return `
     <h3>Selection</h3><p class="sub">${groupCount(g)} bodies &middot; ${groupCouplings(g)} couplings</p>
     <div class="card"><div class="cardhead">box</div>
-      <div class="field"><span class="lab">centre x</span><input class="numin" type="number" step="0.1" id="g_x" value="${g.cx.toFixed(3)}"></div>
-      <div class="field"><span class="lab">centre y</span><input class="numin" type="number" step="0.1" id="g_y" value="${g.cy.toFixed(3)}"></div>
-      <div class="field"><span class="lab">angle</span><input class="numin" type="number" step="0.05" id="g_ang" value="${g.ang.toFixed(4)}"></div>
-      <div class="field"><span class="lab">scale</span><input class="numin" type="number" step="0.05" min="${GROUP_MIN_SCALE}" id="g_s" value="${g.s.toFixed(4)}"></div>
+      ${numRow('centre x', 'g_x', g.cx.toFixed(3), {step:0.1})}
+      ${numRow('centre y', 'g_y', g.cy.toFixed(3), {step:0.1})}
+      ${numRow('angle', 'g_ang', g.ang.toFixed(4), {step:0.05})}
+      ${numRow('scale', 'g_s', g.s.toFixed(4), {step:0.05, min:GROUP_MIN_SCALE})}
       <p class="muted" style="margin:8px 0 0">Drag inside the box to move it, a corner to scale it about the opposite corner, the stem above it to turn it. Every selected body turns by the box's own change in angle; body sizes never change, so scaling spreads the parts apart rather than growing them. Angle 0 and scale 1 are the pose the selection was picked at.</p>
     </div>
     <div class="card"><div class="cardhead">contents</div>${parts.join('')}
@@ -481,13 +481,16 @@ function groupInspectorHTML(g){
 }
 function wireGroupCard(){
   const g=selGroup; if(!g) return;
-  const num=id=>parseFloat(document.getElementById(id).value);
+  // The box's four numbers are ordinary panel fields, so they take arithmetic like
+  // every other one (inspector.js §14.0) -- `g_ang` reading `pi/6` is the point.
   const commit=()=>{
-    const x=num('g_x'), y=num('g_y'), a=num('g_ang'), s=num('g_s');
-    if(isFinite(x)&&isFinite(y)&&isFinite(a)&&isFinite(s)&&s>0) groupSetFrame(x,y,a,s);
+    const x=numVal('g_x'), y=numVal('g_y'), a=numVal('g_ang'), s=numVal('g_s',v=>v>0);
+    if(!isFinite(x) || !isFinite(y) || !isFinite(a) || !isFinite(s)) return;
+    groupSetFrame(x,y,a,s);
     renderInspector();
   };
   ['g_x','g_y','g_ang','g_s'].forEach(id=>{ const el=document.getElementById(id); if(el) el.onchange=commit; });
+  wireNumIns();
   document.getElementById('g_stash').onclick=()=>{
     let text; try { text=selectionFragment(); }
     catch(e){ stashMsg={ok:false, text:String(e.message||e)}; renderInspector(); return; }
