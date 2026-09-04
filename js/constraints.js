@@ -590,8 +590,8 @@ function dropBodyFromConstraints(id){
 // A rod may be marked `posable`. It changes nothing about the running physics --
 // a posable rod is an ordinary rigid rod at every substep -- and everything about
 // what happens while the player POSES the machine: dragging a body around with the
-// sim paused (tools.js §13.6). For the duration of such a drag the rod is RELEASED,
-// and holds only its own line:
+// sim paused (tools.js §13.6). A posable rod DIRECTLY JOINTED TO THE DRAGGED BODY
+// is RELEASED for the length of that drag, and holds only its own line:
 //
 //   * its distance row is gone, so the two ends may slide toward and away from each
 //     other -- the rod's length is what the drag is free to change;
@@ -601,25 +601,38 @@ function dropBodyFromConstraints(id){
 //     and become RIDERS, held on the line and free to slide along it -- the same one
 //     row a slot's riders get, which is the sense in which the bar becomes a rail.
 //
+// "Directly jointed" is conEndpoints (§06.2c) and nothing cleverer: the rod names
+// the dragged body as one of its ends or as one of its extra points. A posable rod
+// one joint further away stays a rigid rod, so the release reaches exactly as far as
+// the hand does -- grab a body and the members it hangs off go slack, and the rest of
+// the machine articulates around them as it always would. The alternative, releasing
+// every posable rod in the scene for the duration of any drag, is both a bigger edit
+// than the gesture asks for and one the player cannot see the extent of.
+//
 // A rod grounding a body, or locking a vessel's length, releases those too (see
 // rodGrounds/rodLocksLength above): a rod that holds nothing cannot be the thing
 // that froze a coordinate, and a posable ground strut would be useless if it still
 // pinned the body the player is trying to slide along it. That is the one place the
-// derived freezing of §06.2b depends on something other than what is attached -- and
-// it depends on the MODE, not on the configuration, so nothing still freezes or
-// thaws as a mechanism swings through a pose (SCENE.md §S.8).
-//
-// The release is a mode, not a per-rod drag test: while a pose drag is live EVERY
-// posable rod is released, whether or not the dragged body is one of its ends. A
-// released rod elsewhere in a consistent scene contributes no residual, so nothing
-// moves that the drag did not reach; scoping it to the dragged island would buy
-// nothing and would make what a rod does depend on where the player grabbed.
+// derived freezing of §06.2b depends on something beyond what is attached -- and what
+// it depends on is the gesture in progress, never the configuration, so nothing still
+// freezes or thaws as a mechanism swings through a pose (SCENE.md §S.8).
 //
 // `posing` is a depth counter rather than a flag so that a nested projection (or a
-// caller that wraps another) cannot clear it early.
-let posing = 0;
-function withPosing(fn){ posing++; try { return fn(); } finally { posing--; } }
-const rodReleased = con => posing>0 && con.type==='rod' && !!con.posable;
+// caller that wraps another) cannot clear it early; `posingRoot` is the id of the
+// body being dragged, saved and restored alongside it for the same reason.
+let posing = 0, posingRoot = null;
+function withPosing(rootId, fn){
+  posing++; const prev=posingRoot; posingRoot = rootId==null ? null : rootId;
+  try { return fn(); } finally { posing--; posingRoot=prev; }
+}
+// Whether a drag on body `rootId` would release this rod -- the predicate on its own,
+// with no reference to whether a posing scope is currently open. rowsFor asks it
+// through rodReleased below; the canvas asks it directly (render.js §11.5), because
+// a frame is drawn between pointermoves rather than inside one and the rail motif
+// has to be up for the whole gesture, not for the instant the rows are built.
+const rodPosableFor = (con, rootId) => con.type==='rod' && !!con.posable && rootId!=null
+  && conEndpoints(con).some(ep => ep.id===rootId);
+const rodReleased = con => posing>0 && rodPosableFor(con, posingRoot);
 
 // Once the drag step has settled, a released rod re-reads what it holds from the
 // pose the player just produced (§06.2b recaptureRodPose): the length, the welds'
@@ -627,15 +640,15 @@ const rodReleased = con => posing>0 && con.type==='rod' && !!con.posable;
 // pointerup, for the same reason recaptureGrounding is: between moves the rod is a
 // rigid rod again, and one whose captured length disagreed with its live geometry
 // would read as a violated constraint -- red on the canvas, and refused as the reset
-// baseline (transport.js §16.1) -- for as long as the drag lasted. Recapturing a rod
-// whose geometry did not move is exactly a no-op, which is why this may run over all
-// of them and not just the dragged one. A posable rod that was under LOAD when the
-// drag began does lose that load, since a released rod is not holding anything for
-// the projection to fight: an adjustable member has no preload to speak of, and that
-// is what marking one posable declares it to be.
-function recapturePosable(){
+// baseline (transport.js §16.1) -- for as long as the drag lasted. It walks the same
+// rods the release did, so a posable rod the drag never touched keeps the length it
+// was authored at. A released rod that was under LOAD when the drag began does lose
+// that load, since a released rod is not holding anything for the projection to
+// fight: an adjustable member has no preload to speak of, and that is what marking
+// one posable declares it to be.
+function recapturePosable(rootId){
   for(const con of constraints)
-    if(con.type==='rod' && con.posable) recaptureRodPose(con);
+    if(rodPosableFor(con, rootId)) recaptureRodPose(con);
 }
 
 // ---- §06.3 · cableFrame ----

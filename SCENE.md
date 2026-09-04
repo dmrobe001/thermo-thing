@@ -131,8 +131,8 @@ never recomputed since. The pose no longer implies them:
   moved *by hand* through geometry the solver is no longer holding: a **grounded**
   body's anchors (`recaptureGrounding`, whose rows are compiled away, §S.8) and a
   **posable** rod's own length, welds and stations, re-read after each step of a
-  pose drag because for that step the rod was released and held none of them
-  (`constraints.js` §06.2d). Both are the editor writing the scene, which is what
+  pose drag that reached it -- because for that step the rod was released and held
+  none of them (`constraints.js` §06.2d). Both are the editor writing the scene, which is what
   an editor is for; neither happens while the sim runs.
 - `belt.restPhase`, `belt.rA`, `belt.rB`, `belt.sense`.
 - `rotspring.restAngle`.
@@ -427,13 +427,13 @@ recomputed every substep from the constraints actually present (`constraints.js`
 Both are **structural**: they depend on what is attached, never on the current
 configuration. Nothing freezes or thaws as a mechanism swings through a pose.
 
-The one thing that suspends either is a rod marked **posable**, and it suspends them
-on the *mode*, not the configuration: while the player is dragging a body with the
-sim paused, such a rod is released to a bare rail and holds nothing -- so it grounds
-nothing and locks no length either (`constraints.js` §06.2d). It is rigid again, and
-freezing again, the moment the drag step is over, at the geometry the drag reached.
-A posable ground strut whose body stayed frozen would be a contradiction: the whole
-point of marking it is to slide that body along it.
+The one thing that suspends either is a rod marked **posable**, and what suspends it
+is the *gesture*, never the configuration: while the player drags a body with the sim
+paused, a posable rod jointed to that body is released to a bare rail and holds
+nothing -- so it grounds nothing and locks no length either (`constraints.js` §06.2d).
+It is rigid again, and freezing again, the moment the drag step is over, at the
+geometry the drag reached. A posable ground strut whose body stayed frozen would be a
+contradiction: the whole point of marking it is to slide that body along it.
 
 ### Freezing is per coordinate, and a vessel is where that shows
 
@@ -489,8 +489,9 @@ bottleneck. The structural rules above cost one pass over the constraint list.
 ### Verified
 
 `tools/posable-check.js` covers the suspension: that a posable ground strut is frozen
-until the drag starts, free inside the posing scope, and frozen again -- at the posed
-geometry -- as soon as it ends.
+until a drag on its own body starts, free inside that posing scope, and frozen again
+-- at the posed geometry -- as soon as it ends, while a posable rod the drag never
+reached is never released at all.
 
 `tools/scene-roundtrip.js` §4 checks each rule and each case that separates them --
 the mid-wall weld that pins a pose and leaves a length free, the cap weld that pins
