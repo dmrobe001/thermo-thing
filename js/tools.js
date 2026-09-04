@@ -7,7 +7,8 @@
 //    §13.3  constraint handles (conHandles, pickHandle, applyHandle)
 //    §13.4  pointer state (multi-touch map, pinch, cancelSingle)
 //    §13.5  pointerdown  (per-tool dispatch -- where constraints are created)
-//    §13.6  pointermove  (drag/pan/pinch/handle articulation)
+//    §13.6  pointermove  (drag/pan/pinch/handle articulation; poseDragTo, where
+//                        a posable rod is released -- constraints.js §06.2d)
 //    §13.7  pointerup / cancel / wheel
 // ============================================================================
 // ---- §13.1 · tool table + rail build + setTool ----
@@ -1035,6 +1036,7 @@ function runToolClick(wx,wy){
 }
 
 // ---- §13.6 · pointermove (drag / pan / pinch / handle articulation) ----
+// The pose drag itself is poseDragTo, below the listener.
 cv.addEventListener('pointermove',e=>{
   const rect=cv.getBoundingClientRect();
   const px=e.clientX-rect.left, py=e.clientY-rect.top;
@@ -1072,7 +1074,22 @@ cv.addEventListener('pointermove',e=>{
     else { bodyPreview.r=Math.hypot(mouseWorld[0]-bodyPreview.cx,mouseWorld[1]-bodyPreview.cy); }
     return;
   }
-  if(drag && !sim.running){
+  if(drag && !sim.running){ poseDragTo(mouseWorld[0], mouseWorld[1]); saveState(); }
+});
+
+// One step of a pose drag: articulate the machine so the grabbed point follows the
+// cursor to (wx, wy). Factored out of the pointermove handler above so the posing
+// mode has one visible scope -- and so the verification scripts can drive a drag
+// without synthesizing pointer events (tools/posable-check.js), the same seam
+// runToolClick gives the click paths (§13.5).
+function poseDragTo(wx,wy){
+  // Posing is the mode a `posable` rod is released in (constraints.js §06.2d): for
+  // the length of this call it is a bare rail, holding neither its length nor its
+  // welds, and grounding nothing. Everything that reads the rows has to sit inside
+  // the scope, refreshFrozen included -- G.static is read below, and a body whose
+  // only anchor is a released rod is free to be posed.
+  withPosing(()=>{
+    refreshFrozen();
     const G=bodies[drag.bi];
     if(G.static){
       // move the root kinematically; the island follows it. The pose is captured
@@ -1081,7 +1098,7 @@ cv.addEventListener('pointermove',e=>{
       // welded to a dragged frozen body still turns its pinion) rather than
       // missing it for having happened outside the solve -- projection.js §09.1.
       const q0=poseSnapshot();
-      const [gx,gy]=epWorldPt(G,drag.off); G.x+=mouseWorld[0]-gx; G.y+=mouseWorld[1]-gy;
+      const [gx,gy]=epWorldPt(G,drag.off); G.x+=wx-gx; G.y+=wy-gy;
       // Its grounding rod's rows are compiled away, so nothing in the solver will
       // pull the anchor back into agreement -- recapture it from the new pose
       // instead, exactly as creating the rod would have (§06.2b).
@@ -1102,13 +1119,20 @@ cv.addEventListener('pointermove',e=>{
       // 'dragpin' is an internal-only row type (§06.5) -- never added to
       // `constraints`, just fed through projectPositions as a transient goal.
       const [gx,gy]=epWorldPt(G,drag.off);
-      const [px,py]=saturatingPull(gx,gy,mouseWorld[0],mouseWorld[1],DRAG_CAP_PX);
+      const [px,py]=saturatingPull(gx,gy,wx,wy,DRAG_CAP_PX);
       const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[gx+px,gy+py]};
       projectPositions(8,[temp]);
     }
-    saveState();
-  }
-});
+  });
+  // Outside the scope again, so the rod is rigid from here on -- and it holds the
+  // pose the drag just reached rather than the one it was authored at. The second
+  // refreshFrozen is what closes the scope: whatever a released rod was freezing, it
+  // freezes again, at the geometry the drag left. Leaving that to the caller's
+  // saveState would work but would make every reader of `static` between here and
+  // there -- render, the HUD, the inspector -- see the released world.
+  recapturePosable();
+  refreshFrozen();
+}
 
 // ---- §13.7 · pointerup / cancel / wheel ----
 function endPointer(e){

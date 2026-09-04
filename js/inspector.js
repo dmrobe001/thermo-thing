@@ -222,7 +222,7 @@ function renderInspector(){
     const c=selConstraint;
     const isRod=c.type==='rod', isSlot=c.type==='slot';
     const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
-                : ({pin:'Pin · hinge',rod:'Rigid rod',
+                : ({pin:'Pin · hinge',rod:(c.posable?'Rigid rod \u00b7 posable':'Rigid rod'),
                     belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',rack:'Rack and pinion'})[c.type];
     const isBelt=c.type==='belt', isCvt=c.type==='cvt', isRack=c.type==='rack';
     const showTorque = ((isRod||isRack) && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
@@ -237,13 +237,16 @@ function renderInspector(){
         <label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> pin A welded${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> pin B welded${c.b.id==null?' (background)':''}</label>`;
     if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>`;
+        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>
+        <label class="chk"><input type="checkbox" id="f_posable" ${c.posable?'checked':''}> posable</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
                : isRack ? 'Nonholonomic: an infinite, massless rack line named by its two pins \u2014 pin A locates it, pin B aims it, and drag either to move the rack. Put both on one body and the rack rides that body\u2019s frame. A welded pin also locks its body\u2019s rotation to the rack\u2019s heading; tap a pin on the canvas to toggle it. Each pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
                : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
+                         + (c.posable ? ' <b>Posable</b>: while you drag a body with the sim paused this rod is released to a bare rail \u2014 length free, welds off, everything it joins pinned and free to slide along it \u2014 and it keeps whatever length and angles the pose leaves it at. It is an ordinary rigid rod as soon as you let go.'
+                                      : ' Mark it <b>posable</b> to make it a rail while you pose: released to its line for the length of a drag, then rigid again at the length you posed it to.')
                : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
     p.innerHTML=`
@@ -277,6 +280,10 @@ function renderInspector(){
       document.getElementById('f_weldB').onchange=ev=>{ setRackWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
     }
     if(isRod){
+      // Nothing to capture: `posable` says what the rod does while it is DRAGGED
+      // (constraints.js §06.2d), not what it holds, so unlike a weld the toggle has
+      // no rest angle to re-read and can never snap the geometry.
+      document.getElementById('f_posable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
       document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
       document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
       document.getElementById('f_len').onchange=ev=>{ const v=parseFloat(ev.target.value);

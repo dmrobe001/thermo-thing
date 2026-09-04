@@ -189,11 +189,15 @@ const SCENE_SCHEMA = [
     fields:{
       len:{t:'num', always:true, get:c=>c.len, set:(c,v)=>{c.len=v;}},
       weld:{t:'ends', def:'none', get:c=>endsWord(c.weldA,c.weldB)},
+      // Authored, and the only rod field that says nothing about the running
+      // physics: it is what the rod does while the player POSES through it
+      // (constraints.js §06.2d). Read by build below, like `weld`.
+      posable:{t:'flag', def:false, get:c=>!!c.posable},
       restAngA:{t:'num', always:true, when:c=>c.weldA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
       restAngB:{t:'num', always:true, when:c=>c.weldB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
       pt:PT_FIELD('rod'),
     },
-    build:(q,e)=>{ const [A,B]=endsFlags(q('weld')); return makeRodCon(e.a, e.b, A, B); } },
+    build:(q,e)=>{ const [A,B]=endsFlags(q('weld')); return makeRodCon(e.a, e.b, A, B, q('posable')); } },
 
   { kind:'slot', list:'constraints', match:c=>c.type==='slot',
     ends:[['a','ep'], ['b','ep']],
