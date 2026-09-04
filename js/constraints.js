@@ -14,7 +14,8 @@
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
 //    §06.2  the remaining constraint makers (pin, belt, cvt, knife, cable)
-//    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen)
+//    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen) and the
+//           recaptures that follow a hand move (recaptureConAngles/recaptureConPose)
 //    §06.2c extra control points (conPoints, makeConPoint, conEndpoints) -- the
 //           third and further ends a pin/rod/slot/rack may carry
 //    §06.2d posable rods (withPosing, rodReleased, recapturePosable) -- the
@@ -120,7 +121,7 @@ function endpointAngleLockRow(which, f, restAng){
 // against an unwrapped phi would agree with the rows now and disagree by a whole
 // turn after the next Reset re-seeded phi from raw. Captured raw, it agrees with
 // both -- as long as the winding the rows have accumulated is cleared alongside it,
-// which is what recaptureRodPose does (§06.2b).
+// which is what recaptureConPose does (§06.2b).
 function captureRestAngle(con, which){
   const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
   const phi=Math.atan2(way-wby,wax-wbx);
@@ -434,34 +435,51 @@ const frozenSolid = b => b.static && (b.shape!=='vessel' || b.lenLock);
 function recaptureGrounding(b){
   for(const con of constraints){
     if(rodGrounds(con)!==b && rodLocksLength(con)!==b) continue;
-    recaptureRodPose(con);
+    recaptureConPose(con);
   }
 }
-// Re-read everything a rod holds off the live geometry -- its length, either weld's
-// rest angle, and every extra point's station and rest angle (§06.2c). This is
-// exactly what makeRodCon and makeConPoint capture at creation, so a rod recaptured
-// at a pose it already satisfies is unchanged, and one recaptured after a hand move
-// holds the new pose instead. Called from recaptureGrounding above and, once per
-// pose-drag step, from recapturePosable (§06.2d).
-function recaptureRodPose(con){
-  // Drop the unwrapping anchor first. Every capture below reads the RAW segment
-  // angle (captureRestAngle), so the rows have to read it raw too, or a rod that
-  // was posed past the branch cut -- swung round its anchor through the -x
-  // direction -- comes out of the recapture holding a rest angle a full turn from
-  // the phi its own weld row measures against. Cleared, the next twoPointFrame
-  // re-seeds from the same raw atan2 the capture used, which is exactly the state a
-  // freshly loaded (or freshly Reset) scene is in. Safe to do here and nowhere else:
-  // a rod being recaptured is one nothing is currently holding -- compiled away, or
-  // released for the drag -- so there is no live phi continuity to break.
+// Re-read every ANGLE a line joint holds off the live geometry -- each locked end's
+// rest angle (a rod's or a rack's weld, a slot's prismatic lock) and every extra
+// point's (§06.2c) -- plus the unwrapping anchor those angles are measured against.
+// This is exactly what captureRestAngle does when a lock is switched on, so a joint
+// recaptured at a pose it already holds is unchanged.
+//
+// The unwrapping anchor goes first, and it is the subtle half. Every capture below
+// reads the RAW segment angle (captureRestAngle), so the rows have to read it raw
+// too, or a rod that was posed past the branch cut -- swung round its anchor through
+// the -x direction -- comes out of the recapture holding a rest angle a full turn
+// from the phi its own weld row measures against. Cleared, the next twoPointFrame
+// re-seeds from the same raw atan2 the capture used, which is exactly the state a
+// freshly loaded (or freshly Reset) scene is in. Safe wherever the joint is not
+// being held across the edit -- compiled away, released for a drag (§06.2d), or
+// carried bodily by a selection box (select.js §18.2) -- which is every caller here.
+function recaptureConAngles(con){
   con._phiRef=undefined;
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  con.len=Math.hypot(wax-wbx,way-wby);
-  if(con.weldA) captureRestAngle(con,'A');
-  if(con.weldB) captureRestAngle(con,'B');
-  for(const pt of conPoints(con)){
-    if(pt.s!==undefined) pt.s=capturePointStation(con, pt.ep);
-    if(pt.lock) pt.restAng=capturePointRestAngle(con, pt.ep);
+  if(con.type==='rod' || con.type==='rack'){
+    if(con.weldA) captureRestAngle(con,'A');
+    if(con.weldB) captureRestAngle(con,'B');
   }
+  if(con.type==='slot'){
+    if(con.prismaticA) captureRestAngle(con,'A');
+    if(con.prismaticB) captureRestAngle(con,'B');
+  }
+  for(const pt of conPoints(con)) if(pt.lock) pt.restAng=capturePointRestAngle(con, pt.ep);
+}
+// ...and everything else a line joint holds: the angles above plus the two things
+// that are LENGTHS along it -- a rod's rest length and every extra point's station.
+// Together that is exactly what makeRodCon and makeConPoint capture at creation, so
+// a joint recaptured at a pose it already satisfies is unchanged, and one recaptured
+// after a hand move holds the new pose instead. Called from recaptureGrounding
+// above, once per pose-drag step from recapturePosable (§06.2d), and from a scaled
+// selection box (select.js §18.2). Safe on any constraint kind: a belt, a CVT or a
+// knife holds none of these and comes out untouched but for the phi anchor.
+function recaptureConPose(con){
+  recaptureConAngles(con);
+  if(con.type==='rod'){
+    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+    con.len=Math.hypot(wax-wbx,way-wby);
+  }
+  for(const pt of conPoints(con)) if(pt.s!==undefined) pt.s=capturePointStation(con, pt.ep);
 }
 
 // ---- §06.2c · extra control points (a constraint with more than two ends) ----
@@ -653,7 +671,7 @@ const rodPosing = con => rodPosableFor(con, posingRoot);
 const rodReleased = con => posing>0 && rodPosing(con);
 
 // Once the drag step has settled, a released rod re-reads what it holds from the
-// pose the player just produced (§06.2b recaptureRodPose): the length, the welds'
+// pose the player just produced (§06.2b recaptureConPose): the length, the welds'
 // rest angles, the points' stations. Done every pointermove rather than at
 // pointerup, for the same reason recaptureGrounding is: between moves the rod is a
 // rigid rod again, and one whose captured length disagreed with its live geometry
@@ -666,7 +684,7 @@ const rodReleased = con => posing>0 && rodPosing(con);
 // one posable declares it to be.
 function recapturePosable(){
   for(const con of constraints)
-    if(rodPosing(con)) recaptureRodPose(con);
+    if(rodPosing(con)) recaptureConPose(con);
 }
 
 // ---- §06.3 · cableFrame ----

@@ -41,7 +41,8 @@ ctx.globalThis = ctx;
 // Stubs for the parts of the engine the scene path calls but does not need loaded:
 // selection and the tool rail both live in DOM-heavy files, and nothing under test
 // touches either. saveState/restoreState are NOT stubbed -- check (6) is about the
-// real ones, so js/transport.js is loaded below like any other source file.
+// real ones, so js/transport.js is loaded below like any other source file, and
+// js/select.js with it, since both of those name the group selection it owns.
 vm.runInContext(`
   function clearSelection(){} function renderInspector(){}
   function setTool(){} var TOOLS=[];
@@ -51,7 +52,7 @@ vm.runInContext(`
 // as a diverging trajectory even when every serialized field matches.
 for(const f of ['js/state.js','js/geometry.js','js/constraints.js','js/solver.js',
                 'js/physics.js','js/projection.js','js/loop.js','js/hud.js','js/scene.js','js/examples.js',
-                'js/transport.js'])
+                'js/select.js','js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
 
 const run = src => vm.runInContext(src, ctx);

@@ -10,7 +10,8 @@
 //    §11.4c interactions      (drawInteraction -- heat & mass exchange couplings)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
-//    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap)
+//    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap,
+//                            drawLasso, drawGroupBox -- the selection box, §18)
 // ============================================================================
 // ---- §11.1 · render (scene orchestrator) ----
 function render(){
@@ -40,6 +41,11 @@ function render(){
   if(pending) drawPending();
   if(bodyPreview) drawPreview();
   drawSnap();
+  // The selection box and the loop being drawn sit on top of everything, handles
+  // included: they are the frame the picture is being moved in, not one more
+  // element in it (select.js §18).
+  if(selGroup) drawGroupBox(selGroup);
+  if(lasso) drawLasso();
   document.getElementById('hint').style.display = bodies.length? 'none':'block';
 }
 
@@ -581,7 +587,7 @@ function drawReaction(con){
   ctx.stroke();
 }
 
-// ---- §11.7 · interaction overlays (pending, preview, handles, snap) ----
+// ---- §11.7 · interaction overlays (pending, preview, handles, snap, selection) ----
 // `pending` also holds the first pick of a two-step tool (§13.5); it lives here
 // because drawPending visualises it, but §13 is what writes and consumes it.
 let pending=null;      // first pick of a two-step constraint tool
@@ -625,7 +631,11 @@ function drawPreview(){
   ctx.setLineDash([]);
 }
 function drawHandles(){
-  if(sim.running) return;
+  // A group's members are all marked selected (select.js §18.1), and their control
+  // points are not editable while the box is up -- the box is what moves them -- so
+  // drawing every handle in the selection would be an offer the tool layer refuses
+  // (§13.5). One box, one set of handles.
+  if(sim.running || selGroup) return;
   const drawOne=(con,h)=>{
     const isHover = hoverHandle && hoverHandle.kind==='con' && hoverHandle.con===con
                     && hoverHandle.which===h.which && hoverHandle.k===h.k;
@@ -640,6 +650,47 @@ function drawHandles(){
   // the rest-length control point once selected) via the same conHandles/
   // pickHandle/applyHandle machinery -- they just live in a separate array.
   for(const sp of springs){ if(!sp.sel) continue; for(const h of conHandles(sp)) drawOne(sp,h); }
+}
+// The freehand loop, while it is being drawn (tools.js §13.5/§13.6 write `lasso`,
+// select.js §18.3 consumes it). Drawn closed from the first move, because the closed
+// region is what it will actually test against -- an open-looking scribble that
+// nonetheless catches everything inside its closure would be a lie about the rule.
+let lasso=null;             // {pts:[[wx,wy],...]} while the lasso tool is dragging
+function drawLasso(){
+  if(lasso.pts.length<2) return;
+  ctx.save();
+  ctx.strokeStyle='#5aa9f0'; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
+  ctx.beginPath();
+  lasso.pts.forEach((p,i)=>{ const [sx,sy]=w2s(p[0],p[1]); i?ctx.lineTo(sx,sy):ctx.moveTo(sx,sy); });
+  ctx.closePath();
+  ctx.fillStyle='rgba(90,169,240,.08)'; ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+// The selection box: the frame the group's bodies are currently fixed to (select.js
+// §18.2), with the handles that transform it -- four corners to scale about the
+// opposite corner, one stem out of the top edge to turn. Drawn from the group's own
+// geometry helpers, so the picture and the hit test cannot disagree.
+function drawGroupBox(g){
+  const c=groupCornerPoints(g).map(p=>w2s(p[0],p[1]));
+  ctx.save();
+  ctx.strokeStyle='#5aa9f0'; ctx.lineWidth=1.5; ctx.setLineDash([6,4]);
+  ctx.beginPath(); c.forEach((p,i)=> i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1])); ctx.closePath(); ctx.stroke();
+  ctx.setLineDash([]);
+  if(sim.running){ ctx.restore(); return; }     // no handles while it runs -- nothing to drag
+  const rp=groupRotPoint(g), [rx,ry]=w2s(rp[0],rp[1]);
+  const top=[(c[3][0]+c[2][0])/2, (c[3][1]+c[2][1])/2];
+  ctx.beginPath(); ctx.moveTo(top[0],top[1]); ctx.lineTo(rx,ry); ctx.stroke();
+  const hot = h => hoverHandle && hoverHandle.kind==='group' && hoverHandle.which===h.kind && hoverHandle.k===h.k;
+  for(const h of groupHandles(g)){
+    const [sx,sy]=w2s(h.x,h.y), on=hot(h), r=on?7:5.5;
+    ctx.fillStyle='#13161c'; ctx.strokeStyle=on?'#8fd0ff':'#5aa9f0'; ctx.lineWidth=2;
+    ctx.beginPath();
+    if(h.kind==='rotate') ctx.arc(sx,sy,r,0,Math.PI*2);
+    else ctx.rect(sx-r,sy-r,2*r,2*r);
+    ctx.fill(); ctx.stroke();
+  }
+  ctx.restore();
 }
 function drawSnap(){
   // an active handle drag's live snap takes priority; otherwise show a

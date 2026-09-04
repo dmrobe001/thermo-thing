@@ -6,7 +6,9 @@
 //    §13.2  picking & snapping (pickBody/Constraint, distSeg, snapAnchor, ...)
 //    §13.3  constraint handles (conHandles, pickHandle, applyHandle)
 //    §13.4  pointer state (multi-touch map, pinch, cancelSingle)
-//    §13.5  pointerdown  (per-tool dispatch -- where constraints are created)
+//    §13.5  pointerdown  (per-tool dispatch -- where constraints are created, and
+//                        where the lasso's loop and the selection box's transform
+//                        gestures start -- select.js §18)
 //    §13.6  pointermove  (drag/pan/pinch/handle articulation; poseDragTo, where
 //                        a posable rod is released -- constraints.js §06.2d)
 //    §13.7  pointerup / cancel / wheel
@@ -14,6 +16,7 @@
 // ---- §13.1 · tool table + rail build + setTool ----
 const TOOLS=[
   {id:'select',key:'1',tip:'Select / move (1)',svg:'<path d="M5 3l7 16 2-6 6-2z"/>'},
+  {id:'lasso',key:'l',tip:'Lasso many \u2014 loop them, or tap to add/remove (l)',svg:'<path d="M12 4c4.4 0 8 2 8 4.5S16.4 13 12 13 4 11 4 8.5 7.6 4 12 4z"/><path d="M9 12.6c-.8 2.4-2.2 3.6-2.2 5.2a1.6 1.6 0 1 0 3.2 0"/>'},
   {id:'body',key:'2',tip:'Add body (2)',svg:'<circle cx="12" cy="12" r="7"/><path d="M12 8v8M8 12h8"/>'},
   {id:'rectbody',key:'q',tip:'Add rectangle (q)',svg:'<rect x="4" y="6" width="16" height="12" rx="1"/><path d="M12 8v8M6 12h12"/>'},
   {id:'vessel',key:'g',tip:'Add gas vessel (g)',svg:'<rect x="7" y="3" width="10" height="18" rx="1"/><path d="M7 5.5h10M7 18.5h10" stroke-width="2.6"/>'},
@@ -34,7 +37,10 @@ const TOOLS=[
 let tool='select';
 const rail=document.getElementById('rail');
 TOOLS.forEach((t,i)=>{
-  if(i===1||i===4||i===12||i===14||i===16){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
+  // separators between the tool families; the indices move whenever the table
+  // above does -- select/lasso, then the body makers, the joints, the force
+  // elements, the interactions, and delete on its own
+  if(i===2||i===5||i===13||i===15||i===17){ const s=document.createElement('div');s.className='rail-sep';rail.appendChild(s);}
   const el=document.createElement('button');el.className='tool';el.dataset.id=t.id;
   el.innerHTML=`<svg viewBox="0 0 24 24">${t.svg}</svg><span class="kbd">${t.key}</span><span class="tip">${t.tip}</span>`;
   el.onclick=()=>setTool(t.id); rail.appendChild(el);
@@ -519,7 +525,7 @@ const pointers=new Map();
 let pinch=null, pinchCooldown=false, downScreen=null, movedFar=false;
 let clickArmed=false;   // non-select tools: the tap-committed click (§13.5/§13.7)
 let anchorDrag=null, lastSnap=null, resizeDrag=null;
-function cancelSingle(){ drag=null; endPosing(); grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; clickArmed=false; }
+function cancelSingle(){ drag=null; endPosing(); grab=null; bodyPreview=null; panning=null; anchorDrag=null; lastSnap=null; resizeDrag=null; groupDrag=null; lasso=null; clickArmed=false; }
 
 // `hover` highlights whatever body/interaction sits under the cursor when it
 // isn't already selected; `hoverHandle` highlights a control point of the
@@ -533,13 +539,24 @@ function updateHover(wx,wy){
   hover=null; hoverHandle=null; hoverSnap=null;
   if(sim.running) return;
   if(tool==='select'){
-    // a control point of the already-selected interaction takes priority
-    const ch=pickCableHandle(wx,wy);
-    if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
-    const h=pickHandle(wx,wy);
-    if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which,k:h.k}; return; }
-    // ...as does the selected body's rim, the resize handle
-    if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
+    if(selGroup){
+      // The selection box's own handles come first, for the same reason a control
+      // point does: they are what the cursor is actually over (select.js §18.2).
+      // Inside the box nothing else highlights either -- the whole region is one
+      // target, the group. Outside it the ordinary pick chain still runs, so the
+      // click that changes the selection still shows what it would land on.
+      const gh=pickGroupHandle(wx,wy);
+      if(gh){ hoverHandle={kind:'group', which:gh.kind, k:gh.k}; return; }
+      if(groupContains(selGroup,wx,wy)) return;
+    } else {
+      // a control point of the already-selected interaction takes priority
+      const ch=pickCableHandle(wx,wy);
+      if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
+      const h=pickHandle(wx,wy);
+      if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which,k:h.k}; return; }
+      // ...as does the selected body's rim, the resize handle
+      if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
+    }
     // otherwise highlight whatever is under the cursor, unless it's the selection
     // -- interactions take priority over bodies (matching the delete order,
     // §13.4/§13.5 below) so a constraint/cable coincident with a body is
@@ -550,6 +567,12 @@ function updateHover(wx,wy){
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ if(!rotSprings[rsi].sel) hover=rotSprings[rsi]; return; }
     const ii=pickInteraction(wx,wy); if(ii>=0){ if(!interactions[ii].sel) hover=interactions[ii]; return; }
     const bi=pickBody(wx,wy); if(bi>=0){ if(!bodies[bi].sel) hover=bodies[bi]; return; }
+    return;
+  }
+  if(tool==='lasso'){
+    // a tap adds or removes the body under the cursor (select.js §18.3), so show
+    // which one that would be; the loop itself needs no hover
+    const bi=pickBody(wx,wy); if(bi>=0) hover=bodies[bi];
     return;
   }
   if(tool==='delete'){
@@ -654,8 +677,28 @@ cv.addEventListener('pointerdown',e=>{
 
   if(e.button===1 || (e.button===0 && e.altKey)){ panning={sx:e.clientX,sy:e.clientY,cx:cam.x,cy:cam.y}; return; }
 
+  // The lasso draws its loop directly, rather than deferring to a tap like every
+  // other non-select tool below: the gesture IS the drag, so there is no click to
+  // arm and nothing to pan. `clickArmed` still goes up, because a lasso that never
+  // moves is a tap, and a tap adds or removes one body (§13.7 -> §18.3).
+  if(tool==='lasso'){ lasso={pts:[[wx,wy]]}; clickArmed=true; return; }
+
   if(tool==='select'){
-    if(!sim.running){
+    // The selection box owns its own handles and its own interior (select.js
+    // §18.2): a corner scales, the stem turns, anything inside moves the whole
+    // group. It comes first because the box is drawn over everything, and a handle
+    // sitting on top of a body has to be the thing the click reaches. It is also
+    // the ONLY control-point editing on offer while a group is up: a member joint's
+    // own handles would move an end out from under the box's capture, so they are
+    // neither drawn (render.js §11.7) nor picked (below) until the group is gone.
+    // A click outside the box falls through to the ordinary pick chain, which is
+    // how the selection is changed.
+    if(!sim.running && selGroup){
+      const gh=pickGroupHandle(wx,wy);
+      if(gh){ groupDrag=beginGroupDrag(gh,wx,wy); return; }
+      if(groupContains(selGroup,wx,wy)){ groupDrag=beginGroupDrag({kind:'move'},wx,wy); return; }
+    }
+    if(!sim.running && !selGroup){
       // cable handle check first: allows winding control in edit mode, but only
       // once the cable is already the selection -- a click on an unselected
       // cable's handle just selects it, matching how constraint handles behave.
@@ -778,6 +821,7 @@ function addControlPoint(type, wx, wy){
 // (pointerdown that never turned into a drag) -- see the pointerdown handler
 // above for why this is deferred instead of firing immediately.
 function runToolClick(wx,wy){
+  if(tool==='lasso'){ lassoToggle(wx,wy); return; }
   if(tool==='body'){
     // two clicks, like every other creation tool: first click drops the
     // centre and previews the radius live as the pointer hovers afterward
@@ -1058,10 +1102,29 @@ cv.addEventListener('pointermove',e=>{
   if(pinchCooldown) return;                               // ignore the leftover finger after a pinch
   if(downScreen && Math.hypot(px-downScreen[0],py-downScreen[1])>6) movedFar=true;
 
-  if(anchorDrag||resizeDrag||panning||bodyPreview||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; hoverSnap=null; }
+  if(anchorDrag||resizeDrag||panning||bodyPreview||groupDrag||lasso||(drag&&!sim.running)||grab){ hover=null; hoverHandle=null; hoverSnap=null; }
   else updateHover(mouseWorld[0],mouseWorld[1]);
-  if(tool==='select') cv.style.cursor = resizeDrag ? 'grabbing' : (hoverHandle && hoverHandle.kind==='resize') ? 'grab' : 'default';
+  if(tool==='select') cv.style.cursor =
+    (resizeDrag||groupDrag) ? 'grabbing'
+    : (hoverHandle && (hoverHandle.kind==='resize' || hoverHandle.kind==='group')) ? 'grab'
+    : (selGroup && !sim.running && groupContains(selGroup,mouseWorld[0],mouseWorld[1])) ? 'move'
+    : 'default';
 
+  if(lasso){
+    // One point per pointermove, thinned to a few screen pixels: the loop only has
+    // to be accurate enough to test centres against, and an unthinned trail is
+    // thousands of points for one gesture.
+    const last=lasso.pts[lasso.pts.length-1];
+    const [lx,ly]=w2s(last[0],last[1]);
+    if(Math.hypot(px-lx,py-ly)>3) lasso.pts.push([mouseWorld[0],mouseWorld[1]]);
+    return;
+  }
+  if(groupDrag){
+    // As with a control point (§13.5's deferred apply), a tap that never crosses
+    // the threshold must leave the selection exactly where it was.
+    if(movedFar){ groupDragTo(mouseWorld[0],mouseWorld[1]); saveState(); }
+    return;
+  }
   if(anchorDrag){
     // Only once the gesture has actually moved (§13.5's deferred apply) -- a tap
     // that never crosses movedFar's threshold must leave the control point
@@ -1144,6 +1207,22 @@ function endPointer(e){
   if(pinch && pointers.size<2){ pinch=null; pinchCooldown = pointers.size>0; }
   if(pointers.size===0) pinchCooldown=false;
   if(pinchCooldown){ cancelSingle(); return; }
+
+  // A closed loop selects; a lasso that never moved falls through to the tap path
+  // below (runToolClick), which toggles one body in or out.
+  if(lasso){
+    const pts=lasso.pts; lasso=null;
+    if(movedFar && e.type==='pointerup'){
+      // A loop that caught something hands the bench straight to the select tool:
+      // the box it just made is transformed there (§13.5), and having to press 1
+      // between drawing a selection and moving it is a step with no meaning. A
+      // loop that caught nothing leaves the lasso up, since the next thing the
+      // player wants is another loop.
+      if(lassoSelect(pts)) setTool('select');
+      clickArmed=false; downScreen=null; return;
+    }
+  }
+  if(groupDrag){ groupDrag=null; downScreen=null; return; }
 
   if(anchorDrag){
     // A tap (no drag) on a rod's or slot's own control point toggles that end

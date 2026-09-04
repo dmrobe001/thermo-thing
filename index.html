@@ -41,6 +41,8 @@
        §14  SELECTION & INSPECTOR .... js/inspector.js
        §15  EXAMPLES ................. js/examples.js
        §16  TRANSPORT & BOOT ......... js/transport.js
+       §17  SCENE FILE ............... js/scene.js
+       §18  SELECTION GROUPS ......... js/select.js
      ============================================================================ -->
 <html lang="en">
 <head>
@@ -106,9 +108,9 @@
   .spacer{flex:1}
 
   /* ---- §02.4 · left tool rail ---- */
-  /* The rail grows with the tool count (16 of them as of the heat/mass interaction
-     tools), so it is allowed to scroll rather than clip its last entry on a short
-     window -- the delete tool at the bottom must never be the one that falls off. */
+  /* The rail grows with the tool count (17 of them as of the lasso), so it is
+     allowed to scroll rather than clip its last entry on a short window -- the
+     delete tool at the bottom must never be the one that falls off. */
   #rail{grid-row:2;background:var(--panel);border-right:1px solid var(--hair);
         display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0;
         overflow-y:auto;scrollbar-width:none}
@@ -184,6 +186,14 @@
        background:var(--panel-2);border:1px solid var(--hair);border-radius:6px;padding:7px 4px;cursor:pointer}
   .scenebtns button:hover{color:var(--hi);border-color:var(--accent-dim)}
   .scerr{color:var(--force);font-size:12px;line-height:1.6}
+  /* the widget stash (§18.5): one row per saved widget, its name then its buttons */
+  .stashrow{display:flex;align-items:center;gap:6px;margin:5px 0}
+  .stashrow .nm{flex:1;font-family:var(--mono);font-size:11px;color:var(--hi);
+       overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .stashrow button{font-family:var(--mono);font-size:10px;color:var(--mid);
+       background:var(--panel);border:1px solid var(--hair);border-radius:5px;padding:4px 7px;cursor:pointer}
+  .stashrow button:hover{color:var(--hi);border-color:var(--accent-dim)}
+  .stashrow button.x{color:var(--force);border-color:rgba(236,91,82,.35);padding:4px 6px}
 
   /* ---- §02.8 · responsive (narrow-viewport overrides) ---- */
   @media (max-width:820px){
@@ -280,11 +290,13 @@
      §14 inspector   -> renderInspector, updateInspectorLive  (§04-§06, §09, §15, §16)
      §15 examples    -> loadExample  (§04, §05, §14)
      §17 scene       -> SCENE_SCHEMA, exportScene, importScene  (§04-§06)
-     §16 transport   -> saveState, setRunning, boot  (§04, §08-§13, §17)
+     §18 select      -> selGroup, the lasso, the widget stash  (§04-§06, §11, §13, §14, §17)
+     §16 transport   -> saveState, setRunning, boot  (§04, §08-§14, §17, §18)
 
-     §17 loads BEFORE §16 despite the numbering: transport's boot sequence calls
-     renderInspector(), which draws the scene-file card, so §17's functions have to
-     exist by then. Load order is dependency order; the section numbers are names.
+     §17 and §18 load BEFORE §16 despite the numbering: transport's boot sequence
+     calls renderInspector(), which draws the scene-file card and the stash card, so
+     both files' functions have to exist by then. Load order is dependency order; the
+     section numbers are names.
      ============================================================================ -->
 <script src="js/state.js"></script>
 <script src="js/geometry.js"></script>
@@ -299,6 +311,7 @@
 <script src="js/inspector.js"></script>
 <script src="js/examples.js"></script>
 <script src="js/scene.js"></script>
+<script src="js/select.js"></script>
 <script src="js/transport.js"></script>
 </body>
 </html>

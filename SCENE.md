@@ -402,6 +402,13 @@ code path by which a scene can contain something the editor cannot build.
   wires arrive they are a new ledger row and a new line kind -- which is the test
   of whether the ledger was factored right.
 
+> The first such test has since been run, and it was not the signal layer: bulk
+> selection needed to write out *part* of a bench and read it back into another one.
+> That turned out to be the same ledger, the same reader and one new function on each
+> side of it (§S.9) -- no new fields, no second format.
+
+
+
 ---
 
 ## S.8 Freezing is derived, not asserted
@@ -501,3 +508,115 @@ body again. The migration was checked against the behaviour it replaced: nine of
 eleven examples are bit-identical over three seconds of substeps, and the two that
 differ are the vessels that became pose-frozen, where the freeze is *more* exact than
 the solve it replaced (x = 1.15 rather than 1.1499999999958).
+
+---
+
+## S.9 Fragments: a widget is part of a scene, written in the same format
+
+Bulk selection wanted three things the format did not yet have a name for: keep this
+part of a bench, put it down again somewhere else, and hold a library of such parts.
+All three are the same object -- a **fragment**: a scene file with no `sim` and no
+`cam` line, listing only some of the bench's objects.
+
+### Why not a second format
+
+The obvious alternative is a purpose-built clipboard structure -- deep-copy the
+selected objects, keep them in an array, re-id them on paste. It was rejected for the
+reason §S.2 exists at all. A second serialization is a second answer to "what can a
+scene object hold", and it drifts: the field that gets forgotten in the copy path is
+found the day someone pastes a widget and its welds come back unwelded. Reusing the
+ledger means a widget's contents are checked by the same reader, against the same one
+list of fields, as everything else. A field added to `SCENE_SCHEMA` is in the
+clipboard the same afternoon, and `tools/scene-roundtrip.js` still guards it.
+
+It also buys three properties that were not the point but turn out to matter:
+
+- **A fragment is a legal scene file.** Drop one on the canvas and it loads as a
+  scene, with `sim` and `cam` at their defaults. Paste one into the scene card and
+  press Import and it replaces the bench. The reader cannot tell the difference,
+  because there is none.
+- **A whole scene file is a legal fragment.** That is the whole implementation of
+  "import a scene string as a new widget": the stash card takes any text the reader
+  accepts, and a paste simply ignores whatever `sim` and `cam` lines it carried. A
+  paste adds parts; it does not take over the world they land in.
+- **A widget is readable and mailable.** It is the same text the scene card shows, so
+  a part can be pasted into a message, kept in a file, or hand-edited.
+
+### What must be renumbered, and what must not
+
+Body ids are the one thing a fragment cannot carry verbatim: they are whatever the
+bench it was cut from was using, and the bench it lands in has its own. So a paste
+renumbers -- each body takes a fresh id from `uid`, and every reference follows
+(`remapItem`, §17.7). The places a reference can hide are exactly the ones the
+reader's own dangling-id check already walks, which is why that check and the remap
+are the same short list rather than two lists that could disagree.
+
+Everything else is carried literally, captured fields included. A rod's rest length
+travels with the rod; a belt's phase travels with the belt. A pasted widget is the
+part as it was, not the part as its new pose would imply -- which is the same rule
+`always:true` states for a file (§S.3), applied to a piece of one.
+
+### What comes with the bodies
+
+A selection is a set of BODIES. Which couplings travel with them is derived, by one
+rule: **a constraint, cable, spring or interaction belongs to the selection when
+every body it names is in it.** A background anchor does not disqualify anything --
+the background is not a body, it is a point, and that point travels with the widget.
+
+The narrower reading considered first was "at least two of its bodies are in the
+selection", which is what this rule reduces to for anything that names no background.
+The two part ways on exactly the elements anchored to ground -- and those are the ones
+that matter most, because in this engine a rod welded at both ends to the background
+is *the* way anything is pinned (§S.8). Under the narrower rule, stashing a pendulum
+would hand you back a loose disk. Under this one you get the pendulum, hanging from a
+ground point that moved with it.
+
+The cost is that a selection can move a "pinned" body by moving what pins it. That is
+the same thing the single-body pose drag already does (it moves the body and
+recaptures its grounding rod, `constraints.js` §06.2b), and it is what makes a
+grounded machine placeable at all.
+
+### The transform, and what it re-reads
+
+A selection carries a box, and while the box is up every body in it has its pose
+*fixed to the box's frame* -- translation, uniform scale and rotation, with each body
+turning by exactly the box's own change in angle. Body **sizes never change**: a
+radius, a rectangle's half-extents, a vessel's bore and length are the parts
+themselves, and scaling spreads the parts apart rather than growing them.
+
+That last decision is what makes the couplings' captured geometry a real question,
+because a scale is then not a similarity of the whole scene: the centres spread while
+the body-frame anchor offsets did not, so the distance between two anchor points is
+*not* the old distance times the scale. Three cases, and `select.js` §18.2 is where
+they live:
+
+| the transform | what happens to captured fields |
+|---|---|
+| translate | nothing. Every distance and relative angle between the points a member names is invariant, because they all moved together. |
+| rotate | invariant too, with two exceptions that measure against the fixed world rather than against the selection: a belt's phase (`rA*thA - sense*rB*thB`, an angle sum with unequal weights) and a background-referenced rotational spring's rest angle. Both shift analytically from the capture, so an authored stress survives. The rest angles of welds and prismatic locks are re-read -- not because their value changes, but because they are measured against a raw `atan2` whose branch the turn may have crossed, and the re-read re-seeds both sides of that comparison together. |
+| scale | every joint's geometry is re-read from the live pose: a rod's length, a control point's station, every rotation lock's rest angle. The new value the geometry shows is the only correct one, and it is exactly what building the joint there would have captured -- which is what keeps a scaled mechanism assembled instead of snapping the moment it runs. A spring's rest length and a cable's paid-out length are the opposite case: lengths the *element* owns rather than distances the pose implies, so they scale, and an authored stretch or slack survives. |
+
+Two consequences worth stating plainly, because both are choices and not accidents:
+
+- **The box is a frame, not an accumulation.** Every transform is computed from one
+  capture taken when the selection was made, so setting the angle back to 0 and the
+  scale back to 1 puts the scene back exactly as it was picked -- captured lengths
+  included, because once a box has been scaled it keeps re-reading them, on the way
+  back as well as out.
+- **A turn or a scale settles any drift the members were carrying.** A joint that was
+  authored unsatisfied comes out of a transform satisfied. A selection box is an
+  authoring gesture, and the pose it leaves is the pose it authors.
+
+A coupling with one foot outside the selection is not a member: it is neither carried
+nor re-read, and after a transform it reads as violated -- the honest report that the
+selection cut through a machine rather than around one. It also keeps that pose from
+becoming the reset baseline, exactly as any other unsatisfied edit does (§16.1).
+
+### Verified
+
+`tools/select-check.js` covers the membership rule (including the grounding rod that
+comes along and the rod that does not), the lasso's centre test, a rigid transform
+that turns every body by the box's delta and leaves every member exactly as stressed
+as it was, a scale that spreads without resizing and leaves the machine assembled, the
+frame's reversibility, and the copy/paste round trip -- congruent, freshly numbered,
+original untouched, and loadable on its own as a scene.

@@ -206,4 +206,18 @@ This turns the constraint library into a measurement layer and is most of what m
 
 **Signal wires are drawn as wires**, visibly separate from physical constraints, connecting a measurement source to a modulated parameter.
 
+**Bulk edits act on a selection, not on one object.** A player laying out a machine
+works on regions of it -- move this sub-assembly, turn it, spread it out, keep it and
+use it again. That is a *selection* of bodies with a transform box around it, and the
+couplings between the selected bodies come along with them. Two rules make it
+tractable: which couplings come along is derived from the bodies (every body an
+element names must be in the selection), and the parts themselves never change size,
+so a scale spreads them apart rather than growing them. See `SCENE.md` §S.9.
+
+> **Status (as built):** The selection half of this is live (code §18): a lasso tool
+> catches bodies by their centres, the box moves, turns and scales them as one, a
+> selection copies and pastes, and a named **stash** of widgets -- each one a scene
+> fragment, code §17.7 -- persists in the browser. What is still absent is everything
+> feature-first below.
+
 > **Status (as built):** The current editor is tool-first rather than feature-first. You select a tool from the rail (code §13.1) and click bodies; anchors snap to body centres and edges (code §13.2). There is no persistent, named-feature object dropped onto bodies, and no relation-filter menu -- the tool palette stands in for "select two features, pick a relation," and each tool constructs one constraint type directly (code §13.5). The three-way hard/driven/modulated visual distinction is moot until driven and modulated constraints exist (§4.4, §5); today every constraint is "hard." Signal wires, likewise, are not drawn because they do not yet exist.
