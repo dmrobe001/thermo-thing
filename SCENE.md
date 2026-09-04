@@ -247,6 +247,14 @@ Grammar notes:
   *material* label on a vessel, so the second number is a fraction of the length),
   `bg(x,y)` for the fixed background, `--` between the two ends. No spaces inside
   the parentheses -- a line tokenizes on whitespace.
+- **`pt` is the one repeatable key.** A pin, rod, slot or rack may carry extra
+  control points beyond its two named ends (`js/constraints.js` §06.2c), and a line
+  writes one `pt=` per point, in order. Each token is a whole point in one word --
+  the endpoint syntax above, then slash-separated options: `s=` its captured station
+  along the line, `lock` plus `restAng=` its rotation lock, or the bare word `pinion`
+  on a rack. Which of those a token may say depends on the kind it sits on, and
+  saying anything else is a load error, exactly as an unknown key on the line itself
+  is: `pt=3/pinion` on a slot and `pt=3/s=0.5` on a pin are both refused.
 - A rectangle's dimensions are `width`/`height`, not `w`/`h`: `w` is the angular
   velocity every body carries.
 - A vessel's gas is written as pressure and temperature -- the two faces of it a
@@ -259,7 +267,12 @@ Grammar notes:
 - Line order does not matter: the reader builds bodies in a first pass. The exporter
   still writes them first, because a file a person reads should introduce a thing
   before mentioning it.
-- `scene 1` must be the first non-comment line. An unknown version is refused.
+- `scene 3` must be the first non-comment line. An unknown version is refused.
+  Version 2 dropped `static` and `lenlock` (§S.8); version 3 added `pt` and, with
+  it, rewrote the rack -- `rack <pin> -- <pin> pt=<pinion>/pinion` where a version 2
+  file wrote `rack <anchor> -- <pinion> angle=...`. That one had to move the version
+  number rather than just extend the ledger, because the old two-token form still
+  parses under the new reading and would silently mean something else.
 - **Any unrecognized key or kind is an error**, reported with its line, and nothing
   is touched until the whole file has parsed -- so a bad file leaves the current
   bench exactly as it was. This is the enforcement surface; see §S.2.

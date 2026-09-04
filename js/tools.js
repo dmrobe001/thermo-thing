@@ -22,7 +22,7 @@ const TOOLS=[
   {id:'belt',key:'b',tip:'Belt (b)',svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
   {id:'knife',key:'k',tip:'Knife-edge wheel (k)',svg:'<path d="M4 16h16"/><path d="M12 16l3-9 3 9"/><circle cx="8" cy="16" r="1.5"/>'},
   {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
-  {id:'rack',key:'t',tip:'Rack and pinion (t)',svg:'<circle cx="12" cy="13" r="6"/><path d="M2 19h20"/>'},
+  {id:'rack',key:'t',tip:'Rack and pinion \u2014 two pins, then a pinion (t)',svg:'<circle cx="12" cy="13" r="6"/><path d="M2 19h20"/>'},
   {id:'cable',key:'c',tip:'Cable (c)',svg:'<circle cx="16" cy="9" r="4"/><path d="M4 19c6 0 8-4 9-7"/><circle cx="4" cy="19" r="1.5"/>'},
   {id:'spring',key:'8',tip:'Linear spring (8)',svg:'<circle cx="5" cy="18" r="2.4"/><circle cx="19" cy="6" r="2.4"/><path d="M7 16.5l2-3 3 6 3-6 2 3"/>'},
   {id:'rotspring',key:'9',tip:'Rotational spring (9)',svg:'<path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><path d="M12 11a1 1 0 1 0 1 1"/>'},
@@ -81,12 +81,16 @@ function constraintHit(con,wx,wy){
     return (wx-ax)**2+(wy-ay)**2<=tol*tol;
   }
   if(con.type==='rack'){
-    // Either the rack line (infinite, like slot's rail) or the pinion's pitch
+    // Either the rack line (infinite, like slot's rail) or any pinion's pitch
     // circle -- whichever the point actually sits near.
-    const f=rackFrame(con); if(!f.B) return false;
+    const f=rackFrame(con);
     if(Math.abs(f.nx*(wx-f.px)+f.ny*(wy-f.py))<=tol) return true;
-    const d=Math.hypot(wx-f.B.x,wy-f.B.y);
-    return Math.abs(d-Math.abs(f.rho))<=tol;
+    for(const pt of conPoints(con)){
+      if(pt.kind!=='pinion') continue;
+      const g=rackPitch(f, pt); if(!g) continue;
+      if(Math.abs(Math.hypot(wx-g.B.x,wy-g.B.y)-Math.abs(g.rho))<=tol) return true;
+    }
+    return false;
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return false;
   const [ax,ay]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
@@ -197,10 +201,19 @@ function anchorTarget(wx,wy){
 }
 // ---- §13.3 · constraint handles (edit anchors/directions in place) ----
 // draggable handles carried by each constraint
+// One handle per extra control point (constraints.js §06.2c), carrying its index so
+// pickHandle/applyHandle can name the point back -- `which` alone cannot, since every
+// one of them is a 'pt'.
+function conPointHandles(con){
+  return conPoints(con).map((pt,k)=>{ const [x,y]=epWorld(pt.ep); return {which:'pt', k, x, y}; });
+}
 function conHandles(con){
-  if(con.type==='rod'||con.type==='slot'){
+  if(con.type==='rod'||con.type==='slot'||con.type==='rack'){
+    // A rack's two pins are handles exactly as a rod's or a slot's two ends are:
+    // drag to re-bind, tap to toggle the weld. There is no heading handle any more --
+    // the heading is the pair, so aiming a rack means moving one of its pins.
     const [ax,ay]=epWorld(con.a), [bx,by]=epWorld(con.b);
-    return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}];
+    return [{which:'A',x:ax,y:ay},{which:'B',x:bx,y:by}].concat(conPointHandles(con));
   }
   if(con.type==='spring'){
     // Endpoints behave like rod's (draggable to re-anchor); the rest-length
@@ -212,15 +225,11 @@ function conHandles(con){
     if(con.sel){ const [rx,ry]=springRestHandlePos(con); handles.push({which:'restLen',x:rx,y:ry}); }
     return handles;
   }
-  if(con.type==='rack'){
-    // The rack's anchor (draggable, re-bindable to another body or the
-    // background, like rod/slot's endpoints) plus a heading handle that aims the
-    // rack within A's own frame -- the same anchor/dir pair knife's contact point
-    // and heading use, and body-local for the same reason.
-    const f=rackFrame(con);
-    return [ {which:'point',x:f.px,y:f.py}, {which:'dir',x:f.px+f.ux*0.7,y:f.py+f.uy*0.7} ];
-  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
+  // A pin's extra points all sit ON the pivot, so they get no handles of their own:
+  // there is nowhere distinct to drag one to, and the pivot handle below moves the
+  // whole coincident set. The inspector's point list (§14.2) is where they are
+  // toggled and removed.
   if(con.type==='pin'){ const [x,y]=epWorldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
   if(con.type==='knife'){ const [px,py]=epWorldPt(A,con.a.off);
     const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
@@ -278,10 +287,10 @@ function pickHandle(wx,wy){
   const arrOf = o => selConstraint===o ? 'constraints' : selSpring===o ? 'springs' : null;
   if(selObj){
     for(const h of conHandles(selObj)){
-      if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:selObj,which:h.which,
+      if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:selObj,which:h.which,k:h.k,
         ci:(selConstraint===selObj?constraints:springs).indexOf(selObj), arr:arrOf(selObj)}; } }
   for(let i=constraints.length-1;i>=0;i--){ const con=constraints[i]; if(con===selObj) continue;
-    for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,ci:i,arr:'constraints'}; } }
+    for(const h of conHandles(con)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con,which:h.which,k:h.k,ci:i,arr:'constraints'}; } }
   for(let i=springs.length-1;i>=0;i--){ const sp=springs[i]; if(sp===selObj) continue;
     for(const h of conHandles(sp)){ if(Math.hypot(wx-h.x,wy-h.y)<=tol) return {con:sp,which:h.which,ci:i,arr:'springs'}; } }
   return null;
@@ -289,11 +298,17 @@ function pickHandle(wx,wy){
 // move an anchor while editing; snaps and (for rods) can re-bind to another body
 function applyHandle(ad, wx, wy){
   const con=ad.con;
+  // Every extra control point (constraints.js §06.2c) shares one handle behaviour,
+  // whatever constraint carries it, so it is handled ahead of the per-type branches.
+  if(ad.which==='pt'){ applyPointHandle(con, ad.k, wx, wy); return; }
   if(con.type==='pin'){
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     const s=snapAnchor(wx,wy,[A.id,B.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
     con.a.off=offOf(A,P); con.b.off=offOf(B,P);
-  } else if(con.type==='rod'||con.type==='slot'){
+    // The pivot is one point wearing several bodies' offsets -- move them together.
+    for(const pt of conPoints(con)){ if(pt.ep.id==null){ pt.ep.off=[P[0],P[1]]; continue; }
+      const K=bodies[bodyIndex(pt.ep.id)]; if(K) pt.ep.off=offOf(K,P); }
+  } else if(con.type==='rod'||con.type==='slot'||con.type==='rack'){
     // Snap to a body if one is under/near the cursor; otherwise the end
     // re-binds to the background at the raw world point.
     const s=snapAnchor(wx,wy); lastSnap=s;
@@ -308,37 +323,23 @@ function applyHandle(ad, wx, wy){
       // Keep any welded end's rest angle consistent with the edited geometry.
       if(con.weldA) setRodWeld(con,'A',true);
       if(con.weldB) setRodWeld(con,'B',true);
+    } else if(con.type==='rack'){
+      if(con.weldA) setRackWeld(con,'A',true);
+      if(con.weldB) setRackWeld(con,'B',true);
     } else {
       // Keep any locked ("prismatic") end's rest angle consistent too.
       if(con.prismaticA) setSlotLock(con,'A',true);
       if(con.prismaticB) setSlotLock(con,'B',true);
     }
+    // Moving an END moves the line the extra points ride, so re-read what each of
+    // them captured against it -- the same recapture the weld/lock flags just did.
+    recaptureConPoints(con);
   }
   else if(con.type==='knife'){
     const A=bodies[bodyIndex(con.a.id)];
     if(ad.which==='anchor'){ const s=snapAnchor(wx,wy,[A.id]); lastSnap=s; const P=s?s.wp:[wx,wy]; con.a.off=offOf(A,P); }
     else if(ad.which==='dir'){ const [px,py]=epWorldPt(A,con.a.off); const dx=wx-px,dy=wy-py; const L=Math.hypot(dx,dy)||1;
       lastSnap=null; con.dir=R(-A.th, dx/L, dy/L); }
-  }
-  else if(con.type==='rack'){
-    if(ad.which==='point'){
-      // Snap to a body if one is under/near the cursor, else re-bind to the
-      // background at the raw world point -- the same endpoint re-bind rod and
-      // slot do, through the same offOf (so a vessel anchor lands on a material
-      // label, not a metre offset).
-      const s=snapAnchor(wx,wy); lastSnap=s;
-      if(s){ con.a.id=s.body.id; con.a.off=offOf(s.body,s.wp); }
-      else { const bi=pickBody(wx,wy);
-        if(bi>=0){ con.a.id=bodies[bi].id; con.a.off=offOf(bodies[bi],[wx,wy]); }
-        else { con.a.id=null; con.a.off=[wx,wy]; } }
-    } else if(ad.which==='dir'){
-      // Aims the rack IN A'S OWN FRAME: the pointer gives a world heading, and
-      // A's current angle is taken back out of it, so the rack keeps the heading
-      // relative to A that the drag just set, however A turns afterward.
-      lastSnap=null;
-      const f=rackFrame(con);
-      con.angle=Math.atan2(wy-f.py, wx-f.px) - (f.A ? f.A.th : 0);
-    }
   }
   else if(con.type==='spring'){
     if(ad.which==='restLen'){
@@ -363,6 +364,37 @@ function applyHandle(ad, wx, wy){
         if(bi>=0){ ep.id=bodies[bi].id; ep.off=offOf(bodies[bi],[wx,wy]); }
         else { ep.id=null; ep.off=[wx,wy]; } }
     }
+  }
+}
+// Drag one extra control point (constraints.js §06.2c). A pinion is a whole body
+// meshing wherever it sits, so its handle only ever RE-BINDS -- to another disk under
+// the cursor, or nowhere. Every other point is held on its constraint's own line, so
+// the drag is projected there first (conLineProject) and only then asked what body it
+// landed on; its station and rest angle are recaptured against where it ended up,
+// exactly as a dragged endpoint's are.
+function applyPointHandle(con, k, wx, wy){
+  const pt=conPoints(con)[k]; if(!pt) return;
+  lastSnap=null;
+  if(pt.kind==='pinion'){
+    const bi=pickBody(wx,wy);
+    if(bi>=0 && bodies[bi].shape==='circle' && !conEndpoints(con).some(ep=>ep.id===bodies[bi].id))
+      pt.ep={id:bodies[bi].id, off:[0,0]};
+    return;
+  }
+  if(con.type==='pin'){ return; }              // a pin's points have no handles (§13.3)
+  const P=conLineProject(con,wx,wy);
+  const bi=pickBody(P[0],P[1]);
+  pt.ep = bi>=0 ? {id:bodies[bi].id, off:offOf(bodies[bi],P)} : {id:null, off:[P[0],P[1]]};
+  if(conPointHasStation(con)) pt.s=capturePointStation(con, pt.ep);
+  if(pt.lock) setConPointLock(con, pt, true);
+}
+// Re-read every extra point's captured data against the constraint's current line --
+// called whenever an END moves, since that is what the captures are measured from.
+function recaptureConPoints(con){
+  for(const pt of conPoints(con)){
+    if(pt.kind==='pinion') continue;
+    if(conPointHasStation(con)) pt.s=capturePointStation(con, pt.ep);
+    if(pt.lock) setConPointLock(con, pt, true);
   }
 }
 // scale a stored {id, off} endpoint that rides `bodyId`'s local frame by
@@ -392,8 +424,9 @@ function resizeBody(b, newR){
   const ratio=newR/b.r;
   if(!isFinite(ratio) || ratio<=0) return;
   for(const con of constraints){
-    scaleOffOnBody(con.a, b.id, ratio);
-    if(con.b) scaleOffOnBody(con.b, b.id, ratio);
+    // conEndpoints, not a.off/b.off by name: every extra control point (§06.2c) is
+    // an anchor on a body too, and has to ride the resize like the base pair's.
+    for(const ep of conEndpoints(con)) scaleOffOnBody(ep, b.id, ratio);
     if(con.type==='belt'){
       let touched=false;
       if(con.a.id===b.id){ con.rA*=ratio; touched=true; }
@@ -430,7 +463,7 @@ function applyRectResize(b, newHw, newHh, newX, newY){
   newHw=Math.max(0.08,newHw); newHh=Math.max(0.08,newHh);
   const ratioX=newHw/b.hw, ratioY=newHh/b.hh;
   if(!isFinite(ratioX) || !isFinite(ratioY) || ratioX<=0 || ratioY<=0) return;
-  for(const con of constraints){ scaleOffOnBodyXY(con.a,b.id,ratioX,ratioY); if(con.b) scaleOffOnBodyXY(con.b,b.id,ratioX,ratioY); }
+  for(const con of constraints) for(const ep of conEndpoints(con)) scaleOffOnBodyXY(ep,b.id,ratioX,ratioY);
   for(const cb of cables){ scaleOffOnBodyXY(cb.tether,b.id,ratioX,ratioY); }
   for(const sp of springs){ scaleOffOnBodyXY(sp.a,b.id,ratioX,ratioY); scaleOffOnBodyXY(sp.b,b.id,ratioX,ratioY); }
   b.mass*=ratioX*ratioY; b.hw=newHw; b.hh=newHh; b.x=newX; b.y=newY;
@@ -464,7 +497,7 @@ function resizeVesselCorner(v, corner, wx, wy){
   const [dx,dy]=R(-v.th, wx-ox, wy-oy);
   const newBore=Math.max(0.02,Math.abs(dx)), newLen=Math.max(VESSEL_MIN_LEN,Math.abs(dy));
   const ratioLat=newBore/v.bore;
-  for(const con of constraints){ scaleOffOnBodyXY(con.a,v.id,ratioLat,1); if(con.b) scaleOffOnBodyXY(con.b,v.id,ratioLat,1); }
+  for(const con of constraints) for(const ep of conEndpoints(con)) scaleOffOnBodyXY(ep,v.id,ratioLat,1);
   for(const cb of cables){ scaleOffOnBodyXY(cb.tether,v.id,ratioLat,1); }
   for(const sp of springs){ scaleOffOnBodyXY(sp.a,v.id,ratioLat,1); scaleOffOnBodyXY(sp.b,v.id,ratioLat,1); }
   resizeVessel(v, newBore, newLen);
@@ -503,7 +536,7 @@ function updateHover(wx,wy){
     const ch=pickCableHandle(wx,wy);
     if(ch && ch.cb.sel){ hoverHandle={kind:'cable',cb:ch.cb,which:ch.which}; return; }
     const h=pickHandle(wx,wy);
-    if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which}; return; }
+    if(h && h.con.sel){ hoverHandle={kind:'con',con:h.con,which:h.which,k:h.k}; return; }
     // ...as does the selected body's rim, the resize handle
     if(selBody && bodyRimHit(selBody,wx,wy)){ hoverHandle={kind:'resize',b:selBody}; return; }
     // otherwise highlight whatever is under the cursor, unless it's the selection
@@ -529,6 +562,11 @@ function updateHover(wx,wy){
     return;
   }
   if(tool==='slot'||tool==='cable'||tool==='pin'||tool==='rod'||tool==='spring'){
+    // With nothing pending, a joint of this tool's own kind under the cursor takes
+    // the click as an extra control point (§13.5 addControlPoint) -- highlight the
+    // joint that would receive it rather than the body behind it.
+    if(!pending && tool!=='cable' && tool!=='spring'){
+      const ci=pickConstraintOfType(tool,wx,wy); if(ci>=0){ hover=constraints[ci]; return; } }
     // these tools attach to a snapped anchor (body centre/edge) or a bare body
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
     return;
@@ -541,11 +579,17 @@ function updateHover(wx,wy){
     return;
   }
   if(tool==='rack'){
-    // FIRST pick is the rack's anchor -- any body, or the background, exactly
-    // like slot/pin/rod (anchorTarget). SECOND pick is the pinion, and -- like
-    // belt/cvt above -- only a circle is a valid target.
-    if(!pending){ const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; } return; }
-    const bi=pickBody(wx,wy); if(bi>=0 && bodies[bi].shape==='circle' && bodies[bi].id!==pending.id) hover=bodies[bi];
+    // FIRST and SECOND picks are the rack's two pins -- any body, or the background,
+    // exactly like slot/pin/rod (anchorTarget), except that an existing rack under
+    // the cursor takes the first click as a control point instead (§13.5). THIRD is
+    // the pinion, and -- like belt/cvt above -- only a circle is a valid target.
+    if(!pending){
+      const ci=pickConstraintOfType('rack',wx,wy); if(ci>=0){ hover=constraints[ci]; return; }
+      const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; } return; }
+    if(!pending.ep2){ const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; } return; }
+    const bi=pickBody(wx,wy);
+    if(bi>=0 && bodies[bi].shape==='circle' &&
+       bodies[bi].id!==pending.ep.id && bodies[bi].id!==pending.ep2.id) hover=bodies[bi];
     return;
   }
   if(tool==='knife'||tool==='rotspring'){
@@ -576,6 +620,14 @@ function startPinch(){
 // pinch guard, explicit pan, select (+handles/resize/grab -- the only case
 // that can claim a one-finger drag instead of panning), body, delete,
 // belt/cvt, knife, cable, pin, rod, slot, spring, rotspring.
+//
+// The four kinds that take extra control points -- pin, rod, slot, rack
+// (constraints.js §06.2c) -- check first, on their FIRST click only, whether the
+// cursor is on an existing joint of their own kind: if it is, the click adds a point
+// to that joint instead of starting a new one (addControlPoint below). The cost is
+// that a new rod cannot be started from a point lying on another rod; the gain is
+// that attaching a third body to a joint is the same one-click gesture on every kind
+// that has one.
 //
 // Every non-select tool, and every select-tool click that doesn't land on
 // a draggable control point (a handle, the selected body's resize rim) or
@@ -664,6 +716,60 @@ cv.addEventListener('pointerdown',e=>{
   clickArmed=true;
   return;
 });
+// A pinion is claimed by a click landing near a disk's PERIMETER -- where a rack
+// line crossing a wheel actually meshes with it. Anything further in is a click
+// through the body, which reads as jointing it to the rack instead. Screen-space, so
+// the distinction is the same gesture at every zoom.
+const PINION_RIM_PX = 12;
+// Topmost constraint of one kind under the cursor, or -1 -- the pick that turns a
+// placement click into "add a point to THAT joint" rather than "start a new one".
+function pickConstraintOfType(type,wx,wy){
+  for(let i=constraints.length-1;i>=0;i--){
+    const c=constraints[i]; if(c.type===type && constraintHit(c,wx,wy)) return i; }
+  return -1;
+}
+// Clicking an existing joint of the SAME kind, with no pick pending, adds a control
+// point to it instead of starting a new one (constraints.js §06.2c). The point lands
+// where the click met the joint -- on its line, or on a pin's pivot -- and binds
+// whatever body is visible under the cursor there; empty space binds the fixed
+// background, exactly as an ordinary endpoint click does.
+//
+// Two clicks are told apart on a rack, and only there: near a circular body's rim the
+// new point is a PINION, meshing with the rack; anywhere else it is a joint holding
+// that body to the rack at that station.
+//
+// The new point's rotation lock is inherited -- conNewPointLock. Returns whether the
+// click was consumed, so a miss falls through to the tool's own first pick.
+function addControlPoint(type, wx, wy){
+  const ci=pickConstraintOfType(type,wx,wy); if(ci<0) return false;
+  const con=constraints[ci];
+  const P = type==='pin' ? epWorld(con.a) : conLineProject(con,wx,wy);
+  // A body this joint already names cannot take a second point on it: on a rigid
+  // body the new rows would only restate what the existing anchor already says. So
+  // the pick looks THROUGH those bodies to whatever else is under the cursor -- on a
+  // pin, where every end sits at the pivot, that is the difference between the tool
+  // working and it only ever finding the arms already attached. A vessel is the
+  // exception the rod tool already makes: two of its material planes are genuinely
+  // two points, and what a strut between them holds is the length.
+  const taken = conEndpoints(con).map(ep=>ep.id);
+  const usable = b => b.shape==='vessel' || !taken.includes(b.id);
+  let B=null;
+  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i];
+    if(bodyContains(b,wx,wy) && usable(b)){ B=b; break; } }
+  // Something IS under the cursor, but only bodies this joint already holds: adding
+  // nothing is the honest answer, and the click is still spent on this joint rather
+  // than falling through to start a new one somewhere behind it.
+  if(!B && pickBody(wx,wy)>=0) return true;
+  if(type==='rack' && B && B.shape==='circle' &&
+     Math.abs(Math.hypot(P[0]-B.x,P[1]-B.y)-B.r) <= PINION_RIM_PX/cam.scale){
+    makeConPoint(con, {id:B.id, off:[0,0]}, {kind:'pinion'});
+  } else {
+    const ep = B ? {id:B.id, off:offOf(B,P)} : {id:null, off:[P[0],P[1]]};
+    makeConPoint(con, ep, {lock:conNewPointLock(con)});
+  }
+  selectConstraint(ci); saveState();
+  return true;
+}
 // the click logic for every non-select tool, run only on a confirmed tap
 // (pointerdown that never turned into a drag) -- see the pointerdown handler
 // above for why this is deferred instead of firing immediately.
@@ -735,7 +841,7 @@ function runToolClick(wx,wy){
     const ii=pickInteraction(wx,wy); if(ii>=0){ interactions.splice(ii,1); clearSelection(); saveState(); return; }
     const bi=pickBody(wx,wy);
     if(bi>=0){ const id=bodies[bi].id;
-      constraints=constraints.filter(c=>c.a.id!==id && !(c.b&&c.b.id===id));
+      dropBodyFromConstraints(id);
       springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       dropInteractionsOn(id);
@@ -755,19 +861,35 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='rack'){
-    // FIRST click: where the rack is anchored on its body -- any body or the
-    // background, exactly like slot/pin/rod's first pick, through the same
-    // anchorTarget/offOf. The rack starts along that body's own local +x
-    // (angle 0, makeRackCon); drag the heading handle to aim it.
+    if(!pending && addControlPoint('rack',wx,wy)) return;
+    // THREE clicks, because a rack is a line and then something meshing with it.
+    // FIRST and SECOND name the two pins that ARE the line -- each an ordinary
+    // anchor on a body or the background, exactly like slot/pin/rod's, through the
+    // same anchorTarget/offOf, and each a free pin by default (tap it afterward to
+    // weld it). Put both on one body and the rack rides that body's frame.
     if(!pending){ const t=anchorTarget(wx,wy);
-      pending = t ? {id:t.body.id, off:offOf(t.body,t.wp), wp:t.wp} : {id:null, off:[wx,wy], wp:[wx,wy]};
+      pending = t ? {ep:{id:t.body.id, off:offOf(t.body,t.wp)}, wp:t.wp}
+                  : {ep:{id:null, off:[wx,wy]}, wp:[wx,wy]};
       return; }
-    // SECOND click: the pinion -- must be a circle, and not the body the rack is
-    // welded to (a body cannot mesh with its own rack: both sides of the row
-    // would ride the same frame and cancel).
+    if(!pending.ep2){
+      const t=anchorTarget(wx,wy);
+      const Bep = t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]};
+      const P = t ? t.wp : [wx,wy];
+      // The two pins must be two distinct points -- a line through one point has no
+      // direction. Same body is fine (that is the rigid rack); same place is not.
+      if(Math.hypot(P[0]-pending.wp[0], P[1]-pending.wp[1])<1e-6) return;
+      pending.ep2=Bep; pending.wp0=pending.wp; pending.wp=P;
+      return;
+    }
+    // THIRD click: the pinion -- a circle, and not a body either pin rides (a body
+    // cannot mesh with its own rack: both sides of the row would ride the same frame
+    // and cancel).
     const bi=pickBody(wx,wy); if(bi<0||bodies[bi].shape!=='circle') return;
-    const B=bodies[bi]; if(pending.id!=null && B.id===pending.id) return;
-    constraints.push(makeRackCon(pending.id, pending.off, B.id));
+    const B=bodies[bi];
+    if(B.id===pending.ep.id || B.id===pending.ep2.id) return;
+    const con=makeRackCon(pending.ep, pending.ep2, false, false);
+    makeConPoint(con, {id:B.id, off:[0,0]}, {kind:'pinion'});
+    constraints.push(con);
     pending=null; saveState();
     return;
   }
@@ -801,6 +923,7 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='pin'){
+    if(!pending && addControlPoint('pin',wx,wy)) return;
     // FIRST pick -- snapped anchor on body A, pending.wp is the pivot world point
     if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
       pending={ep:{id:t.body.id, off:offOf(t.body,t.wp)}, wp:t.wp}; return; }
@@ -818,6 +941,7 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='rod'){
+    if(!pending && addControlPoint('rod',wx,wy)) return;
     // Each end snaps to a body if one is under/near the click, else attaches
     // to the background at the raw world point (id:null). pending wraps
     // {ep,wp} (not the bare endpoint) so drawPending (render.js §11.7) still
@@ -848,6 +972,7 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='slot'){
+    if(!pending && addControlPoint('slot',wx,wy)) return;
     // Two clicks, exactly like rod: each end snaps to a body if one is
     // under/near the click, else attaches to the background. The rail
     // direction is implied by the two points' positions at creation.
@@ -999,11 +1124,21 @@ function endPointer(e){
     // panel shows as a checkbox (weld/prismatic), so refresh it too -- item 2:
     // editing an interaction from its control points must stay in sync with
     // the panel, the same as editing it from the panel's own checkboxes.
-    const conType = anchorDrag.con && anchorDrag.con.type;
-    if(!movedFar && (conType==='rod'||conType==='slot') && (anchorDrag.which==='A'||anchorDrag.which==='B')){
-      if(conType==='rod') toggleRodWeld(anchorDrag.con, anchorDrag.which);
-      else toggleSlotLock(anchorDrag.con, anchorDrag.which);
-      renderInspector(); saveState();
+    const con = anchorDrag.con, conType = con && con.type;
+    if(!movedFar && con){
+      if((conType==='rod'||conType==='slot'||conType==='rack') &&
+         (anchorDrag.which==='A'||anchorDrag.which==='B')){
+        if(conType==='rod') toggleRodWeld(con, anchorDrag.which);
+        else if(conType==='rack') toggleRackWeld(con, anchorDrag.which);
+        else toggleSlotLock(con, anchorDrag.which);
+        renderInspector(); saveState();
+      }
+      // An extra control point (§06.2c) toggles the same way its constraint's own
+      // ends do -- a pinion has no lock to toggle, and setConPointLock says so.
+      else if(anchorDrag.which==='pt'){
+        const pt=conPoints(con)[anchorDrag.k];
+        if(pt && conPointLockable(con,pt)){ toggleConPointLock(con, pt); renderInspector(); saveState(); }
+      }
     }
     anchorDrag=null; lastSnap=null; downScreen=null; return;
   }

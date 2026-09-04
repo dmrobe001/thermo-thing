@@ -90,6 +90,24 @@ The rod and the slot are conceptual complements -- distance-along-a-line vs. dri
 - **Rod** always carries its 1-row distance constraint, regardless of weld state. A rod with both ends welded to the background is rigid in both position and orientation, which is how a body is now anchored to the world (there is no standalone "static" toggle in the editor); a rod with only its background end welded reproduces the old ground-pin (a fixed pivot the far body spins freely about); a rod with no welds at either end is the original free-swinging distance joint.
 - **Slot** carries *no* row at all until at least one end is prismatic -- two pins is a purely visual rail (drawn through the two points, no physics). One locked end adds just the angle-lock row (rotation only) -- *unless* that end is the background, in which case the endpoint's own angle is a fixed constant, so the row degenerates into pinning the entire rail's position (a fixed ray from that point) with zero rotation lock on the other end; this is how a slider gets confined to a straight line while still spinning freely. Only once *both* ends are prismatic does a third row appear -- the classic point-stays-on-the-rail lock, canceling lateral drift -- reconstructing the full rigid prismatic joint (no drift, no relative rotation) that `lockRot` used to give directly.
 
+### 4.1b Extra control points (a joint with more than two ends)
+
+A pin, rod, slot or rack is *named* by two endpoints, and on the first three those two are what the constraint is: a rod's pair fixes its length, a slot's pair is its rail. Anything else attached to the same joint is an **extra control point** (`con.pts`, `js/constraints.js` §06.2c) -- an ordinary `{id, off}` endpoint, body or background, plus what the attachment means:
+
+| Kind | What an extra point means | Rows |
+|---|---|---|
+| Pin | the point coincides with the pivot | 2 |
+| Rod | the point is fixed to the bar at its captured station | 2 (+1 locked) |
+| Slot | the point rides the rail, free to slide along it | 1 (+1 locked) |
+| Rack (`kind:'point'`) | the body is jointed to the rack at its station | 2 (+1 locked) |
+| Rack (`kind:'pinion'`) | a disk meshing with the rack wherever it sits | 1, nonholonomic |
+
+The **station** is the point's signed distance from end `a` along the line, captured when the point is placed. Two of the four kinds hold one and two do not, and that is the difference between a rigid attachment and a rider: a rod's bar carries its passengers, a slot's rail lets them slide. There is no lateral offset to capture, because a point is always placed *on* the line -- the placement click is projected onto it -- so "beside the line" is a state the editor cannot produce and the scene format cannot describe.
+
+An extra point's own rotation lock is the same per-endpoint operation §4.1 describes, applied to a third end instead of one of the two named ones: set, the point's body angle is held to the line's heading, against a rest angle captured when the lock goes on. A newly added point **inherits** that lock when every point already on the joint agrees, and is locked when they do not -- the conservative reading, since a lock is visible and can be tapped off, while a missing one shows up only once the mechanism moves.
+
+Row order is what makes this additive rather than invasive: an extra point's rows are always appended *after* the base pair's, so the reaction readout (§7, code §09.3) keeps reading the pair's multipliers off the indices it always did.
+
 ### 4.2 Nonholonomic bilateral (velocity-only; no stabilization)
 
 | Constraint | Condition | Rows |
@@ -97,9 +115,11 @@ The rod and the slot are conceptual complements -- distance-along-a-line vs. dri
 | No-side-slip wheel | contact-point velocity *across* heading is zero | 1 |
 | Rolling wheel | across-heading zero **and** along-heading = r·spin | 2 |
 | Variable-ratio transmission (disk-on-disk) | tangential speeds equal at a contact point whose radius is itself a coordinate | 1 |
-| Rack and pinion | a rack welded to one body meshes with a circular pinion, matching tangential speeds at the pinion's live pitch radius | 1 |
+| Rack and pinion | a rack line named by two pins meshes with a circular pinion, matching tangential speeds at the pinion's live pitch radius | 1 per pinion |
 
-These are the same primitive -- "tangential velocities match at a parameterized contact point" -- with different features attached. Building the variable-radius contact once yields the rolling wheel, the ball-and-disk integrator, and the continuously variable transmission as configurations of one object. A gear whose ratio depends on configuration *is* nonholonomic; this is why the CVT lives in this group and not with the fixed-ratio gear above. The rack and pinion (`type:'rack'`, `js/constraints.js` §06.2/§06.5 `rackFrame`) is the straight-line member of the same family: instead of a second rim, the pinion meshes with a **rack** -- an infinite, massless toothed line *welded to* the first body, so it both translates and turns with it, and whatever fixes that body's orientation (a both-ends-prismatic slot, a belt, another joint) fixes the rack's. The "ratio" is the pinion's **pitch radius**, its own live perpendicular distance from the rack line; the pair is idealized, meshing with perfect traction wherever the pinion sits, with no tangency required.
+These are the same primitive -- "tangential velocities match at a parameterized contact point" -- with different features attached. Building the variable-radius contact once yields the rolling wheel, the ball-and-disk integrator, and the continuously variable transmission as configurations of one object. A gear whose ratio depends on configuration *is* nonholonomic; this is why the CVT lives in this group and not with the fixed-ratio gear above. The rack and pinion (`type:'rack'`, `js/constraints.js` §06.2/§06.5 `rackFrame`) is the straight-line member of the same family: instead of a second rim, the pinion meshes with a **rack** -- an infinite, massless toothed line. The rack is named by **two pins**, ordinary endpoints like a rod's or a slot's, either of which may ride a body or the fixed background. The pins are not symmetric, and the asymmetry is the physics: the rack is rigid, so pin `a` is the one material point of it that is pinned, while pin `b` only *aims* it (the line passes through `b`, but `b` may slide along the rack). Either pin may additionally be **welded**, which locks that end's body angle to the rack's heading through the same row a rod's weld builds. Put both pins on the same body and the rack rides that body's frame completely, translating and turning with it -- the arrangement the rack used to be restricted to, back when its direction came from a mandatory weld plus a body-frame angle.
+
+The "ratio" is the pinion's **pitch radius**, its own live perpendicular distance from the rack line; the pair is idealized, meshing with perfect traction wherever the pinion sits, with no tangency required. A rack carries its pinions -- and any bodies *jointed* to it -- as extra control points (§4.1b), so one rack may drive several pinions and carry several riders.
 
 ### 4.2b Rolling rows under the position projection
 

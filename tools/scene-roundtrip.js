@@ -129,7 +129,8 @@ has('flowpair', /^vessel \d+ .* P=243180 /m,         'the reservoir is at 2.4 at
 has('spinvessel',/^sim gravity=off/m,                'gravity is off');
 has('spinvessel',/^vessel \d+ .* w=9$/m,              'the initial spin');
 has('crank',    /^slot \d+ -- bg\([^)]*\) lock=B/m,  'the one-end-prismatic rail');
-has('rack',     /^rack \d+ -- \d+$/m,                 'the rack and pinion (angle omitted = along the rack body\'s own +x)');
+has('rack',     /^rack \d+@\([^)]*\) -- \d+ pt=\d+\/pinion$/m,
+                'the rack: two pins naming the line, the pinion as a control point');
 has('skate',    /^knife \d+@\(0\.42,0\) dir=\(1,0\)$/m,'the knife heading');
 has('cable',    /^cable \d+ -- \d+ Ltot=\S+ localAngle=\S+$/m,'the cable, with its captured length');
 has('cable',    /^rod bg\(0,5\.1\) -- 1 .*weld=both/m,  'the spool is grounded by a rod');
@@ -181,18 +182,27 @@ console.log('\n5. the reader accepts nothing the editor cannot build');
 run(`loadExample('pendulum')`);
 const before = run('exportScene()');
 const rejects = [
-  ['an unknown kind',            'scene 2\nrocket 1 x=0 y=0'],
-  ['an unknown field',           'scene 2\nbody 1 x=0 y=0 r=1 charge=3'],
-  ['a coordinate frozen by fiat','scene 2\nbody 1 x=0 y=0 r=1 xLocked'],
-  ['a dangling body reference',  'scene 2\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
-  ['a future version',           'scene 3\nbody 1 x=0 y=0 r=1'],
+  ['an unknown kind',            'scene 3\nrocket 1 x=0 y=0'],
+  ['an unknown field',           'scene 3\nbody 1 x=0 y=0 r=1 charge=3'],
+  ['a coordinate frozen by fiat','scene 3\nbody 1 x=0 y=0 r=1 xLocked'],
+  ['a dangling body reference',  'scene 3\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
+  ['a future version',           'scene 4\nbody 1 x=0 y=0 r=1'],
   ['a version 1 file',           'scene 1\nbody 1 x=0 y=0 r=1'],
-  ['a missing separator',        'scene 2\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
-  ['a duplicate id',             'scene 2\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
-  ['an authored static flag',    'scene 2\nbody 1 x=0 y=0 r=1 static'],
-  ['an authored length lock',    'scene 2\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
-  ['a prototype key',            'scene 2\nbody 1 x=0 y=0 r=1 constructor=1'],
-  ['a background pin',           'scene 2\nbody 1 x=0 y=0 r=1\npin 1 -- bg(0,1)'],
+  ['a missing separator',        'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
+  ['a duplicate id',             'scene 3\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
+  ['an authored static flag',    'scene 3\nbody 1 x=0 y=0 r=1 static'],
+  ['an authored length lock',    'scene 3\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
+  ['a prototype key',            'scene 3\nbody 1 x=0 y=0 r=1 constructor=1'],
+  ['a background pin',           'scene 3\nbody 1 x=0 y=0 r=1\npin 1 -- bg(0,1)'],
+  // The extra-control-point grammar (constraints.js §06.2c) is validated per kind,
+  // the same way a line's own keys are: what a point may say depends on what it is
+  // attached to, and anything else is a load error rather than a field ignored.
+  ['a pinion on a slot',         'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/pinion'],
+  ['a station on a pin',         'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\npin 1 -- 2 pt=3/s=0.5'],
+  ['a rod point with no station','scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nrod 1 -- 2 len=2 pt=3'],
+  ['a locked point with no rest angle',
+                                 'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/lock'],
+  ['a dangling point reference', 'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nslot 1 -- 2 pt=9'],
 ];
 for(const [what, text] of rejects){
   let msg=null;
@@ -276,6 +286,47 @@ function firstDiff(a,b){
   for(let i=0;i<Math.max(A.length,B.length);i++)
     if(A[i]!==B[i]) return `first difference at line ${i+1}:\n        -  ${A[i]}\n        +  ${B[i]}`;
   return 'lengths differ';
+}
+
+console.log('\n8. a joint with extra control points round-trips');
+// The `pt` key is the format's one repeatable field, and each token carries a whole
+// point (constraints.js §06.2c). This is the check that all four kinds that take
+// them write what they hold and read back the same thing -- including the captured
+// station and rest angle, which the reader must NOT recompute.
+const MULTI = [
+  'scene 3',
+  'sim gravity=off',
+  'body 1 x=0 y=0 r=0.2',
+  'body 2 x=2 y=0 r=0.2',
+  'body 3 x=1 y=0 r=0.2',
+  'body 4 x=3 y=0 r=0.2',
+  'body 5 x=1 y=-1 r=0.4',
+  'rod 1 -- 2 len=2 pt=3/s=-1',
+  'slot 1 -- 2 pt=4/lock/restAng=0',
+  'pin 1@(0.1,0) -- 2@(-1.9,0) pt=3@(-0.9,0)',
+  'rack 1 -- 2 weld=A restAngA=0 pt=5/pinion pt=4/s=-3',
+].join('\n')+'\n';
+{
+  let err=null, t1=null, t2=null;
+  try { run(`importScene(${JSON.stringify(MULTI)})`); t1=run('exportScene()');
+        run(`importScene(${JSON.stringify(t1)})`);   t2=run('exportScene()'); }
+  catch(e){ err=e; }
+  ok('a multi-point scene loads and re-exports', !err, err&&(err.stack||String(err)));
+  if(!err){
+    ok('and round-trips byte-for-byte', t1===t2, firstDiff(t1,t2));
+    const shape = run(`JSON.stringify(constraints.map(c=>[c.type, conPoints(c).map(
+      pt=>[pt.ep.id, pt.kind, pt.s===undefined?null:pt.s, pt.lock])]))`);
+    ok('every point came back with its kind, station and lock',
+       shape==='[["rod",[[3,"point",-1,false]]],["slot",[[4,"point",null,true]]],'
+             +'["pin",[[3,"point",null,false]]],["rack",[[5,"pinion",null,false],[4,"point",-3,false]]]]',
+       shape);
+    for(const line of ['rod 1 -- 2 len=2 pt=3/s=-1',
+                       'slot 1 -- 2 pt=4/lock/restAng=0',
+                       'pin 1@(0.1,0) -- 2@(-1.9,0) pt=3@(-0.9,0)',
+                       'rack 1 -- 2 weld=A restAngA=0 pt=5/pinion pt=4/s=-3'])
+      ok(`the file writes back  ${line}`, t1.split('\n').includes(line),
+         `not found in:\n${t1.split('\n').map(l=>'        '+l).join('\n')}`);
+  }
 }
 
 console.log(`\n${pass} ok, ${fail} failed\n`);

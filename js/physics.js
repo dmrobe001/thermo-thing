@@ -41,30 +41,32 @@
 // it), same as today's global rescale assumed of everything.
 function ufFind(p,i){ while(p[i]!==i){ p[i]=p[p[i]]; i=p[i]; } return i; }
 function ufUnion(p,a,b){ const ra=ufFind(p,a), rb=ufFind(p,b); if(ra!==rb) p[ra]=rb; }
-// Every two-endpoint coupling type shares the {id,...} endpoint shape
-// (constraints' a/b, cables' spool/tether, springs'/rotSprings' a/b) -- this
-// table drives the union pass generically instead of special-casing each
-// element type. A missing endpoint field (e.g. the single-ended 'knife'
-// constraint) reads the same as a background-fixed one. Wrapped in getters,
-// not a plain array of the globals themselves: state.js §-level code
-// reassigns bodies/constraints/springs/rotSprings/cables wholesale (e.g.
+// Every coupling type resolves to a LIST OF ENDPOINTS, all sharing the {id,...}
+// shape (constraints' a/b plus any extra control points, §06.2c; cables'
+// spool/tether; springs'/rotSprings' a/b) -- this table drives the union pass
+// generically instead of special-casing each element type. A missing endpoint (e.g.
+// the single-ended 'knife' constraint) reads the same as a background-fixed one.
+// Wrapped in getters, not a plain array of the globals themselves: state.js §-level
+// code reassigns bodies/constraints/springs/rotSprings/cables wholesale (e.g.
 // `constraints=constraints.filter(...)`, `bodies=[]` on load) rather than
 // mutating them in place, so a plain array captured once at script-load time
 // would keep pointing at whatever was live at that instant.
 const COUPLING_TABLES = [
-  ()=>[constraints,'a','b'], ()=>[cables,'spool','tether'],
-  ()=>[springs,'a','b'], ()=>[rotSprings,'a','b'],
+  ()=>[constraints, conEndpoints],
+  ()=>[cables,     cb=>[cb.spool, cb.tether]],
+  ()=>[springs,    sp=>[sp.a, sp.b]],
+  ()=>[rotSprings, rs=>[rs.a, rs.b]],
 ];
 function computeIslands(){
   const N=bodies.length, WORLD=N;
   const p=new Array(N+1); for(let i=0;i<=N;i++) p[i]=i;
   for(let i=0;i<N;i++) if(frozenSolid(bodies[i])) ufUnion(p,i,WORLD);
-  for(const get of COUPLING_TABLES){ const [arr,fa,fb]=get();
+  for(const get of COUPLING_TABLES){ const [arr,epsOf]=get();
     for(const el of arr){
-      const ea=el[fa], eb=el[fb];
       const idxs=[]; let anyBg=false;
-      if(ea && ea.id!=null) idxs.push(bodyIndex(ea.id)); else anyBg=true;
-      if(eb && eb.id!=null) idxs.push(bodyIndex(eb.id)); else anyBg=true;
+      for(const ep of epsOf(el)){
+        if(ep && ep.id!=null) idxs.push(bodyIndex(ep.id)); else anyBg=true;
+      }
       for(let i=1;i<idxs.length;i++) ufUnion(p,idxs[0],idxs[i]);
       if(anyBg) for(const idx of idxs) ufUnion(p,idx,WORLD);
     }

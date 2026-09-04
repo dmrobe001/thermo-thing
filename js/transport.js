@@ -89,7 +89,7 @@ window.addEventListener('keydown',e=>{
   else if(e.key==='s'||e.key==='S'){ if(!sim.running){ if(!saved)saveState(); substep(sim.h);} }
   else if(e.key==='Escape'){ pending=null; bodyPreview=null; setTool('select'); }
   else if(e.key==='Delete'||e.key==='Backspace'){ if(selBody){const id=selBody.id;
-      constraints=constraints.filter(c=>c.a.id!==id&&!(c.b&&c.b.id===id));
+      dropBodyFromConstraints(id);
       springs=springs.filter(s=>s.a.id!==id&&!(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
       dropInteractionsOn(id);

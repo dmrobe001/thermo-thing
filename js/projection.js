@@ -110,11 +110,28 @@ function reactionOf(con){
   if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
     return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }
-  if(con.type==='rack'){ const f=rackFrame(con); if(!f.B) return null;
-    // The mesh point: the foot of the perpendicular from the pinion's centre to
-    // the rack line, the same Q the row itself (constraints.js §06.5) acts
-    // through -- and the force is along the rack, exactly like the CVT's.
-    return {x:f.B.x-f.rho*f.nx, y:f.B.y-f.rho*f.ny, fx:f.ux*(l[0]/h), fy:f.uy*(l[0]/h)}; }
+  if(con.type==='rack'){
+    // Row order mirrors rowsFor: weldA?, weldB?, then one block per control point.
+    // The readout is the FIRST pinion's mesh force -- the foot of the perpendicular
+    // from its centre to the rack line, the same Q the row itself acts through, with
+    // the force along the rack exactly like the CVT's. A rack's welded pins also
+    // carry a torque, and it is the first one's that is reported, as a rod's is.
+    const f=rackFrame(con);
+    let idx=0, tau;
+    if(con.weldA){ tau=l[idx]; idx++; }
+    if(con.weldB){ if(tau===undefined) tau=l[idx]; idx++; }
+    for(const pt of conPoints(con)){
+      if(pt.kind==='pinion'){
+        const g=rackPitch(f, pt);
+        if(g && l[idx]!==undefined)
+          return {x:g.B.x-g.rho*f.nx, y:g.B.y-g.rho*f.ny,
+                  fx:f.ux*(l[idx]/h), fy:f.uy*(l[idx]/h), tau: tau!==undefined?tau/h:undefined};
+        idx++; continue;
+      }
+      idx += 2 + (pt.lock?1:0);
+    }
+    return {x:f.px, y:f.py, fx:0, fy:0, tau: tau!==undefined?tau/h:undefined};
+  }
   if(con.type==='rod'){
     const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;

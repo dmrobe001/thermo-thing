@@ -407,6 +407,7 @@ function drawConstraint(con){
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
     drawEndMarker(wax,way,con.weldA,con.a.id==null,col);
     drawEndMarker(wbx,wby,con.weldB,con.b.id==null,col);
+    drawConPoints(con,col);
     return;
   }
   if(con.type==='slot'){
@@ -431,13 +432,21 @@ function drawConstraint(con){
     }
     drawEndMarker(wax,way,con.prismaticA,con.a.id==null,col);
     drawEndMarker(wbx,wby,con.prismaticB,con.b.id==null,col);
+    drawConPoints(con,col);
     return;
   }
   if(con.type==='pin'){
-    // The two endpoints coincide by construction, so drawing con.a's alone
-    // is enough.
+    // Every endpoint coincides by construction -- the base pair and any extra
+    // control points alike -- so drawing con.a's alone is enough. A pin carrying
+    // extra ends gets a second ring around the dot to say so, since the ends
+    // themselves are all in the same place and cannot be counted on the canvas.
     const [wax,way]=epWorld(con.a);
     jointDot(wax,way,col);
+    if(conPoints(con).length){
+      const [sx,sy]=w2s(wax,way);
+      ctx.strokeStyle=col;ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.arc(sx,sy,8,0,Math.PI*2);ctx.stroke();
+    }
     return;
   }
   if(con.type==='rack'){ drawRackConstraint(con,col,sel); return; }
@@ -469,15 +478,15 @@ function drawConstraint(con){
     drawRim(B.x,B.y,rB,col,B.th);                       // disk: current contact radius
   }
 }
-// A rack and pinion (constraints.js §06.2/§06.5, rackFrame): the rack as a dashed
-// line spanning the viewport -- infinite, as the constraint treats it, and the
-// same viewport-spanning motif slot's rail uses -- and the pinion's pitch circle
-// as a dashed rim, its dash phase tied to the pinion's own spin exactly as
-// drawRim already does for a CVT's rims. The anchor carries a square marker, not
-// a joint dot: the rack is WELDED to its body, so that end is rotation-locked in
-// the same sense a rod's welded end is (drawEndMarker's `locked`).
+// A rack and pinion (constraints.js §06.2/§06.5). The rack is a dashed line spanning
+// the viewport -- infinite, as the constraint treats it, and the same viewport-
+// spanning motif slot's rail uses -- through its two pins, each drawn with the same
+// end marker a rod's ends get (a square where the pin is welded to the rack's
+// heading, a joint dot where it turns freely). Every pinion's pitch circle is a
+// dashed rim, its dash phase tied to that pinion's own spin exactly as drawRim
+// already does for a CVT's rims; every jointed point is an end marker on the line.
 function drawRackConstraint(con,col,sel){
-  const f=rackFrame(con); if(!f.B) return;
+  const f=rackFrame(con);
   const [vx0,vy0]=s2w(0,0), [vx1,vy1]=s2w(W(),H());
   const span=Math.hypot(vx1-vx0,vy1-vy0);
   ctx.strokeStyle=col; ctx.lineWidth=sel?2:1.5; ctx.setLineDash([8,6]);
@@ -485,8 +494,25 @@ function drawRackConstraint(con,col,sel){
   const [x2,y2]=w2s(f.px+f.ux*span, f.py+f.uy*span);
   ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
   ctx.setLineDash([]);
-  drawRim(f.B.x,f.B.y,Math.abs(f.rho),col,f.B.th);
-  drawEndMarker(f.px,f.py,true,con.a.id==null,col);
+  for(const pt of conPoints(con)){
+    if(pt.kind!=='pinion') continue;
+    const g=rackPitch(f, pt); if(!g) continue;
+    drawRim(g.B.x,g.B.y,Math.abs(g.rho),col,g.B.th);
+  }
+  drawEndMarker(f.wax,f.way,con.weldA,con.a.id==null,col);
+  drawEndMarker(f.wbx,f.wby,con.weldB,con.b.id==null,col);
+  drawConPoints(con,col);
+}
+// The extra control points a line constraint carries (constraints.js §06.2c), each
+// with the same marker its base ends wear -- a square for a rotation-locked point, a
+// joint dot for a free one, over a ground hatch where it rides the background. A
+// pinion is not drawn here: its pitch circle already says where it is.
+function drawConPoints(con,col){
+  for(const pt of conPoints(con)){
+    if(pt.kind==='pinion') continue;
+    const [x,y]=epWorld(pt.ep);
+    drawEndMarker(x,y,pt.lock,pt.ep.id==null,col);
+  }
 }
 // Dotted circle whose dash phase is tied to `ang` (the owning body's rotation),
 // so the pattern visibly spins with the body rather than staying screen-fixed.
@@ -543,6 +569,14 @@ function drawPending(){
   const [sx,sy]=w2s(pending.wp[0],pending.wp[1]);
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=2;ctx.setLineDash([4,4]);
   ctx.beginPath();ctx.arc(sx,sy,7,0,Math.PI*2);ctx.stroke();
+  // A three-click tool (the rack, tools.js §13.5) keeps its FIRST pick too: draw it
+  // and the line the two pins already fix, so the third click aims at a rack that is
+  // visibly there rather than at an imagined one.
+  if(pending.wp0){
+    const [px,py]=w2s(pending.wp0[0],pending.wp0[1]);
+    ctx.beginPath();ctx.arc(px,py,7,0,Math.PI*2);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(sx,sy);ctx.stroke();
+  }
   ctx.setLineDash([]);
   ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(mouseScreen[0],mouseScreen[1]);ctx.stroke();
 }
@@ -573,7 +607,8 @@ function drawPreview(){
 function drawHandles(){
   if(sim.running) return;
   const drawOne=(con,h)=>{
-    const isHover = hoverHandle && hoverHandle.kind==='con' && hoverHandle.con===con && hoverHandle.which===h.which;
+    const isHover = hoverHandle && hoverHandle.kind==='con' && hoverHandle.con===con
+                    && hoverHandle.which===h.which && hoverHandle.k===h.k;
     const rad = isHover?7.5:6;
     const [sx,sy]=w2s(h.x,h.y);
     ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,rad,0,Math.PI*2);ctx.fill();
