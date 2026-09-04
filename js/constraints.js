@@ -17,6 +17,8 @@
 //    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen)
 //    §06.2c extra control points (conPoints, makeConPoint, conEndpoints) -- the
 //           third and further ends a pin/rod/slot/rack may carry
+//    §06.2d posable rods (withPosing, rodReleased, recapturePosable) -- the
+//           pose-time release that turns a rod into a rail while it is dragged
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -111,6 +113,14 @@ function endpointAngleLockRow(which, f, restAng){
 // Capture (or recapture) endpoint `which`'s rest angle against the live A->B
 // direction. Called whenever a per-endpoint lock (rod weld, slot prismatic)
 // turns on, so toggling never snaps geometry.
+//
+// phi is the RAW atan2, not twoPointFrame's unwrapped one, and that is deliberate:
+// a rest angle persists (it is in the scene file) while `_phiRef`, the unwrapping
+// anchor, is transient scratch that restoreState clears (§16.1). A capture taken
+// against an unwrapped phi would agree with the rows now and disagree by a whole
+// turn after the next Reset re-seeded phi from raw. Captured raw, it agrees with
+// both -- as long as the winding the rows have accumulated is cleared alongside it,
+// which is what recaptureRodPose does (§06.2b).
 function captureRestAngle(con, which){
   const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
   const phi=Math.atan2(way-wby,wax-wbx);
@@ -120,11 +130,13 @@ function captureRestAngle(con, which){
 }
 
 // Build a rod constraint between two endpoints, deriving its rest length and
-// (for any welded end) its rest angle.
-function makeRodCon(a,b,weldA,weldB){
+// (for any welded end) its rest angle. `posable` is the one field here that says
+// nothing about the running physics: it marks the rod as one the player may pose
+// THROUGH, released to a bare rail for the duration of a drag (§06.2d).
+function makeRodCon(a,b,weldA,weldB,posable){
   const [wax,way]=epWorld(a), [wbx,wby]=epWorld(b);
   const con={type:'rod', a, b, len:Math.hypot(wax-wbx,way-wby), weldA:!!weldA, weldB:!!weldB,
-             pts:[], sel:false};
+             posable:!!posable, pts:[], sel:false};
   if(con.weldA) captureRestAngle(con,'A');
   if(con.weldB) captureRestAngle(con,'B');
   return con;
@@ -365,6 +377,7 @@ function epFrame(ep){
 // working vessel (welded at its mid-wall, f = 0, pose fixed and length free).
 function rodGrounds(con){
   if(con.type!=='rod' || !con.weldA || !con.weldB) return null;
+  if(rodReleased(con)) return null;      // released for the pose drag: grounds nothing (§06.2d)
   // A rod carrying extra control points (§06.2c) still has rows of its own to solve
   // once its base pair is compiled away, so it is not a candidate for compiling.
   if(conPoints(con).length) return null;
@@ -383,6 +396,7 @@ function rodGrounds(con){
 // it (§13.5). This is what a reservoir is: a vessel with a strut inside it.
 function rodLocksLength(con){
   if(con.type!=='rod' || con.a.id==null || con.a.id!==con.b.id) return null;
+  if(rodReleased(con)) return null;      // as above -- a released strut holds no length either
   if(conPoints(con).length) return null;                     // see rodGrounds above
   const v=bodies[bodyIndex(con.a.id)];
   if(!v || v.shape!=='vessel' || con.a.off[1]===con.b.off[1]) return null;
@@ -420,10 +434,33 @@ const frozenSolid = b => b.static && (b.shape!=='vessel' || b.lenLock);
 function recaptureGrounding(b){
   for(const con of constraints){
     if(rodGrounds(con)!==b && rodLocksLength(con)!==b) continue;
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    con.len=Math.hypot(wax-wbx,way-wby);
-    if(con.weldA) captureRestAngle(con,'A');
-    if(con.weldB) captureRestAngle(con,'B');
+    recaptureRodPose(con);
+  }
+}
+// Re-read everything a rod holds off the live geometry -- its length, either weld's
+// rest angle, and every extra point's station and rest angle (§06.2c). This is
+// exactly what makeRodCon and makeConPoint capture at creation, so a rod recaptured
+// at a pose it already satisfies is unchanged, and one recaptured after a hand move
+// holds the new pose instead. Called from recaptureGrounding above and, once per
+// pose-drag step, from recapturePosable (§06.2d).
+function recaptureRodPose(con){
+  // Drop the unwrapping anchor first. Every capture below reads the RAW segment
+  // angle (captureRestAngle), so the rows have to read it raw too, or a rod that
+  // was posed past the branch cut -- swung round its anchor through the -x
+  // direction -- comes out of the recapture holding a rest angle a full turn from
+  // the phi its own weld row measures against. Cleared, the next twoPointFrame
+  // re-seeds from the same raw atan2 the capture used, which is exactly the state a
+  // freshly loaded (or freshly Reset) scene is in. Safe to do here and nowhere else:
+  // a rod being recaptured is one nothing is currently holding -- compiled away, or
+  // released for the drag -- so there is no live phi continuity to break.
+  con._phiRef=undefined;
+  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
+  con.len=Math.hypot(wax-wbx,way-wby);
+  if(con.weldA) captureRestAngle(con,'A');
+  if(con.weldB) captureRestAngle(con,'B');
+  for(const pt of conPoints(con)){
+    if(pt.s!==undefined) pt.s=capturePointStation(con, pt.ep);
+    if(pt.lock) pt.restAng=capturePointRestAngle(con, pt.ep);
   }
 }
 
@@ -473,7 +510,7 @@ function capturePointStation(con, ep){
 // counterpart for a point that is not one of the two named ends.
 function capturePointRestAngle(con, ep){
   const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  const phi=Math.atan2(way-wby,wax-wbx);
+  const phi=Math.atan2(way-wby,wax-wbx);            // raw -- see captureRestAngle
   const th = ep.id!=null ? bodies[bodyIndex(ep.id)].th : 0;
   return th-phi;
 }
@@ -547,6 +584,58 @@ function dropBodyFromConstraints(id){
   constraints = constraints.filter(c => c.a.id!==id && !(c.b && c.b.id===id));
   for(const c of constraints)
     if(c.pts && c.pts.length) c.pts = c.pts.filter(pt => pt.ep.id!==id);
+}
+
+// ---- §06.2d · posable rods (the pose-time release) ----
+// A rod may be marked `posable`. It changes nothing about the running physics --
+// a posable rod is an ordinary rigid rod at every substep -- and everything about
+// what happens while the player POSES the machine: dragging a body around with the
+// sim paused (tools.js §13.6). For the duration of such a drag the rod is RELEASED,
+// and holds only its own line:
+//
+//   * its distance row is gone, so the two ends may slide toward and away from each
+//     other -- the rod's length is what the drag is free to change;
+//   * its welds are gone, so every body it joins turns freely. That is the whole of
+//     "a rail with all joined bodies PINNED, not welded";
+//   * its extra control points (§06.2c) stop being rigid attachments at a station
+//     and become RIDERS, held on the line and free to slide along it -- the same one
+//     row a slot's riders get, which is the sense in which the bar becomes a rail.
+//
+// A rod grounding a body, or locking a vessel's length, releases those too (see
+// rodGrounds/rodLocksLength above): a rod that holds nothing cannot be the thing
+// that froze a coordinate, and a posable ground strut would be useless if it still
+// pinned the body the player is trying to slide along it. That is the one place the
+// derived freezing of §06.2b depends on something other than what is attached -- and
+// it depends on the MODE, not on the configuration, so nothing still freezes or
+// thaws as a mechanism swings through a pose (SCENE.md §S.8).
+//
+// The release is a mode, not a per-rod drag test: while a pose drag is live EVERY
+// posable rod is released, whether or not the dragged body is one of its ends. A
+// released rod elsewhere in a consistent scene contributes no residual, so nothing
+// moves that the drag did not reach; scoping it to the dragged island would buy
+// nothing and would make what a rod does depend on where the player grabbed.
+//
+// `posing` is a depth counter rather than a flag so that a nested projection (or a
+// caller that wraps another) cannot clear it early.
+let posing = 0;
+function withPosing(fn){ posing++; try { return fn(); } finally { posing--; } }
+const rodReleased = con => posing>0 && con.type==='rod' && !!con.posable;
+
+// Once the drag step has settled, a released rod re-reads what it holds from the
+// pose the player just produced (§06.2b recaptureRodPose): the length, the welds'
+// rest angles, the points' stations. Done every pointermove rather than at
+// pointerup, for the same reason recaptureGrounding is: between moves the rod is a
+// rigid rod again, and one whose captured length disagreed with its live geometry
+// would read as a violated constraint -- red on the canvas, and refused as the reset
+// baseline (transport.js §16.1) -- for as long as the drag lasted. Recapturing a rod
+// whose geometry did not move is exactly a no-op, which is why this may run over all
+// of them and not just the dragged one. A posable rod that was under LOAD when the
+// drag began does lose that load, since a released rod is not holding anything for
+// the projection to fight: an adjustable member has no preload to speak of, and that
+// is what marking one posable declares it to be.
+function recapturePosable(){
+  for(const con of constraints)
+    if(con.type==='rod' && con.posable) recaptureRodPose(con);
 }
 
 // ---- §06.3 · cableFrame ----
@@ -728,7 +817,10 @@ function cableCurrentLength(cb, f){
 // (the same dphi/dt endpointAngleLockRow uses). That is the third term in each row,
 // and it is why the columns are a scaled combination of the endpoint closures rather
 // than a plain difference -- one place scaleCols exists for.
-function linePointRows(con, f, pt, station){
+// `unlocked` overrides the point's own rotation lock -- the pose-time release
+// (§06.2d) makes every rider a pin, whatever the lock the rod holds it by when it
+// is rigid again.
+function linePointRows(con, f, pt, station, unlocked){
   const K=epFrame(pt.ep);
   const Dx=K.wx-f.wax, Dy=K.wy-f.way;
   const du=f.ux*Dx+f.uy*Dy, dn=f.nx*Dx+f.ny*Dy;
@@ -740,7 +832,7 @@ function linePointRows(con, f, pt, station){
   if(station) rows.push({
     cols: mergeCols([ K.velCols(f.ux,f.uy), f.epA.velCols(-f.ux,-f.uy), scaleCols(wCols, dn) ]),
     C: du-(pt.s||0) });
-  if(pt.lock) rows.push(pointAngleLockRow(f, K, pt.restAng||0));
+  if(pt.lock && !unlocked) rows.push(pointAngleLockRow(f, K, pt.restAng||0));
   return rows;
 }
 
@@ -750,7 +842,10 @@ function linePointRows(con, f, pt, station){
 //   pin            2   shared point coincident
 //   rod            1   distance held along the connecting line; +1 per welded
 //                      end (locks that end's body -- or the fixed world frame,
-//                      for a background end -- to the rod's own direction)
+//                      for a background end -- to the rod's own direction).
+//                      A `posable` rod RELEASED for a pose drag (§06.2d) drops
+//                      all of that and keeps only its line: 0 rows for the pair,
+//                      and one rider row per extra point, as a slot's.
 //   slot           0   two pins = purely visual; +1 per "prismatic" end
 //                      (locks that end to the segment direction, as rod's
 //                      weld does); +1 more once BOTH ends are prismatic
@@ -810,6 +905,16 @@ function rowsFor(con){
     // Either end may be background-anchored (id===null, off holds the world
     // point directly -- §06.1 epWorld).
     const f=twoPointFrame(con);
+    if(rodReleased(con)){
+      // Pose-time release (§06.2d): no distance row and no weld rows -- the pair is
+      // free to slide apart and to turn -- and every extra point rides the line as a
+      // slot's rider does, station and lock dropped. The pair itself needs no
+      // point-on-line row: the line IS the segment between them, so such a row would
+      // be the same tautology the slot's base pair avoids.
+      const rows=[];
+      for(const pt of conPoints(con)) rows.push(...linePointRows(con, f, pt, false, true));
+      return rows;
+    }
     const {ux,uy,L}=f;
     // d/dt|A-B| = u.(vA - vB): the two endpoints' velocity columns along the segment.
     const distCols=mergeCols([f.epA.velCols(ux,uy), f.epB.velCols(-ux,-uy)]);

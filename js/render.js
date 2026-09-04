@@ -405,6 +405,22 @@ function drawConstraint(con){
     const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
     ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
     ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
+    // A posable rod (constraints.js §06.2d) is drawn with the slot's own track
+    // motif flanking the bar -- two thin parallel lines -- because that is exactly
+    // what it becomes the moment the player drags something: a rail. Bounded to the
+    // rod's own span, where a slot's rail spans the viewport, since the rod is still
+    // a rod between its two ends and not an infinite line.
+    if(con.posable){
+      const L=Math.hypot(bx-ax,by-ay)||1;
+      const nx=-(by-ay)/L, ny=(bx-ax)/L, off=4;
+      ctx.lineWidth=1;
+      for(const side of [-1,1]){
+        ctx.beginPath();
+        ctx.moveTo(ax+nx*off*side, ay+ny*off*side);
+        ctx.lineTo(bx+nx*off*side, by+ny*off*side);
+        ctx.stroke();
+      }
+    }
     drawEndMarker(wax,way,con.weldA,con.a.id==null,col);
     drawEndMarker(wbx,wby,con.weldB,con.b.id==null,col);
     drawConPoints(con,col);

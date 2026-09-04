@@ -40,6 +40,7 @@ place the thing, then change one field in the inspector:
 | What the example writes | Tool default | Inspector path |
 |---|---|---|
 | `rodBG(...)` -- background rod, both ends *unwelded* | welded both ends (a rigid strut) | `f_weldA` / `f_weldB` checkboxes |
+| `rod ... posable` -- a rod released to a rail while posing | off | `f_posable` checkbox |
 | `makeSlotCon(..., false, true)` -- one end prismatic | both ends prismatic | `f_lockA` / `f_lockB` checkboxes |
 | `res.lenLock = true` | off | `v_lock` checkbox |
 | `setVesselGasMT(res, m, 800)` / `setVesselGasPT(res, 2.4*P, T)` | ambient | `v_T` / `v_P` fields |
@@ -124,9 +125,15 @@ never recomputed since. The pose no longer implies them:
 - `rod.len` and `spring.restLen` -- the length at creation. Move a body afterward
   and the rod is under load; that load is the scene.
 - `rod.restAngA` / `restAngB`, `slot.restAngA` / `restAngB` -- captured by
-  `captureRestAngle` on creation and on each lock toggle, and (verified) at *no
-  other site*: dragging a welded body does not recapture. So a welded rod's rest
-  angle is genuinely independent of the exported pose.
+  `captureRestAngle` on creation and on each lock toggle. Dragging a welded body
+  does not recapture, so a welded rod's rest angle is genuinely independent of the
+  exported pose -- with two deliberate exceptions, both of them rods that are being
+  moved *by hand* through geometry the solver is no longer holding: a **grounded**
+  body's anchors (`recaptureGrounding`, whose rows are compiled away, §S.8) and a
+  **posable** rod's own length, welds and stations, re-read after each step of a
+  pose drag because for that step the rod was released and held none of them
+  (`constraints.js` §06.2d). Both are the editor writing the scene, which is what
+  an editor is for; neither happens while the sim runs.
 - `belt.restPhase`, `belt.rA`, `belt.rB`, `belt.sense`.
 - `rotspring.restAngle`.
 - `cable.Ltot`, `cable.localAngle`, `cable.spoolAngle`.
@@ -169,8 +176,8 @@ const SCENE_SCHEMA = {
             keys:{ ..., mShell:null, lenLock:false, gamma:1.4, T:293.15, gm:null,
                    vlen:0 },
             after:refreshVessel },
-  rod:    { make:(f)=>makeRodCon(f.a,f.b,f.weldA,f.weldB),
-            keys:{ weldA:false, weldB:false },
+  rod:    { make:(f)=>makeRodCon(f.a,f.b,f.weldA,f.weldB,f.posable),
+            keys:{ weldA:false, weldB:false, posable:false },
             captured:{ len:null, restAngA:null, restAngB:null } },
   // slot, pin, belt, cvt, knife, cable, spring, rotspring, heat, flow
 };
@@ -239,7 +246,7 @@ heat body=1 vessel=3 k=2000
 Grammar notes:
 
 - `<kind> [<id>] [<endpoints>] <field>=<value> ...`; bare words are boolean flags
-  (`static`, `lenlock`, `crossed`). Only **bodies** carry an id, because they are the
+  (`crossed`, `posable`, and -- in the version-1 sketch above -- `static`, `lenlock`). Only **bodies** carry an id, because they are the
   only things anything refers to -- nouns are named, relations are anonymous, which
   is the data model exactly. Body ids are preserved literally (they are what the
   inspector shows) and `uid` resumes at `max + 1`.
@@ -420,6 +427,14 @@ recomputed every substep from the constraints actually present (`constraints.js`
 Both are **structural**: they depend on what is attached, never on the current
 configuration. Nothing freezes or thaws as a mechanism swings through a pose.
 
+The one thing that suspends either is a rod marked **posable**, and it suspends them
+on the *mode*, not the configuration: while the player is dragging a body with the
+sim paused, such a rod is released to a bare rail and holds nothing -- so it grounds
+nothing and locks no length either (`constraints.js` §06.2d). It is rigid again, and
+freezing again, the moment the drag step is over, at the geometry the drag reached.
+A posable ground strut whose body stayed frozen would be a contradiction: the whole
+point of marking it is to slide that body along it.
+
 ### Freezing is per coordinate, and a vessel is where that shows
 
 A vessel's fourth coordinate moves its own material: a point at material fraction
@@ -472,6 +487,10 @@ would be wrong the instant it moves off. It cannot use the **nonholonomic** rows
 bottleneck. The structural rules above cost one pass over the constraint list.
 
 ### Verified
+
+`tools/posable-check.js` covers the suspension: that a posable ground strut is frozen
+until the drag starts, free inside the posing scope, and frozen again -- at the posed
+geometry -- as soon as it ends.
 
 `tools/scene-roundtrip.js` §4 checks each rule and each case that separates them --
 the mid-wall weld that pins a pose and leaves a length free, the cap weld that pins
