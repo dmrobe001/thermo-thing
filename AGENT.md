@@ -70,7 +70,7 @@ does not list. Two rules follow, and they are what keep the bench honest:
 
 - **Every kind of scene object has exactly one constructor** (`makeBody`,
   `makeRectBody`, `makeVessel` in §05.2; `makeRodCon`, `makeSlotCon`, `makePinCon`,
-  `makeBeltCon`, `makeCvtCon`, `makeGearCon`, `makeKnifeCon`, `makeCableCon`,
+  `makeBeltCon`, `makeCvtCon`, `makeRackCon`, `makeKnifeCon`, `makeCableCon`,
   `makeSpringCon`, `makeRotSpringCon` in §06.1/§06.2; `makeInteraction` in §17.1),
   called from the tool dispatch (§13.5) and the scene reader (§17.4) and nowhere
   else. Do not build one from an object literal.

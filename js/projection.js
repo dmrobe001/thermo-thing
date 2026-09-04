@@ -10,8 +10,28 @@
 // ---- §09.1 · projectPositions ----
 // Snaps the assembly to the nearest consistent configuration, mass-weighted so
 // heavy/static bodies move least. `extra` holds transient constraints (e.g. a
-// drag goal). Used at Play and while articulating a dragged body. Nonholonomic
-// rows (nh:true) are skipped -- they have no position invariant to project onto.
+// drag goal). Used at Play and while articulating a dragged body.
+//
+// NONHOLONOMIC ROWS (nh:true) have no position invariant to project onto -- there
+// is no C(q) whose zero set they are, which is what "nonholonomic" means. They are
+// still enforced here, on the only thing that IS defined for them: the position
+// DELTA of this edit. A rolling row says J(q).dq = 0 for an increment dq, so the
+// residual driven to zero is J(q).(q - q0), the slip accumulated since the pose
+// this call started from -- rebuilt each Newton pass against the live J. That is
+// what makes a paused drag articulate a rolling pair: pull the rack body along and
+// the pinion turns to keep the slip at zero, the same as it would while running.
+//
+// It is a first-order account of a path-dependent quantity -- true rolling slip is
+// the integral of J.dq along the path taken, and this evaluates J at the ends of
+// the increment rather than through it -- so a drag rolls accurately when followed
+// in small steps (pointermove's) and only approximately if the pose is teleported
+// in one jump. That is inherent to rolling, not to this implementation: where the
+// pinion ends up genuinely depends on the route the rack took to get there.
+//
+// `baseline` lets a caller that MOVED something itself before projecting (the
+// kinematic drag of a frozen body, tools.js §13.6) hand in the pose from before
+// its own move, so that motion counts toward the slip too. Omitted, the baseline
+// is simply the pose on entry.
 // Extra compliance folded into a `soft` row's own diagonal term (relative to
 // its own weight, so it scales with whatever body/mass it happens to touch --
 // see the dragpin row in constraints.js). Sized so a soft row alone (nothing
@@ -20,15 +40,30 @@
 // that DOF drowns it out almost entirely -- the hard row's own diagonal carries
 // no such penalty, so the least-squares split leans overwhelmingly its way.
 const DRAG_SOFT_ALPHA = 1;
-function projectPositions(iters, extra){
+// The pose a projection measures its nonholonomic slip against: every coordinate
+// the rows can write, in body order (the same order their columns index).
+function poseSnapshot(){ return bodies.map(b=>[b.x, b.y, b.th, b.len||0]); }
+// A nonholonomic row's residual in delta form: J(q) . (q - q0), the slip this row
+// has accumulated since `q0`. Bodies added or removed since the snapshot are
+// skipped rather than read across a shifted index.
+function nhSlip(row, q0){
+  let s=0;
+  for(const c of row.cols){
+    const b=bodies[c[0]], p=q0[c[0]]; if(!b || !p) continue;
+    s += c[1]*(b.x-p[0]) + c[2]*(b.y-p[1]) + c[3]*(b.th-p[2]) + (c[4]||0)*((b.len||0)-p[3]);
+  }
+  return s;
+}
+function projectPositions(iters, extra, baseline){
   // The frozen flags gate which coordinates may move here as much as they do in the
   // substep, and projection runs from edit paths that never reach one -- so derive
   // them first rather than depending on a substep having happened (§06.2b).
   refreshFrozen();
   const cons = (extra && extra.length) ? constraints.concat(extra) : constraints;
+  const q0 = (baseline && baseline.length===bodies.length) ? baseline : poseSnapshot();
   for(let it=0; it<iters; it++){
     const rows=[]; for(const con of cons){ if(con._compiled) continue;
-                     for(const r of rowsFor(con)) if(!r.nh) rows.push(r); }
+                     for(const r of rowsFor(con)) rows.push(r.nh ? {...r, C:nhSlip(r,q0)} : r); }
     const m=rows.length; if(!m) return;
     let maxC=0; for(const r of rows){ const a=Math.abs(r.C); if(a>maxC)maxC=a; }
     if(maxC<1e-7) return;
@@ -63,11 +98,11 @@ function reactionOf(con){
   if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
     return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }
-  if(con.type==='gear'){ const f=gearFrame(con); if(!f.B) return null;
-    // The contact point: the foot of the perpendicular from the gear's centre
-    // to the traction line, same Q the row itself (constraints.js §06.5) acts
-    // through -- and the force is along the line, exactly like the CVT's.
-    return {x:f.B.x-f.R*f.nx, y:f.B.y-f.R*f.ny, fx:f.ux*(l[0]/h), fy:f.uy*(l[0]/h)}; }
+  if(con.type==='rack'){ const f=rackFrame(con); if(!f.B) return null;
+    // The mesh point: the foot of the perpendicular from the pinion's centre to
+    // the rack line, the same Q the row itself (constraints.js §06.5) acts
+    // through -- and the force is along the rack, exactly like the CVT's.
+    return {x:f.B.x-f.rho*f.nx, y:f.B.y-f.rho*f.ny, fx:f.ux*(l[0]/h), fy:f.uy*(l[0]/h)}; }
   if(con.type==='rod'){
     const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;

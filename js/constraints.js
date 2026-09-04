@@ -188,43 +188,41 @@ function makeBeltCon(aId,bId,sense){
 // is read from the live geometry every step (§06.5).
 function makeCvtCon(aId,bId){ return {type:'cvt', a:{id:aId}, b:{id:bId}, sel:false}; }
 
-// A rolling/gear coupling: body A carries a "traction line" through a control
-// point that TRANSLATES with A but never rotates with it -- fixed in the world at
-// whatever angle A had (or, for a background-anchored point, world +x) when the
-// constraint was made, and frozen from then on regardless of how A itself spins.
-// Body B (the "gear") is always a circle; the traction radius is its centre's live
-// perpendicular distance to the line (gearFrame below), so the row couples A's own
-// translation along the line to B's rotation exactly as a rack couples to a pinion
-// -- with the ratio (the traction radius) free to change as B slides along the
-// line, the same "coordinate as ratio" move the CVT's contact makes. Because the
-// control point does not rotate with A, A's own angular velocity never enters the
-// row -- only its translation does (see gearFrame / rowsFor's 'gear' branch,
-// §06.5). `off` holds a WORLD-frame offset from A's centre when aId is real (never
-// rotated back out), or the absolute world point directly when aId===null,
-// mirroring the null-id background convention every other endpoint in this file
-// uses -- except this one is deliberately never resolved through epFrame/worldPt,
-// since those would rotate it with the body.
-function makeGearCon(aId,aOff,bId){
-  const angle = aId!=null ? bodies[bodyIndex(aId)].th : 0;
-  return {type:'gear', a:{id:aId, off:aOff.slice()}, b:{id:bId}, angle, sel:false};
+// A rack and pinion. Body A carries a RACK -- an infinite, massless toothed line
+// WELDED to it, so the rack rides A's frame completely: it translates with A and
+// turns with A. `a` is an ordinary endpoint ({id, off}, body-local and rotating
+// like every other anchor in this file, background-anchored when id===null), and
+// `angle` is the rack's heading in A's OWN frame, so its world heading is
+// A.th + angle. Whatever fixes A's orientation -- a both-ends-prismatic slot, a
+// belt, another joint -- therefore fixes the rack's, which is the point: a rack
+// is a part of A, not a direction in the world.
+//
+// Body B (the "pinion") is always a circle, and meshes with the rack with perfect
+// traction wherever it happens to sit -- no tangency is required, the pair is
+// idealized. Its PITCH RADIUS is the live perpendicular distance from its centre
+// to the rack line (rackFrame below), so the row couples A's motion along the rack
+// to the pinion's rotation. That radius is a coordinate rather than a constant,
+// which is what makes the row nonholonomic -- the same "ratio is a coordinate"
+// move the CVT's contact makes. See rowsFor's 'rack' branch (§06.5).
+function makeRackCon(aId,aOff,bId){
+  return {type:'rack', a:{id:aId, off:aOff.slice()}, b:{id:bId}, angle:0, sel:false};
 }
-// Traction-line geometry for the gear/rack row above. P (px,py) is the control
-// point; (ux,uy) is the line's own fixed direction (con.angle, never updated from
-// a live body angle); R is the gear's SIGNED perpendicular distance from the line,
-// positive on the +n side -- signed, not clamped, so the row below stays correct
-// however the gear's centre crosses the line.
-function gearFrame(con){
-  const hasA = con.a.id!=null;
-  const ia = hasA ? bodyIndex(con.a.id) : -1;
-  const A = hasA ? bodies[ia] : null;
-  const px = hasA ? A.x+con.a.off[0] : con.a.off[0];
-  const py = hasA ? A.y+con.a.off[1] : con.a.off[1];
-  const ux = Math.cos(con.angle), uy = Math.sin(con.angle);
+// Rack geometry. epA resolves the rack's anchor exactly as every other endpoint is
+// resolved (so a vessel anchor carries its length column for free); (ux,uy) is the
+// rack's live world heading, A.th + con.angle -- read off A's frame every call,
+// never captured; and rho is the pinion's SIGNED pitch radius, its centre's
+// perpendicular distance from the rack line, positive on the +n side. Signed, not
+// clamped: the row stays correct however the pinion crosses to the rack's far side.
+function rackFrame(con){
+  const epA = epFrame(con.a);
+  const A = con.a.id!=null ? bodies[bodyIndex(con.a.id)] : null;
+  const ang = (A ? A.th : 0) + con.angle;
+  const ux = Math.cos(ang), uy = Math.sin(ang);
   const nx = -uy, ny = ux;
   const ib = bodyIndex(con.b.id);
   const B = bodies[ib];
-  const R = B ? (B.x-px)*nx + (B.y-py)*ny : 0;
-  return {hasA, ia, A, ib, B, px, py, ux, uy, nx, ny, R};
+  const rho = B ? (B.x-epA.wx)*nx + (B.y-epA.wy)*ny : 0;
+  return {epA, A, B, ia:epA.idx, ib, px:epA.wx, py:epA.wy, ux, uy, nx, ny, ang, rho};
 }
 
 // A knife edge forbids sideways motion of one body-local point. `dir` is the
@@ -559,9 +557,9 @@ function cableCurrentLength(cb, f){
 //   belt           1   fixed phase ratio of two rim angles (holonomic)
 //   knife          1   no-side-slip contact (NONHOLONOMIC, nh:true)
 //   cvt            1   tangential match at a variable-radius contact (NONHOLONOMIC)
-//   gear           1   tangential match between a body's translation along a fixed
-//                      traction line and a circular "gear"'s rotation at the live
-//                      perpendicular radius (NONHOLONOMIC)
+//   rack           1   rack and pinion: tangential match between a rack welded to
+//                      one body and a circular pinion's rim, at the live pitch
+//                      radius (NONHOLONOMIC)
 // (Cable rows are built inline in §08.2, not here, because they are unilateral.)
 function rowsFor(con){
   // Each row carries the raw position error C (the value to drive to zero). The
@@ -685,20 +683,28 @@ function rowsFor(con){
     const rA=A.r, armB=d-rA;
     return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true }];
   }
-  if(con.type==='gear'){
-    // d/dt(A's control point . u) = vA.u -- no wA term, because the point is
-    // defined not to rotate with A (gearFrame above). The gear's tangential
-    // material speed at the foot of the perpendicular from its centre to the
-    // line is vB.u + wB*R, R the signed traction radius -- the same derivation
-    // as the CVT's contact row, just against a straight line instead of a second
-    // rim. R is a live coordinate (it changes as either body moves), so this is
-    // NONHOLONOMIC exactly like the CVT's.
-    const f=gearFrame(con);
+  if(con.type==='rack'){
+    // Rolling contact between the rack and the pinion at Q, the foot of the
+    // perpendicular from the pinion's centre to the rack line: the two materials
+    // in contact there must have the same velocity ALONG the rack.
+    //
+    // Rack side. The rack is rigidly part of A, so its material velocity at Q is
+    // A's rigid motion evaluated there -- and its along-rack component is the
+    // same at EVERY point of the rack line, since two points of a rigid body a
+    // distance d apart along u differ in velocity by w x (d*u), which is
+    // perpendicular to u. So the anchor's own velCols along u *is* the rack's
+    // tangential speed at the contact, and A's angular column comes out of the
+    // same closure every other endpoint row uses (it works out to -(r.n): A's
+    // spin only tells on the rack when the anchor sits off the rack's own line
+    // through A's centre).
+    // Pinion side. Its material velocity at Q along u is vB.u + wB*rho, rho the
+    // signed pitch radius -- the same derivation as the CVT's contact row, just
+    // against a straight rack instead of a second rim.
+    // rho is a live coordinate (it changes as either body moves, and as A turns),
+    // so this row is NONHOLONOMIC exactly as the CVT's is.
+    const f=rackFrame(con);
     if(!f.B) return [];
-    const cols=mergeCols([
-      f.hasA ? [[f.ia, f.ux, f.uy, 0]] : [],
-      [[f.ib, -f.ux, -f.uy, -f.R]]
-    ]);
+    const cols=mergeCols([ f.epA.velCols(f.ux,f.uy), [[f.ib, -f.ux, -f.uy, -f.rho]] ]);
     return [{ cols, C:0, nh:true }];
   }
   return [];

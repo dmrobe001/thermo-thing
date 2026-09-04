@@ -440,7 +440,7 @@ function drawConstraint(con){
     jointDot(wax,way,col);
     return;
   }
-  if(con.type==='gear'){ drawGearConstraint(con,col,sel); return; }
+  if(con.type==='rack'){ drawRackConstraint(con,col,sel); return; }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
   if(con.type==='belt'){
@@ -469,13 +469,15 @@ function drawConstraint(con){
     drawRim(B.x,B.y,rB,col,B.th);                       // disk: current contact radius
   }
 }
-// A rolling/gear coupling (constraints.js §06.2/§06.5, gearFrame): the traction
-// line as a dashed line spanning the viewport (same "infinite rail" motif as
-// slot's, render.js above), and a dashed circle at the gear's live traction
-// radius, its dash phase tied to the gear's own spin -- exactly like drawRim
-// already does for a CVT's rims, so the gear's rotation reads the same way here.
-function drawGearConstraint(con,col,sel){
-  const f=gearFrame(con); if(!f.B) return;
+// A rack and pinion (constraints.js §06.2/§06.5, rackFrame): the rack as a dashed
+// line spanning the viewport -- infinite, as the constraint treats it, and the
+// same viewport-spanning motif slot's rail uses -- and the pinion's pitch circle
+// as a dashed rim, its dash phase tied to the pinion's own spin exactly as
+// drawRim already does for a CVT's rims. The anchor carries a square marker, not
+// a joint dot: the rack is WELDED to its body, so that end is rotation-locked in
+// the same sense a rod's welded end is (drawEndMarker's `locked`).
+function drawRackConstraint(con,col,sel){
+  const f=rackFrame(con); if(!f.B) return;
   const [vx0,vy0]=s2w(0,0), [vx1,vy1]=s2w(W(),H());
   const span=Math.hypot(vx1-vx0,vy1-vy0);
   ctx.strokeStyle=col; ctx.lineWidth=sel?2:1.5; ctx.setLineDash([8,6]);
@@ -483,15 +485,24 @@ function drawGearConstraint(con,col,sel){
   const [x2,y2]=w2s(f.px+f.ux*span, f.py+f.uy*span);
   ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
   ctx.setLineDash([]);
-  drawRim(f.B.x,f.B.y,Math.abs(f.R),col,f.B.th);
-  drawEndMarker(f.px,f.py,false,!f.hasA,col);
+  drawRim(f.B.x,f.B.y,Math.abs(f.rho),col,f.B.th);
+  drawEndMarker(f.px,f.py,true,con.a.id==null,col);
 }
 // Dotted circle whose dash phase is tied to `ang` (the owning body's rotation),
 // so the pattern visibly spins with the body rather than staying screen-fixed.
-// Screen angle runs opposite world angle (w2s flips y), so the dash offset --
-// measured as arc length along the canvas path -- carries a matching sign flip.
+//
+// The sign is +ang*rr, and both halves of that matter. w2s flips y, so a point at
+// world angle a sits at canvas angle -a, and arc length along the path ctx.arc
+// traces runs s = -rr*a: a mark painted on the body moves toward DECREASING s as
+// the body turns the positive (counter-clockwise) way. Raising lineDashOffset
+// also moves the ink toward decreasing s -- the pattern at path length s is read
+// at (s + offset) -- so the offset has to RISE with ang for the dashes to travel
+// with the body. It read -ang*rr until the rack and pinion made it obvious (the
+// pitch circle span backwards against a pinion whose sense was not in doubt);
+// every rim drawn through here -- belt, CVT, rack, the rotational spring's --
+// span the wrong way by the same sign.
 function drawRim(x,y,r,col,ang=0){ const [sx,sy]=w2s(x,y); const rr=r*cam.scale;
-  ctx.strokeStyle=col;ctx.lineWidth=3;ctx.setLineDash([8,6]);ctx.lineDashOffset=-ang*rr;
+  ctx.strokeStyle=col;ctx.lineWidth=3;ctx.setLineDash([8,6]);ctx.lineDashOffset=ang*rr;
   ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);ctx.stroke();
   ctx.setLineDash([]);ctx.lineDashOffset=0; }
 function beltTangents(ax,ay,ra, bx,by,rb, sense){

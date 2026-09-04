@@ -12,10 +12,11 @@ implementation and then compared against it.
 | `vessel-check-massmatrix.js` | the centred one-body formulation reproduces the exact gas mass matrix, where a fixed `m/3` cap mass is right only when the head is welded | `VESSEL.md` §V.3 |
 | `vessel-check-exchange.js` | the heat and mass relaxations are the exact solutions of their ODEs at any step size, a finite mass transfer is the exact integral of the differential one, and a transfer conserves energy and linear momentum | `VESSEL.md` §V.10 |
 | `scene-roundtrip.js` | every bundled example is a canonical scene file that round-trips byte-for-byte, reloads to the same state and runs the same; the reader rejects everything outside its ledger; and Reset puts back exactly what was loaded | `SCENE.md` §S.2, §S.6 |
+| `rack-check.js` | the rack rides its body's frame, meshes without slip at the right ratio, and -- with every other rolling row -- articulates a *paused* edit through the projection's delta form, including the ball-and-disk case that must re-ratio without turning anything | `DEVELOPMENT.md` §4.2 |
 
 Run any of them with `node tools/<script>`.
 
-`scene-roundtrip.js` is the exception to the "do not import the simulator" rule
+`scene-roundtrip.js` and `rack-check.js` are the exceptions to the "do not import the simulator" rule
 above: its claim is about the real reader and writer, so a reimplementation would
 test nothing. It loads the engine's source files into a bare context with a stub
 DOM. Its last check runs the real `substep` on both the example the tools built and
