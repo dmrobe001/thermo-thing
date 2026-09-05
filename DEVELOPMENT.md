@@ -206,6 +206,20 @@ This turns the constraint library into a measurement layer and is most of what m
 
 **Signal wires are drawn as wires**, visibly separate from physical constraints, connecting a measurement source to a modulated parameter.
 
+**A number you type may be arithmetic.** Every numeric field, in the panel and in a
+scene file alike, is parsed as an expression: `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`,
+`b3.x+b3.r`. This is an *authoring* facility and nothing more -- what is stored is
+the number it works out to, at the moment it is typed. A value that must keep
+following another value as the scene changes is a constraint or an interaction,
+which is what those are for and why they are solved rather than re-substituted; a
+formula hidden in a field would be a second coupling mechanism with no reaction
+force, no island membership and nothing drawn. See `SCENE.md` §S.10.
+
+> **Status (as built):** live. The language is code §19, its bindings are code
+> §17.8, and the vocabulary is the scene ledger itself -- a body's properties are
+> the fields the format gives that kind of body, so the panel and the file speak the
+> same names.
+
 **Bulk edits act on a selection, not on one object.** A player laying out a machine
 works on regions of it -- move this sub-assembly, turn it, spread it out, keep it and
 use it again. That is a *selection* of bodies with a transform box around it, and the

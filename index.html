@@ -167,6 +167,9 @@
        border:1px solid var(--hair);border-radius:4px;padding:2px 6px;font-family:var(--mono);
        font-size:12px;font-variant-numeric:tabular-nums}
   .field .numin:focus{outline:none;border-color:var(--accent-dim,var(--accent))}
+  /* a field whose text is not a value this field can take (§14.0 numVal): it keeps
+     what was typed, says why on hover, and is not committed */
+  .field .numin.bad{border-color:var(--force);color:var(--force)}
   .chk{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--mid);cursor:pointer;margin-top:8px}
   .chk input{accent-color:var(--accent)}
   .del{width:100%;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--force);
@@ -299,6 +302,7 @@
      section numbers are names.
      ============================================================================ -->
 <script src="js/state.js"></script>
+<script src="js/expr.js"></script>
 <script src="js/geometry.js"></script>
 <script src="js/constraints.js"></script>
 <script src="js/solver.js"></script>

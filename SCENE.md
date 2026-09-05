@@ -262,6 +262,10 @@ Grammar notes:
   on a rack. Which of those a token may say depends on the kind it sits on, and
   saying anything else is a load error, exactly as an unknown key on the line itself
   is: `pt=3/pinion` on a slot and `pt=3/s=0.5` on a pin are both refused.
+- **Every number is an expression** (§S.10): `r=0.25*2`, `len=hypot(3,4)`,
+  `P=bg.P/2`, `x=b3.x+b3.r`. A line tokenizes on whitespace, so an expression in a
+  file carries none. What is stored is the number it works out to; the exporter
+  writes digits.
 - A rectangle's dimensions are `width`/`height`, not `w`/`h`: `w` is the angular
   velocity every body carries.
 - A vessel's gas is written as pressure and temperature -- the two faces of it a
@@ -620,3 +624,134 @@ that turns every body by the box's delta and leaves every member exactly as stre
 as it was, a scale that spreads without resizing and leaves the machine assembled, the
 frame's reversibility, and the copy/paste round trip -- congruent, freshly numbered,
 original untouched, and loadable on its own as a scene.
+
+---
+
+## S.10 Expressions: exact geometry at the moment of authoring
+
+A number typed into a panel field, or written into a scene file, is read as
+arithmetic: `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`, `b3.x+b3.r`. The parser is
+`js/expr.js` (§19) -- a tokenizer, a recursive-descent parser and an evaluator,
+about two hundred lines, no dependency -- and the names it can see are bound in
+`js/scene.js` §17.8.
+
+### The problem it solves, and the one it does not
+
+Declaring geometry precisely is a different job from keeping it consistent, and the
+bench already does the second one. A crank at exactly 30 degrees, a rod exactly
+`sqrt(2)` long, a vessel charged to exactly half the ambient: writing those as
+`0.5235987755982988`, `1.4142135623730951` and `50662.5` is not the same statement --
+it is that statement rounded, and the rounding is invisible in the file afterwards.
+An expression states the intent, and the *file* is where the intent was.
+
+What it is emphatically not is a stored formula. **The number is what is kept**, at
+the moment it is typed or read. Put `b3.x` into a body's x and it lands where body 3
+is now, and stays there when body 3 moves. That boundary is not a limitation to
+relax later; it is the same one the rest of the design turns on. A value that must
+keep following another value as the scene changes is a *constraint* or an
+*interaction* -- a first-class object the solver enforces, that carries a reaction
+force you can read, that participates in islands and in the energy ledger, and that
+you can see drawn on the canvas. A spreadsheet formula hidden inside a field would
+be a second, invisible coupling mechanism with none of those properties, and the
+project's whole claim is that couplings are visible objects.
+
+So: expressions author the *initial* state. Constraints keep it.
+
+### One vocabulary, and it is the ledger
+
+There are two environments -- the live bench (what a panel field is typed against)
+and the file being read (what that file's own text says) -- and deliberately one
+vocabulary, taken from `SCENE_SCHEMA` itself:
+
+```
+pi tau e deg            constants; `deg` is radians per degree, so 30*deg
+air.Rs air.gamma        the working gas's two numbers
+g bg.P bg.T bathQ       the `sim` line's numeric keys, by their own names
+b7.x b7.r b7.len ...    body 7's fields, by the names the format writes
+sin cos tan asin acos atan atan2 sinh cosh tanh sqrt cbrt exp ln log log2
+abs sign floor ceil round pow mod clamp min max hypot
+```
+
+A body's properties are exactly the numeric fields its ledger row lists -- a disk
+has `x y r mass th vx vy w` because those are the fields the format gives a disk --
+so the vocabulary cannot drift from the format, and a field added to the ledger is
+a name the moment it exists. Ask for one that is not there and the error says what
+the kind does have. `log` is base 10 and `ln` is natural; angles are radians.
+
+### A file resolves its own names
+
+A file's names resolve against **the file**, never against the bench it is landing
+on. Two things follow. A scene is self-contained -- it means the same thing on any
+bench, and loading it twice loads the same scene -- and it is order-free, exactly as
+line order already was: a body may be placed relative to one defined further down,
+because the reader now scans the whole file as text before evaluating any of it.
+Resolution is lazy and memoized, so a value defined in terms of itself, directly or
+around a ring, is a load error rather than a hang. A field the line omitted resolves
+to its ledger default, including the computed ones -- `b3.mass` on a disk whose line
+never wrote a mass is the density-1 value the constructor would give it. A vessel is
+the one place this is not a plain field read: `b5.P` asks the resolved fill (§17.4
+`resolveVesselFill`), so it answers even when the line that wrote it chose to say
+`len`, `T` and `gasMass` instead.
+
+The `sim` and `cam` lines are the exception, and evaluate against constants only:
+what everything else reads as `bg.P` has to be one settled number before any body is
+evaluated, so the ambient cannot be written in terms of a vessel that is filled from
+the ambient.
+
+### What the reader had to become
+
+The reader was two passes (parse everything, then commit) and is now three, because
+an expression may name a body defined further down:
+
+```
+scanScene   the file as TEXT -- unknown kinds and keys, a key twice, a flag with a
+            value, duplicate ids, the `--` between two ends
+evalScene   text -> numbers: expressions, endpoints, points, and the check that
+            every body anything names exists
+commitScene clear the bench and build -- only once both have returned
+```
+
+The guarantee that made the old split worth having is unchanged and now covers more:
+a bad file, whether the fault is a misspelled key or a misspelled name inside an
+expression, leaves the current bench exactly as it was.
+
+Three grammar consequences fell out, all in §17.2. A coordinate pair used to be two
+runs of characters that were neither comma nor paren; since either half may now
+bring its own parentheses, `bg(b3.x,b3.y+0.5)` splits on the commas at depth zero
+instead. A point's options are slash-separated and slash is also division, so
+`pt=3/s=1/2` splits only at the slashes followed by one of the format's own option
+words -- `s=1/2` is one option, a station of a half. And a body id stays a literal
+everywhere it appears: an id is a name, the one thing other lines point at, and only
+the offsets around it are arithmetic.
+
+### It is a grammar, not `eval`
+
+Scene text arrives from files, from the clipboard and from the widget stash. The
+grammar in §19 is the whole of what such text may say: no property access beyond the
+names an environment offers, no calls beyond the function table, no assignment, no
+strings, and no way through a name to anything the host holds -- `globalThis`,
+`constructor`, `Math.PI` and `eval("1")` are each just an unknown name or a syntax
+error. `tools/expr-check.js` asserts that directly.
+
+### Panel fields
+
+The inspector's numeric inputs (`js/inspector.js` §14.0) are `type="text"`, not
+`type="number"`: a number input hands back an empty string for anything it cannot
+read as a literal, so `2*pi` would be gone before the panel saw it. The arrow keys
+are wired back on by hand and step the value the field currently evaluates to, which
+is why stepping a field holding `2*pi` leaves a number behind. Text a field cannot
+use -- a malformed expression, or a value outside what that field accepts -- marks
+the field, says why on hover, and is *not* committed: the panel keeps what you typed
+so you can fix it, rather than silently reverting to the old value.
+
+### Verified
+
+`tools/expr-check.js`: the language (precedence, associativity, the function and
+constant tables, and that every malformed or non-finite expression is an error
+rather than a quiet NaN); a file (an expression wherever a number is -- fields,
+endpoint offsets, a vec2, a point's station -- names resolving backwards, forwards
+and to ledger defaults, and a vessel's fill answering whichever two of its four the
+line gave); that expressions are not stored (the export is digits, and a value typed
+against another body does not follow it); the refusals, each leaving the bench that
+was loaded before it exactly as it was; and the panel field, including the arrow-key
+step and the marking of text it cannot use.

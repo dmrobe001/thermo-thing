@@ -13,6 +13,7 @@
 //    §17.1  the ledger      (SCENE_SCHEMA -- one row per scene-object kind)
 //    §17.2  values          (formatting, tokenizing, endpoint syntax)
 //    §17.3  exportScene     (world -> text)
+//    §17.8  expressions     (what a name in a numeric field may mean)
 //    §17.4  importScene     (text -> world)
 //    §17.6  state snapshot  (snapshotState/applyState -- what Reset restores)
 //    §17.7  fragments       (exportFragment/pasteFragment -- part of a bench)
@@ -369,10 +370,50 @@ function fmtNum(v){
   const r = Number(v.toPrecision(SCENE_PRECISION));
   return String(r === 0 ? 0 : r);            // normalizes -0 to "0"
 }
-function numTok(tok, ln, what){
-  const v = Number(tok);
-  if(tok==='' || !isFinite(v)) throw new SceneError(ln, `${what}: expected a number, got "${tok}"`);
-  return v;
+// Every number in the format is an EXPRESSION (§19): `0.75`, `2*pi/3`, `bg.P*0.5`
+// and `b3.x+b3.r` all arrive here and all leave as one number. Three consequences
+// worth stating, because they are what keep this from being a second, shadow way
+// of describing a scene:
+//
+//   * a line tokenizes on whitespace, so an expression in a FILE carries none:
+//     `2*pi`, never `2 * pi`. (A panel field, which is one whole value, allows
+//     spaces -- inspector.js §14.0.)
+//   * what a name may mean is `env`'s answer and nothing else (§17.8). A file's
+//     names resolve against the file itself, so a scene stays one self-contained
+//     document: it means the same thing on any bench, in any order.
+//   * the NUMBER is what is kept. Nothing stores the text and nothing re-evaluates
+//     it when the scene moves -- a value that has to follow another value is a
+//     constraint or an interaction, which is what those are and why they are
+//     solved. See §19's opening note.
+function numTok(tok, ln, what, env){
+  if(tok==='') throw new SceneError(ln, `${what}: expected a number, got ""`);
+  try { return evalExpr(tok, env); }
+  catch(e){
+    if(e instanceof ExprError) throw new SceneError(ln, `${what}: ${e.message}, in "${tok}"`);
+    throw e;
+  }
+}
+// Split on the commas at the OUTERMOST paren depth. A coordinate pair used to be
+// two runs of characters that were neither comma nor paren; now that either half
+// may be an expression -- `bg(b3.x,b3.y+0.5)`, `(0,2*cos(pi/4))` -- the halves
+// bring their own parentheses and their own commas, and only depth zero separates
+// the pair.
+function splitArgs(s, ln, what){
+  const out=[]; let depth=0, start=0;
+  for(let i=0;i<s.length;i++){
+    const c=s[i];
+    if(c==='(') depth++;
+    else if(c===')'){ if(--depth<0) throw new SceneError(ln, `${what}: unbalanced ")" in "${s}"`); }
+    else if(c===',' && depth===0){ out.push(s.slice(start,i)); start=i+1; }
+  }
+  if(depth!==0) throw new SceneError(ln, `${what}: unbalanced "(" in "${s}"`);
+  out.push(s.slice(start));
+  return out;
+}
+function pairTok(s, ln, what, env){
+  const parts = splitArgs(s, ln, what);
+  if(parts.length!==2) throw new SceneError(ln, `${what}: expected two comma-separated numbers, got "(${s})"`);
+  return [numTok(parts[0], ln, what, env), numTok(parts[1], ln, what, env)];
 }
 function idTok(tok, ln, what){
   if(!/^[1-9][0-9]*$/.test(tok)) throw new SceneError(ln, `${what}: expected a body id, got "${tok}"`);
@@ -392,16 +433,18 @@ function fmtEp(ep, spec){
   const ox=ep.off?ep.off[0]:0, oy=ep.off?ep.off[1]:0;
   return (ox===0 && oy===0) ? String(ep.id) : `${ep.id}@(${fmtNum(ox)},${fmtNum(oy)})`;
 }
-function parseEp(tok, spec, ln, what){
+function parseEp(tok, spec, ln, what, env){
   if(spec==='id') return {id:idTok(tok, ln, what)};
   if(spec==='id-bg') return {id: tok==='bg' ? null : idTok(tok, ln, what)};
   let m;
-  if((m=/^bg\(([^,()]+),([^,()]+)\)$/.exec(tok))){
+  // The body id itself is a literal, never an expression: it is a name, and the
+  // one thing in the format that other lines point at. Only the offset is arithmetic.
+  if((m=/^bg\((.*)\)$/.exec(tok))){
     if(spec==='ep-body') throw new SceneError(ln, `${what}: this end must be a body, not the background`);
-    return {id:null, off:[numTok(m[1],ln,what), numTok(m[2],ln,what)]};
+    return {id:null, off:pairTok(m[1], ln, what, env)};
   }
-  if((m=/^([1-9][0-9]*)@\(([^,()]+),([^,()]+)\)$/.exec(tok)))
-    return {id:Number(m[1]), off:[numTok(m[2],ln,what), numTok(m[3],ln,what)]};
+  if((m=/^([1-9][0-9]*)@\((.*)\)$/.exec(tok)))
+    return {id:Number(m[1]), off:pairTok(m[2], ln, what, env)};
   if(/^[1-9][0-9]*$/.test(tok)) return {id:Number(tok), off:[0,0]};
   throw new SceneError(ln, `${what}: expected an endpoint (7, 7@(x,y) or bg(x,y)), got "${tok}"`);
 }
@@ -428,9 +471,25 @@ function fmtPt(fd, pt){
   if(pt.lock) parts.push('lock', `restAng=${fmtNum(pt.restAng||0)}`);
   return parts.join('/');
 }
-function parsePt(fd, name, tok, ln){
+// A point's options are slash-separated, and slash is also division: `s=1/4` is
+// one option, not two. The split is therefore at the slashes that sit outside every
+// parenthesis AND are followed by one of this format's option words -- nothing else
+// can begin a segment, and no expression can look like one.
+const PT_OPT = /^(s=|restAng=|lock(?=\/|$)|pinion(?=\/|$))/;
+function splitPt(tok){
+  const out=[]; let depth=0, start=0;
+  for(let i=0;i<tok.length;i++){
+    const c=tok[i];
+    if(c==='(') depth++;
+    else if(c===')') depth--;
+    else if(c==='/' && depth===0 && PT_OPT.test(tok.slice(i+1))){ out.push(tok.slice(start,i)); start=i+1; }
+  }
+  out.push(tok.slice(start));
+  return out;
+}
+function parsePt(fd, name, tok, ln, env){
   const kind=fd.kind;
-  const parts=String(tok).split('/');
+  const parts=splitPt(String(tok));
   const out={};
   const rest=parts.slice(1);
   const takes = kind==='pin' ? [] : kind==='slot' ? ['lock','restAng']
@@ -446,15 +505,15 @@ function parsePt(fd, name, tok, ln){
       out[key]=true;
     } else {
       if(eq<0) throw new SceneError(ln, `${name}: "${key}" needs a value, as ${key}=...`);
-      out[key]=numTok(seg.slice(eq+1), ln, `${name} ${key}`);
+      out[key]=numTok(seg.slice(eq+1), ln, `${name} ${key}`, env);
     }
   }
   if(out.pinion){
     if(out.s!==undefined || out.lock)
       throw new SceneError(ln, `${name}: a pinion meshes wherever it sits -- it takes no station and no lock`);
-    return {ep:parseEp(parts[0], 'id', ln, name), kind:'pinion'};
+    return {ep:parseEp(parts[0], 'id', ln, name, env), kind:'pinion'};
   }
-  const ep=parseEp(parts[0], 'ep', ln, name);
+  const ep=parseEp(parts[0], 'ep', ln, name, env);
   if((kind==='rod' || kind==='rack') && out.s===undefined)
     throw new SceneError(ln, `${name}: a ${kind}'s point needs its captured station, as s=...`);
   if(out.lock && out.restAng===undefined)
@@ -484,13 +543,13 @@ function fmtVal(fd, v){
   }
   throw new SceneError(0, `no formatter for field type ${fd.t}`);
 }
-function parseVal(fd, name, tok, ln){
+function parseVal(fd, name, tok, ln, env){
   switch(fd.t){
-    case 'num': return numTok(tok, ln, name);
+    case 'num': return numTok(tok, ln, name, env);
     case 'vec2': {
-      const m=/^\(([^,()]+),([^,()]+)\)$/.exec(tok);
+      const m=/^\((.*)\)$/.exec(tok);
       if(!m) throw new SceneError(ln, `${name}: expected (x,y), got "${tok}"`);
-      return [numTok(m[1],ln,name), numTok(m[2],ln,name)];
+      return pairTok(m[1], ln, name, env);
     }
     case 'onoff':
       if(tok==='on') return true; if(tok==='off') return false;
@@ -505,7 +564,7 @@ function parseVal(fd, name, tok, ln){
     // offset here can't mean anything the engine can build -- reject it rather
     // than silently keep it and have it do nothing, the same rule §17 opens with.
     case 'ep-centre': {
-      const ep = parseEp(tok, 'ep-body', ln, name);
+      const ep = parseEp(tok, 'ep-body', ln, name, env);
       if(ep.off[0]!==0 || ep.off[1]!==0)
         throw new SceneError(ln, `${name}: an interaction only anchors at a body's centre (0,0) for now`);
       return ep;
@@ -640,9 +699,10 @@ function exportScene(){
 // the raw parsed fields in place so len, P and T (all `always` in the vessel row,
 // §17.1) are unconditionally present by the time the ordinary fieldReader / build
 // / finish pipeline runs below, whatever subset of the four the file actually
-// wrote. Runs as its own pass after the whole file is read (not inline in the
-// per-line loop) so a `sim` line naming a non-default ambient is already known
-// here, wherever in the file it appears.
+// wrote. Called from the environment (§17.8) rather than inline in the per-line
+// loop, which is what lets a `sim` line naming a non-default ambient be known here
+// wherever in the file it appears -- and lets another line ask this vessel what it
+// is filled to (`b5.P`) and get the resolved answer rather than a blank.
 function resolveVesselFill(f, ln, bgP, bgT){
   if(f.bore===undefined) throw new SceneError(ln, `vessel: missing required field "bore"`);
   const has = k => f[k]!==undefined;
@@ -666,16 +726,174 @@ function resolveVesselFill(f, ln, bgP, bgT){
   f.len = V/(f.bore*VESSEL_DEPTH);
 }
 
+// ---- §17.8 · expression bindings (what a name may mean) ----
+// Every number in the format is an expression (§19), and an expression's names are
+// bound HERE. There are two environments, and deliberately one vocabulary:
+//
+//   worldExprEnv()  the live bench -- what the inspector's fields are typed against
+//   sceneExprEnv()  a file being read -- what that file's own text says
+//
+// and in both, the vocabulary is the ledger (§17.1). A body's properties are the
+// numeric fields its row lists: a disk has x, y, r, mass, th, vx, vy, w because
+// those are the fields the format gives a disk, and the ambient is `bg.P`/`bg.T`
+// because that is what the `sim` line calls it. Nothing is declared twice, so the
+// names cannot drift apart from the format, and "what may I write here" has the
+// same answer on the bench as in a file.
+//
+//   pi tau e deg           §19's constants (`deg` is radians per degree: 30*deg)
+//   air.Rs air.gamma       the working gas's own two numbers (geometry.js §05.2d)
+//   g bg.P bg.T bathQ      the `sim` line's numeric keys
+//   b7.x b7.r b7.len ...   body 7's own fields, by the name the format uses
+//
+// A body is `b<id>`, not a bare id, because an id is a number and `7.x` is not a
+// name. `b7` alone is not a value either: a body is not one number.
+const EXPR_BODY_REF = /^b([1-9][0-9]*)\.([A-Za-z_][A-Za-z0-9_]*)$/;
+const EXPR_FIXED = () => ({ 'air.Rs':GAS_AIR.Rs, 'air.gamma':GAS_AIR.gamma });
+// The numeric fields of one ledger row, which is exactly the property list of the
+// bodies it matches -- quoted back at a person who asks for one that is not there.
+const rowNumFields = row =>
+  Object.entries(row.fields).filter(([,fd])=>fd.t==='num').map(([n])=>n);
+const bodyRowOf = b => SCENE_SCHEMA.find(r => r.list==='bodies' && r.match(b));
+
+// The environment a PANEL field is typed against: the bench as it stands. Read at
+// call time, so it always speaks for the world the field is about to edit.
+function worldExprEnv(){
+  const fixed = EXPR_FIXED();
+  return name => {
+    if(Object.prototype.hasOwnProperty.call(fixed, name)) return fixed[name];
+    const sf = fieldOf(SIM_FIELDS, name);
+    if(sf && sf.t==='num') return sf.get(sim);
+    const m = EXPR_BODY_REF.exec(name);
+    if(!m) return undefined;
+    const b = bodies.find(x => x.id===Number(m[1]));
+    if(!b) throw new ExprError(`there is no body ${m[1]} on the bench`);
+    const row = bodyRowOf(b);
+    const fd = row && fieldOf(row.fields, m[2]);
+    if(!fd || fd.t!=='num')
+      throw new ExprError(`a ${row?row.kind:'body'} has no property "${m[2]}" -- it has ${rowNumFields(row).join(', ')}`);
+    return fd.get(b);
+  };
+}
+
+// The environment a FILE is read against: the file itself. A scene is therefore
+// self-contained -- it means the same thing on any bench, and loading it twice
+// loads the same scene -- and it is order-free, because a name is resolved out of
+// the whole scan rather than out of what has been built so far.
+//
+// Resolution is lazy and memoized, which is what lets a line name a body defined
+// below it, and what makes a value that refers to itself (directly or around a
+// ring) a load-time error rather than a hang. A field the line omitted resolves to
+// its ledger default -- including the computed ones, so `b3.mass` on a disk whose
+// line never wrote a mass is the density-1 value the constructor would give it,
+// which is the same answer the built body would have.
+function sceneExprEnv(scan, simVals){
+  const fixed = EXPR_FIXED();
+  const bgP = simVals['bg.P']!==undefined ? simVals['bg.P'] : SIM_FIELDS['bg.P'].def;
+  const bgT = simVals['bg.T']!==undefined ? simVals['bg.T'] : SIM_FIELDS['bg.T'].def;
+  const nums = new Map();                   // "<line>|<field>" -> its value
+  const busy = new Set();                   // the same, while it is being worked out
+  const fills = new Map();                  // vessel item -> its resolved gas fill
+  const filling = new Set();
+  const vals = new Map();                   // item -> its whole evaluated field set
+
+  const env = name => {
+    if(Object.prototype.hasOwnProperty.call(fixed, name)) return fixed[name];
+    const sf = fieldOf(SIM_FIELDS, name);
+    if(sf && sf.t==='num') return simVals[name]!==undefined ? simVals[name] : sf.def;
+    const m = EXPR_BODY_REF.exec(name);
+    return m ? bodyProp(Number(m[1]), m[2]) : undefined;
+  };
+
+  function bodyProp(id, prop){
+    const it = scan.byId.get(id);
+    if(!it) throw new ExprError(`this file defines no body ${id}`);
+    const fd = fieldOf(it.row.fields, prop);
+    if(!fd || fd.t!=='num')
+      throw new ExprError(`a ${it.row.kind} has no property "${prop}" -- it has ${rowNumFields(it.row).join(', ')}`);
+    // A vessel's len, P, T and gasMass are the four faces of one fill, any two of
+    // which imply the rest (resolveVesselFill above): read them off the resolved
+    // fill, so `b5.P` answers what the vessel is filled to even when the line that
+    // wrote it chose to say len, T and gasMass instead.
+    if(it.row.kind==='vessel'){
+      const g = vesselFill(it);
+      if(g[prop]!==undefined) return g[prop];
+    }
+    return fieldVal(it, prop);
+  }
+
+  function fieldVal(it, name){
+    const fd = fieldOf(it.row.fields, name);
+    if(!fd) throw new SceneError(it.ln, `internal: no field "${name}"`);
+    const key = it.ln+'|'+name;
+    if(nums.has(key)) return nums.get(key);
+    if(busy.has(key)) throw new SceneError(it.ln, `${it.row.kind}: "${name}" is defined in terms of itself`);
+    busy.add(key);
+    try {
+      const raw = it.raw[name];
+      let v;
+      if(raw!==undefined) v = numTok(raw, it.ln, name, env);
+      else if(fd.always) throw new SceneError(it.ln, `${it.row.kind}: missing required field "${name}"`);
+      else v = typeof fd.def==='function' ? fd.def(n=>fieldVal(it, n)) : fd.def;
+      nums.set(key, v);
+      return v;
+    } finally { busy.delete(key); }
+  }
+
+  // A vessel's fill, resolved once per vessel from whichever of len/P/T/gasMass its
+  // line actually wrote, against the ambient this FILE names (wherever its `sim`
+  // line sits, since sim is evaluated before any item). Also carries the gas mass
+  // the fill implies, so it can be asked for even when the line did not write it.
+  function vesselFill(it){
+    if(fills.has(it)) return fills.get(it);
+    if(filling.has(it)) throw new SceneError(it.ln, `vessel ${it.id}: its fill is defined in terms of itself`);
+    filling.add(it);
+    try {
+      const g = Object.create(null);
+      for(const name of ['bore','len','P','T','gasMass'])
+        if(it.raw[name]!==undefined) g[name] = fieldVal(it, name);
+      resolveVesselFill(g, it.ln, bgP, bgT);
+      if(g.gasMass===undefined) g.gasMass = g.P*g.bore*g.len*VESSEL_DEPTH/(GAS_AIR.Rs*g.T);
+      fills.set(it, g);
+      return g;
+    } finally { filling.delete(it); }
+  }
+
+  // One item's whole field set, as buildItem wants it: only the keys the line
+  // carried, each one a value -- plus, for a vessel, the len/P/T the fill worked
+  // out, which is what the ledger's `always` on those three is checked against.
+  function fieldsOf(it){
+    if(vals.has(it)) return vals.get(it);
+    const f = evalKeyed(it.row.fields, it.raw, it.ln, it.row.kind, env, name=>fieldVal(it, name));
+    if(it.row.kind==='vessel'){ const g = vesselFill(it); for(const k of ['len','P','T']) f[k] = g[k]; }
+    vals.set(it, f);
+    return f;
+  }
+
+  return { env, fieldsOf };
+}
+
 // ---- §17.4 · importScene (text -> world) ----
-// Two passes, and the split matters. parseScene reads the whole file and validates
-// everything it can without touching the world -- syntax, unknown kinds and keys,
-// duplicate and dangling body ids. Only once that returns does commitScene clear
-// the bench. A bad file therefore leaves the current scene exactly as it was,
-// rather than half-replacing it.
-function parseScene(text){
-  const out = { version:null, sim:{}, cam:{}, items:[] };
+// Three passes, and both splits matter.
+//
+//   scanScene  reads the whole file as TEXT and makes every check that needs no
+//              number: unknown kinds and keys, a key given twice, a flag written
+//              with a value, duplicate body ids, the `--` between two ends.
+//   evalScene  turns that text into numbers -- which is where expressions are
+//              evaluated (§17.8) and where every value-level error lives -- and
+//              checks that every body anything names exists.
+//   commitScene clears the bench and builds, and only runs once both have returned.
+//
+// So a bad file, whether the fault is a misspelled key or a misspelled name inside
+// an expression, leaves the current scene exactly as it was.
+//
+// The text pass comes first for a reason beyond tidiness: an expression may name
+// any body in the file, including one defined further down, so the reader has to
+// know what the whole file says before it can work out what any one line means.
+function parseScene(text){ return evalScene(scanScene(text)); }
+
+function scanScene(text){
+  const out = { version:null, sim:{}, simLn:0, cam:{}, camLn:0, items:[], byId:new Map() };
   const lines = String(text).split(/\r?\n/);
-  const bodyIds = new Set();
   const kindRow = k => SCENE_SCHEMA.find(r => r.kind===k);
 
   for(let i=0;i<lines.length;i++){
@@ -687,7 +905,11 @@ function parseScene(text){
 
     if(out.version===null){
       if(kind!=='scene') throw new SceneError(ln, `a scene file must open with "scene ${SCENE_VERSION}"`);
-      out.version = numTok(tok[0]||'', ln, 'scene version');
+      // The version is a literal, not an expression: it says how to read the rest
+      // of the file, so it cannot be written in the file's own vocabulary.
+      const vt = tok[0]||'';
+      if(!/^[0-9]+$/.test(vt)) throw new SceneError(ln, `scene version: expected a number, got "${vt}"`);
+      out.version = Number(vt);
       if(out.version !== SCENE_VERSION)
         throw new SceneError(ln, `this is a version ${out.version} scene file; this build reads version ${SCENE_VERSION}`);
       continue;
@@ -696,49 +918,108 @@ function parseScene(text){
 
     if(kind==='sim' || kind==='cam'){
       const fields = kind==='sim' ? SIM_FIELDS : CAM_FIELDS;
-      out[kind] = readKeyed(fields, tok, ln, kind);
+      out[kind] = scanKeyed(fields, tok, ln, kind);
+      out[kind==='sim' ? 'simLn' : 'camLn'] = ln;
       continue;
     }
 
     const row = kindRow(kind);
     if(!row) throw new SceneError(ln, `unknown kind "${kind}" -- a scene can only contain ${SCENE_SCHEMA.map(r=>r.kind).join(', ')}`);
 
-    const item = { row, ln, id:null, ends:{}, f:null };
+    const item = { row, ln, id:null, endToks:[], raw:null };
     if(row.id){
       const idt = tok.shift();
       if(idt===undefined) throw new SceneError(ln, `a ${kind} line needs an id`);
       item.id = idTok(idt, ln, `${kind} id`);
-      if(bodyIds.has(item.id)) throw new SceneError(ln, `duplicate body id ${item.id}`);
-      bodyIds.add(item.id);
+      if(out.byId.has(item.id)) throw new SceneError(ln, `duplicate body id ${item.id}`);
+      out.byId.set(item.id, item);
     }
     if(row.ends){
       for(let e=0;e<row.ends.length;e++){
-        const [name, spec] = row.ends[e];
         if(e>0){
           const sep = tok.shift();
           if(sep!=='--') throw new SceneError(ln, `expected "--" between the two ends of a ${kind}, got "${sep===undefined?'end of line':sep}"`);
         }
         const t = tok.shift();
         if(t===undefined) throw new SceneError(ln, `a ${kind} line needs ${row.ends.length} endpoint(s)`);
-        item.ends[name] = parseEp(t, spec, ln, `${kind} end ${name}`);
+        item.endToks.push(t);
       }
     }
-    item.f = readKeyed(row.fields, tok, ln, kind);
+    item.raw = scanKeyed(row.fields, tok, ln, kind);
     out.items.push(item);
   }
 
   if(out.version===null) throw new SceneError(0, 'empty scene file');
+  return out;
+}
 
-  // Resolve every vessel's fill now that the whole file (in particular a `sim`
-  // line naming a non-default ambient, wherever it appears) has been read.
-  {
-    const bgP = out.sim['bg.P']!==undefined ? out.sim['bg.P'] : SIM_FIELDS['bg.P'].def;
-    const bgT = out.sim['bg.T']!==undefined ? out.sim['bg.T'] : SIM_FIELDS['bg.T'].def;
-    for(const it of out.items) if(it.row.kind==='vessel') resolveVesselFill(it.f, it.ln, bgP, bgT);
+// The keyed tail of a line, as text: key=value pairs and bare flag words, in any
+// order. Which keys exist, which may repeat and which are flags is settled here;
+// what the values MEAN is evalKeyed's business, one pass later.
+function scanKeyed(fields, tok, ln, kind){
+  const f = Object.create(null);
+  for(const t of tok){
+    const eq = t.indexOf('=');
+    const name = eq<0 ? t : t.slice(0, eq);
+    const fd = fieldOf(fields, name);
+    if(!fd) throw new SceneError(ln, `${kind}: unknown field "${name}" -- this kind takes ${Object.keys(fields).join(', ')||'no fields'}`);
+    if(fd.t==='pts'){
+      if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
+      (f[name] || (f[name]=[])).push(t.slice(eq+1));
+      continue;                       // the one key a line may repeat, once per point
+    }
+    if(f[name]!==undefined) throw new SceneError(ln, `${kind}: "${name}" given twice`);
+    if(fd.t==='flag'){
+      if(eq>=0) throw new SceneError(ln, `${kind}: "${name}" is a flag -- write it on its own, with no value`);
+      f[name] = true;
+    } else {
+      if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
+      f[name] = t.slice(eq+1);
+    }
+  }
+  return f;
+}
+
+// The text of one line's fields -> their values. `numOf` is how a numeric field is
+// read: plain evaluation for the singletons, and the environment's own memoized
+// reader for an item, so a field another line asked for is worked out exactly once.
+function evalKeyed(fields, raw, ln, kind, env, numOf){
+  const f = Object.create(null);
+  for(const [name, fd] of Object.entries(fields)){
+    const r = raw[name];
+    if(r===undefined) continue;
+    if(fd.t==='flag'){ f[name] = true; continue; }
+    if(fd.t==='pts'){ f[name] = r.map(t => parsePt(fd, name, t, ln, env)); continue; }
+    f[name] = (fd.t==='num' && numOf) ? numOf(name) : parseVal(fd, name, r, ln, env);
+  }
+  return f;
+}
+
+function evalScene(scan){
+  const out = { version:scan.version, sim:{}, cam:{}, items:[] };
+
+  // sim and cam go first, and against CONSTANTS ONLY: what everything else reads as
+  // `bg.P` has to be one settled number before any body is evaluated, so the
+  // ambient cannot itself be written in terms of a body that might be filled from
+  // the ambient. The camera keeps the same rule for the same reason it has no
+  // physics -- where you are looking is not a fact about the machine.
+  const constEnv = (fixed => name =>
+    Object.prototype.hasOwnProperty.call(fixed, name) ? fixed[name] : undefined)(EXPR_FIXED());
+  out.sim = evalKeyed(SIM_FIELDS, scan.sim, scan.simLn, 'sim', constEnv);
+  out.cam = evalKeyed(CAM_FIELDS, scan.cam, scan.camLn, 'cam', constEnv);
+
+  const bound = sceneExprEnv(scan, out.sim);
+  for(const it of scan.items){
+    const ends = {};
+    (it.row.ends||[]).forEach(([name, spec], e) =>
+      { ends[name] = parseEp(it.endToks[e], spec, it.ln, `${it.row.kind} end ${name}`, bound.env); });
+    out.items.push({ row:it.row, ln:it.ln, id:it.id, ends, f:bound.fieldsOf(it) });
   }
 
   // Every body id anything names has to exist. Checked here, before the bench is
   // touched, so a typo in an endpoint is a message rather than a wrecked scene.
+  // (An id named from inside an expression is checked as it is evaluated, by the
+  // environment itself -- it cannot get this far unresolved.)
   for(const it of out.items){
     const refs=[];
     for(const [name] of (it.row.ends||[])) if(it.ends[name].id!=null) refs.push([it.ends[name].id, `end ${name}`]);
@@ -749,33 +1030,9 @@ function parseScene(text){
         if(pt.ep.id!=null) refs.push([pt.ep.id, name]);
     }
     for(const [id, what] of refs)
-      if(!bodyIds.has(id)) throw new SceneError(it.ln, `${it.row.kind} ${what} names body ${id}, which this file does not define`);
+      if(!scan.byId.has(id)) throw new SceneError(it.ln, `${it.row.kind} ${what} names body ${id}, which this file does not define`);
   }
   return out;
-}
-// The keyed tail of a line: key=value pairs and bare flag words, in any order.
-function readKeyed(fields, tok, ln, kind){
-  const f = Object.create(null);
-  for(const t of tok){
-    const eq = t.indexOf('=');
-    const name = eq<0 ? t : t.slice(0, eq);
-    const fd = fieldOf(fields, name);
-    if(!fd) throw new SceneError(ln, `${kind}: unknown field "${name}" -- this kind takes ${Object.keys(fields).join(', ')||'no fields'}`);
-    if(fd.t==='pts'){
-      if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
-      (f[name] || (f[name]=[])).push(parsePt(fd, name, t.slice(eq+1), ln));
-      continue;                       // the one key a line may repeat, once per point
-    }
-    if(f[name]!==undefined) throw new SceneError(ln, `${kind}: "${name}" given twice`);
-    if(fd.t==='flag'){
-      if(eq>=0) throw new SceneError(ln, `${kind}: "${name}" is a flag -- write it on its own, with no value`);
-      f[name] = true;
-    } else {
-      if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
-      f[name] = parseVal(fd, name, t.slice(eq+1), ln);
-    }
-  }
-  return f;
 }
 
 // Empty the bench. Everything a scene owns goes, including the two running totals

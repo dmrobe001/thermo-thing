@@ -9,6 +9,7 @@ The simulator is split into a thin HTML shell and one JavaScript file per logica
 ```
 index.html          §01 document head · §02 all CSS · §03 body markup
 js/state.js         §04 world state & globals
+js/expr.js          §19 the expression language for numeric fields
 js/geometry.js      §05 geometry helpers
 js/constraints.js   §06 constraint rows / Jacobian builders
 js/solver.js        §07 dense linear solve
@@ -25,8 +26,10 @@ js/select.js        §18 selection groups, the transform box, the widget stash
 js/transport.js     §16 transport controls, snapshots, keyboard shortcuts, boot
 ```
 
-`js/scene.js` and `js/select.js` load before `js/transport.js` despite their higher
-numbers: transport's boot calls `renderInspector()`, which draws the scene-file card
+`js/expr.js` loads early despite its higher number: it depends on nothing (it is the
+language, not the bindings -- those are `js/scene.js` §17.8), and both the scene
+reader and the inspector call it. `js/scene.js` and `js/select.js` load before
+`js/transport.js` despite their higher numbers: transport's boot calls `renderInspector()`, which draws the scene-file card
 and the stash card. Load order is dependency order; the section numbers are names.
 
 All scripts are plain globals -- no ES modules. Load order matters; `index.html` loads them in dependency order.
@@ -107,6 +110,27 @@ there -- and the constraint that earned it is compiled away (`_compiled`) rather
 left as a row of zeros. Nothing may set either flag: not a tool, not the inspector,
 not a scene file. See `SCENE.md` §S.8.
 
+## Numbers are expressions, and they are not stored
+
+Every numeric field -- in the inspector panel and in a scene file alike -- is parsed
+as arithmetic (`js/expr.js` §19): `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`, `b3.x+b3.r`.
+Two rules bound it, and both matter more than the feature does:
+
+- **The vocabulary is the ledger.** What a name may mean is bound in `js/scene.js`
+  §17.8, and a body's properties are exactly the numeric fields its `SCENE_SCHEMA`
+  row lists -- so a disk offers `x y r mass th vx vy w`, the ambient is `bg.P`/`bg.T`
+  because that is what the `sim` line calls it, and adding a field to the ledger adds
+  it to the vocabulary with no second table to update. There are two environments and
+  one vocabulary: `worldExprEnv()` reads the live bench (what a panel field is typed
+  against), `sceneExprEnv()` reads the file's own text (so a scene stays a
+  self-contained document, and may name a body defined further down).
+- **What is kept is the number.** Nothing stores the text and nothing re-evaluates
+  it. Type `b3.x` into a body's x and it lands where body 3 is *now* and stays there.
+  A value that has to keep following another value is a constraint or an
+  interaction -- that is what those are, and they are solved rather than
+  re-substituted. Expressions exist so that *initial* geometry can be declared
+  exactly. See `SCENE.md` §S.10.
+
 ## Adding or moving code
 
 Give new code a home in an existing section (and register it in that section's sub-index) or open a new section and update the list above. A stale map is worse than none.
@@ -115,6 +139,7 @@ Give new code a home in an existing section (and register it in that section's s
 
 | File | Section | What it does |
 |---|---|---|
+| `js/expr.js` | §19 | The expression language every numeric field is read through: `parseExpr`/`evalExpr`, `EXPR_CONSTS`, `EXPR_FUNCS`. Knows nothing of the world -- names come from an environment (§17.8) |
 | `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `cables`, `springs`, `rotSprings`, `interactions`; `sim` (incl. `sim.bg`, the ambient atmosphere, and `sim.bathQ`); `cam` |
 | `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshInertia`, `setBodyMass`, `w2s`/`s2w`; §05.2d `makeVessel`/`refreshVessel`/gas state, §05.2c `epLocal`/`epWorldPt`/`epOffOf` (material endpoint offsets), §05.2e `bodyPolygon`/`clipPoly`/`contactArea` (interaction contact area) |
 | `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `epFrame` (endpoint velocity columns, incl. a vessel's length column), `twoPointFrame`, `cableFrame`, `rowsFor`, §06.2b `recaptureConAngles`/`recaptureConPose` (re-read what a line joint holds off the live geometry), §06.2c extra control points (`conPoints`, `makeConPoint`, `linePointRows`, `conEndpoints`), §06.2d posable rods (`beginPosing`/`endPosing`, `withPosing`, `rodPosing`/`rodReleased`, `recapturePosable`), `makeSpringCon`, `makeRotSpringCon`, `rotSpringSpiralGeom` |
@@ -125,8 +150,8 @@ Give new code a home in an existing section (and register it in that section's s
 | `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawVessel`, `drawConstraint`, `drawCable`, `drawSpring`, `drawRotSpring`, §11.4c `drawInteraction`, `drawReaction`, ... |
 | `js/hud.js` | §12 | `energy` (incl. spring PE, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
 | `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
-| `js/inspector.js` | §14 | `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
+| `js/inspector.js` | §14 | §14.0 `numRow`/`numVal`/`wireNumIns` (one editable number: arithmetic in, a number committed, the arrow keys stepping the value); `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
 | `js/examples.js` | §15 | `SCENES` -- every prebuilt machine as scene-file text, with its own reasoning as `#` comments; `loadExample` is `importScene` and nothing else |
-| `js/scene.js` | §17 | `SCENE_SCHEMA` (the ledger: one row per scene-object kind, carrying both the serialized `fields` and the `state` a run can change), `exportScene`/`importScene`, `clearScene`, the scene-file panel card, §17.6 `snapshotState`/`applyState`, §17.7 fragments (`exportFragment`/`pasteFragment` -- part of a bench, out and back in) |
+| `js/scene.js` | §17 | §17.8 `worldExprEnv`/`sceneExprEnv` (what a name in a numeric field means -- the ledger is the vocabulary); `SCENE_SCHEMA` (the ledger: one row per scene-object kind, carrying both the serialized `fields` and the `state` a run can change), `exportScene`/`importScene`, `clearScene`, the scene-file panel card, §17.6 `snapshotState`/`applyState`, §17.7 fragments (`exportFragment`/`pasteFragment` -- part of a bench, out and back in) |
 | `js/select.js` | §18 | §18.1 the group (`selGroup`, `groupMembers`, `makeGroup`, `selectGroup`), §18.2 the transform box (`groupApply`, `groupRecapture`, the handles and their drag), §18.3 the lasso (`lassoSelect`, `lassoToggle`), §18.4 widgets (`selectionFragment`, `copySelection`, `pasteWidget`, the stash), §18.5 the group inspector and stash cards |
 | `js/transport.js` | §16 | `saveState`/`restoreState` (the ledger walk of §17.6 plus solver-scratch clearing), `setRunning`, keyboard shortcuts (incl. copy/paste, §18.4), boot |

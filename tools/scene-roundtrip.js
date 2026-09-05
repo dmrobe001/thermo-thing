@@ -50,7 +50,7 @@ vm.runInContext(`
 // solver/physics/projection come along because check (4) below runs the real
 // substep on both worlds -- a derived field the reader recomputed wrongly shows up
 // as a diverging trajectory even when every serialized field matches.
-for(const f of ['js/state.js','js/geometry.js','js/constraints.js','js/solver.js',
+for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js','js/solver.js',
                 'js/physics.js','js/projection.js','js/loop.js','js/hud.js','js/scene.js','js/examples.js',
                 'js/select.js','js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
