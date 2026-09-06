@@ -4,6 +4,7 @@
 //    §14.0  numeric fields (numRow/numVal -- one editable number, as arithmetic)
 //    §14.1  selection state (clearSelection, select*, pickCable)
 //    §14.2  renderInspector    (build the panel DOM per selection type)
+//    §14.2c the belt's nodes   (beltNodesCard -- the loop, in order)
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
 // ---- §14.0 · numeric fields ----
@@ -208,7 +209,86 @@ function renderVesselInspector(v){
 // the EXTRA points are listed -- the base pair has its own named checkboxes above,
 // because on a rod or a slot those two are the constraint rather than passengers on
 // it. A joint carrying none shows no card at all.
+// ---- §14.2c · the belt's nodes ----
+// A belt IS its nodes (constraints.js §06.2e), so this is not an "extra control
+// points" card the way a rod's is -- it is the belt's own contents, listed in the
+// order the belting runs through them, with the one control each kind offers:
+//
+//   wheel   its wrap radius, and which way round the belt passes it. Nothing
+//           collides in this flatland, so that second one is a free choice per
+//           wheel rather than one crossed/uncrossed flag for the whole belt.
+//   eyelet  whether it is TIED (grips the belting at a material point, so the belt
+//           carries it along and it cuts the loop into another segment) and whether
+//           it is WELDED (its body's own angle follows the belt's local direction).
+//
+// Each row also reports the tension the segment DEPARTING that node is carrying, off
+// the same multipliers every other joint's reaction comes from (§09.3), and carries
+// the two order controls a loop needs -- moving a node round the loop is the only way
+// to say "the belt goes to this one first", and order is what makes a
+// figure-of-eight a figure-of-eight.
+function beltNodesCard(c){
+  const nds=beltNodes(c);
+  if(!nds.length) return '';
+  const segs=beltSegments(c);
+  const segAt=new Map(); segs.forEach((sg,j)=>{ if(sg.p!=null) segAt.set(sg.p,j); });
+  const rows=nds.map((nd,k)=>{
+    const where = nd.ep.id==null ? 'background' : ('body '+nd.ep.id);
+    const j=segAt.get(k);
+    const tens = j===undefined ? '' :
+      `<div class="field force"><span class="lab">tension after</span><span class="val" data-btens="${j}">--</span></div>`;
+    const body = beltIsWheel(nd)
+      ? `${numRow('wrap radius', 'bn_r'+k, (nd.r||0).toFixed(3), {step:0.02, min:0.02})}
+         <label class="chk"><input type="checkbox" data-bwrap="${k}" ${nd.wrap<0?'checked':''}> belt passes the other way round</label>`
+      : `<label class="chk"><input type="checkbox" data-btied="${k}" ${nd.tied?'checked':''}> tied to the belt</label>
+         <label class="chk"><input type="checkbox" data-block="${k}" ${nd.lock?'checked':''}> welded to the belt&rsquo;s direction</label>`;
+    return `<div class="field"><span class="lab">${k+1}. ${where}</span><span class="val">${beltIsWheel(nd)?'wheel':'eyelet'}</span></div>
+            ${body}${tens}
+            <div class="field"><span class="lab">order</span><span class="val">
+              <button class="del" data-bup="${k}" style="display:inline-block;width:auto;padding:2px 8px">&uarr;</button>
+              <button class="del" data-bdown="${k}" style="display:inline-block;width:auto;padding:2px 8px">&darr;</button></span></div>
+            <button class="del" data-bdel="${k}">Remove this node</button>`;
+  }).join('');
+  return `<div class="card"><div class="cardhead">the loop, in order</div>${rows}</div>`;
+}
+function bindBeltNodesCard(c){
+  const nodes=()=>beltNodes(c);
+  const commit=()=>{ renderInspector(); saveState(); };
+  for(const el of document.querySelectorAll('[data-bwrap]')){
+    const k=Number(el.dataset.bwrap);
+    el.onchange=ev=>{ const nd=nodes()[k]; if(nd) setBeltWrap(c, nd, ev.target.checked?-1:1); commit(); };
+  }
+  for(const el of document.querySelectorAll('[data-btied]')){
+    const k=Number(el.dataset.btied);
+    el.onchange=ev=>{ const nd=nodes()[k]; if(nd) setBeltTied(c, nd, ev.target.checked); commit(); };
+  }
+  for(const el of document.querySelectorAll('[data-block]')){
+    const k=Number(el.dataset.block);
+    el.onchange=ev=>{ const nd=nodes()[k]; if(nd) setBeltLock(c, nd, ev.target.checked); commit(); };
+  }
+  for(const nd of nodes()){
+    const k=nodes().indexOf(nd);
+    if(!beltIsWheel(nd) || !document.getElementById('bn_r'+k)) continue;
+    document.getElementById('bn_r'+k).onchange=()=>{ const v=numVal('bn_r'+k, x=>x>0.02);
+      if(!isFinite(v)) return;
+      nd.r=v; beltRefresh(c); commit(); };
+  }
+  // Moving a node round the loop, and taking one out: both re-cut the belt, so both
+  // re-read it against the path that is left. A loop of one node is not a loop, so
+  // the last removal takes the belt with it.
+  const reorder=(k,d)=>{ const arr=nodes(), n=arr.length; if(n<2) return;
+    const j=((k+d)%n+n)%n; const [nd]=arr.splice(k,1); arr.splice(j,0,nd);
+    beltRefresh(c); commit(); };
+  for(const el of document.querySelectorAll('[data-bup]'))   el.onclick=()=>reorder(Number(el.dataset.bup),-1);
+  for(const el of document.querySelectorAll('[data-bdown]')) el.onclick=()=>reorder(Number(el.dataset.bdown),1);
+  for(const el of document.querySelectorAll('[data-bdel]')){
+    const k=Number(el.dataset.bdel);
+    el.onclick=()=>{ nodes().splice(k,1);
+      if(nodes().length<2){ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); return; }
+      beltRefresh(c); commit(); };
+  }
+}
 function conPointsCard(c){
+  if(c.type==='belt') return beltNodesCard(c);   // a belt's nodes are the belt (§14.2c)
   if(!conTakesPoints(c)) return '';
   const pts=conPoints(c);
   if(!pts.length) return '';
@@ -225,6 +305,7 @@ function conPointsCard(c){
   return `<div class="card"><div class="cardhead">extra control points</div>${rows}</div>`;
 }
 function bindConPointsCard(c){
+  if(c.type==='belt'){ bindBeltNodesCard(c); return; }
   for(const el of document.querySelectorAll('[data-ptlock]')){
     const k=Number(el.dataset.ptlock);
     el.onchange=ev=>{ const pt=conPoints(c)[k]; if(pt) setConPointLock(c, pt, ev.target.checked);
@@ -314,10 +395,10 @@ function renderInspector(){
     const showTorque = ((isRod||isRack) && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
-    if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
-        ${numRow('wrap rA', 'f_rA', c.rA.toFixed(3), {step:0.02, min:0.02})}
-        ${numRow('wrap rB', 'f_rB', c.rB.toFixed(3), {step:0.02, min:0.02})}
-        <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
+    if(isBelt) extra=`${numRow('rest length', 'f_brest', beltRestLen(c).toFixed(3), {step:0.05, min:0.001})}
+        <div class="field"><span class="lab">path length</span><span class="val" id="f_blen">--</span></div>
+        ${numRow('softness (1/E)', 'f_bsoft', fmtLoose(c.soft||0), {step:'1e-4', min:0})}
+        <label class="chk"><input type="checkbox" id="f_bposable" ${c.posable?'checked':''}> posable</label>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
     if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>
         <label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> pin A welded${c.a.id==null?' (background)':''}</label>
@@ -327,7 +408,8 @@ function renderInspector(){
         <label class="chk"><input type="checkbox" id="f_posable" ${c.posable?'checked':''}> posable</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
-    const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
+    const note = isBelt ? 'A closed loop of belting through the wheels and eyelets listed below, in that order. It grips a wheel and a <b>tied</b> eyelet and slides through an untied one, so each stretch of belting between two grips holds a fixed amount of belt \u2014 which is what fixes the wheels\u2019 speed ratios and the belt\u2019s own length together. Nothing collides here, so which way round the belt passes each wheel is a free choice: flip one and the belt crosses. <b>Softness</b> is the reciprocal of the belting\u2019s elastic modulus \u2014 zero is inextensible, and anything larger lets the loop stretch, carrying tension = stretch/softness and pushing nothing when it is slack. <b>Posable</b> takes the belt out of the way entirely while you drag a body it runs on, and re-fits it to the pose you leave behind.'
+               : c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
                : isRack ? 'Nonholonomic: an infinite, massless rack line named by its two pins \u2014 pin A locates it, pin B aims it, and drag either to move the rack. Put both on one body and the rack rides that body\u2019s frame. A welded pin also locks its body\u2019s rotation to the rack\u2019s heading; tap a pin on the canvas to toggle it. Each pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
                : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. <b>Posable</b> changes nothing about the running rod: it says that while you drag a body this rod is jointed to, with the sim paused, it is released to a bare rail \u2014 length free, welds off, everything it joins pinned and free to slide along it \u2014 and is rigid again at whatever length and angles the pose leaves it at. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
@@ -346,18 +428,19 @@ function renderInspector(){
       <button class="del" id="f_del">Delete constraint</button>`;
     bindConPointsCard(c);
     if(isBelt){
-      // recapturing restPhase against the *current* body angles after a wrap-radius
-      // edit is the same trick the crossed-belt toggle already uses just below --
-      // it keeps the edit from reading as a spurious phase jump next step.
-      const recapturePhase=()=>{ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
-        c.restPhase=c.rA*A.th - c.sense*c.rB*B.th; };
-      document.getElementById('f_cross').onchange=ev=>{ c.sense=ev.target.checked?-1:1; recapturePhase(); renderInspector(); saveState(); };
-      const commitWrap=()=>{ const rA=numVal('f_rA',x=>x>0.02), rB=numVal('f_rB',x=>x>0.02);
-        if(!isFinite(rA) || !isFinite(rB)) return;
-        c.rA=rA; c.rB=rB;
-        recapturePhase(); renderInspector(); saveState(); };
-      document.getElementById('f_rA').onchange=commitWrap;
-      document.getElementById('f_rB').onchange=commitWrap;
+      // Rest length is the belt's own, spread over its segments in proportion to what
+      // each holds (§06.2e beltSetRestLen) -- so shortening an inextensible belt pulls
+      // its wheels together rather than winding one of them round. projectPositions
+      // then settles the machine onto the new length, exactly as a rod's does.
+      document.getElementById('f_brest').onchange=()=>{ const v=numVal('f_brest',x=>x>0);
+        if(!isFinite(v)) return;
+        beltSetRestLen(c, v); projectPositions(8); renderInspector(); saveState(); };
+      document.getElementById('f_bsoft').onchange=()=>{ const v=numVal('f_bsoft',x=>x>=0);
+        if(!isFinite(v)) return;
+        c.soft=v; renderInspector(); saveState(); };
+      // Nothing to capture, for the same reason a rod's posable flag has nothing:
+      // it says what the belt does while it is DRAGGED, not what it holds (§06.2d).
+      document.getElementById('f_bposable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
     }
     if(isRack){
       document.getElementById('f_weldA').onchange=ev=>{ setRackWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
@@ -480,6 +563,7 @@ function renderInspector(){
           <button data-ex="skate">Skate (knife-edge)</button>
           <button data-ex="integrator">Wheel integrator (CVT)</button>
           <button data-ex="rack">Rack and pinion</button>
+          <button data-ex="belt">Belt drive</button>
           <button data-ex="cable">Cable ratchet</button>
           <button data-ex="gasspring">Gas spring (vessel on ground)</button>
           <button data-ex="spinvessel">Spinning vessel (free)</button>
@@ -553,6 +637,13 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); }
+    if(c.type==='belt'){
+      const eL=document.getElementById('f_blen');
+      if(eL){ eL.textContent=beltLength(c).toFixed(3); setLive('f_brest', beltRestLen(c).toFixed(3)); }
+      const T=beltSegTensions(c);
+      for(const el of document.querySelectorAll('[data-btens]'))
+        el.textContent=(T[Number(el.dataset.btens)]||0).toFixed(2);
+    }
     if(c.type==='rack'){ const er=document.getElementById('f_pitchR');
       if(er){ const pt=rackFirstPinion(c); const g=pt?rackPitch(rackFrame(c),pt):null;
         er.textContent = g ? Math.abs(g.rho).toFixed(3) : '--'; } } }

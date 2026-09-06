@@ -81,7 +81,7 @@ Every bilateral constraint in the library is one instance of a single atomic ope
 | Slot / rail (point-on-line) | across-line drift zero once both ends are locked | 0-3, see below |
 | Prismatic slider | across-line relative velocity zero **and** relative omega zero | see below (slot, both ends locked) |
 | Gear (fixed ratio) | weighted sum of angular rates is zero | 1 |
-| Belt / cable (inextensible) | rim tangential speeds equal | 1 |
+| Belt (inextensible) | belt material is conserved in each stretch of the loop | 1 per segment, see §4.1c |
 
 The rod and the slot are conceptual complements -- distance-along-a-line vs. drift-across-one -- but are no longer built symmetrically: a rod always carries its base (distance) row, while a slot's base row is optional (see below).
 
@@ -94,7 +94,7 @@ The rod and the slot are conceptual complements -- distance-along-a-line vs. dri
 
 ### 4.1b Extra control points (a joint with more than two ends)
 
-A pin, rod, slot or rack is *named* by two endpoints, and on the first three those two are what the constraint is: a rod's pair fixes its length, a slot's pair is its rail. Anything else attached to the same joint is an **extra control point** (`con.pts`, `js/constraints.js` §06.2c) -- an ordinary `{id, off}` endpoint, body or background, plus what the attachment means:
+A pin, rod, slot or rack is *named* by two endpoints, and on the first three those two are what the constraint is: a rod's pair fixes its length, a slot's pair is its rail. (The belt of §4.1c is the exception that proves the rule: it has no base pair, and *every* one of its nodes is one of these points.) Anything else attached to the same joint is an **extra control point** (`con.pts`, `js/constraints.js` §06.2c) -- an ordinary `{id, off}` endpoint, body or background, plus what the attachment means:
 
 | Kind | What an extra point means | Rows |
 |---|---|---|
@@ -109,6 +109,33 @@ The **station** is the point's signed distance from end `a` along the line, capt
 An extra point's own rotation lock is the same per-endpoint operation §4.1 describes, applied to a third end instead of one of the two named ones: set, the point's body angle is held to the line's heading, against a rest angle captured when the lock goes on. A newly added point **inherits** that lock when every point already on the joint agrees, and is locked when they do not -- the conservative reading, since a lock is visible and can be tapped off, while a missing one shows up only once the mechanism moves.
 
 Row order is what makes this additive rather than invasive: an extra point's rows are always appended *after* the base pair's, so the reaction readout (§7, code §09.3) keeps reading the pair's multipliers off the indices it always did.
+
+### 4.1c The belt (a closed loop through wheels and eyelets)
+
+A **belt** (`type:'belt'`, `js/constraints.js` §06.2e) is a closed loop of belting through an ordered, cyclic list of **nodes**. It is the one constraint with no base pair at all: no node of a loop is more the belt than any other, so every node lives in `con.pts` -- the same extra-control-point list §4.1b describes, built by the same one constructor -- and the order they are written in is the order the belting runs through them. Two kinds:
+
+| Kind | What the node is | Grips the belt? |
+|---|---|---|
+| `wheel` | a disk the belt wraps, entering and leaving on tangent, at a wrap radius `r` (the body's own unless authored otherwise) and on the side `wrap` names | always (no slip) |
+| `eyelet` | a point the belt passes through, an ordinary `{id, off}` anchor on a body or on the fixed background | only when `tied` |
+
+An untied eyelet **routes** the belt and nothing more: the belt slides through it, so it bends the path without touching any speed ratio. That is how a belt is taken somewhere its wheels would not take it, and how a body carried by the belt is made to travel a chosen route. A **tied** eyelet grips the belting at one material point of it, so the belt can no longer slide there and the eyelet's body is carried along instead. An eyelet may additionally be **welded** (the same per-endpoint rotation lock §4.1 describes, against the belt's *local direction* -- the bisector of the headings the belt arrives and leaves on -- instead of against a two-point line), which turns its body with the belt. A wheel has no such lock: its no-slip contact already ties it to the belting.
+
+**Nothing collides in this flatland, so which way round the belt passes each wheel is a free choice per wheel** rather than one crossed/uncrossed flag for the whole belt. Flip one wheel's `wrap` and the belting visibly crosses itself to reach it; flip both wheels of a two-wheel belt and you have the same belt drawn the other way. The old `crossed` flag is the two-wheel case of this and nothing more.
+
+**What the belt holds is a material balance, one row per segment.** Cut the loop at its gripping nodes and it falls into **segments**, each running from one grip's departure tangent point to the next one's arrival tangent point through however many untied eyelets route it on the way. Reading the belt's material coordinate along the loop, a wheel's no-slip contact pins its rate at the rim to `sigma*r*(dpsi/dt - omega)` (with `psi` the span's heading) and an untied eyelet pins nothing. Differencing that across a segment, every `dpsi/dt` cancels against the tangent points' own drift and what is left is entirely local:
+
+```
+  sigma_p*r_p*omega_p  -  sigma_q*r_q*omega_q  =  sum over the segment's spans of  u . (v_next - v_this)
+```
+
+with `v` the nodes' own anchor velocities (a wheel's centre, an eyelet's point). What the near wheel feeds in, less what the far wheel takes out, is what that stretch of belting lengthens by. It **integrates** -- the row is holonomic, not a rolling row -- because the cancelled terms leave a position function behind, `C = sigma_q*r_q*(psi_in,q - theta_q) - sigma_p*r_p*(psi_out,p - theta_p) - (segment length) + restSeg_p`, whose captured constant `restSeg` is one per gripping node and is this belt's `restPhase`. Two wheels with fixed centres reduces to exactly the fixed phase ratio the belt has always held; summed over the loop the `psi` terms telescope into the wrapped arcs, so the whole set says nothing more nor less than *total length = rest length*, and the rest length is therefore the sum of the segments' constants rather than a field of its own.
+
+**Softness is the reciprocal of the belting's elastic modulus**, and it is the one thing a belt has that a rigid loop does not. At `soft = 0` the segment rows above are the whole belt and the loop is inextensible. Above zero, the rows drop to the `n-1` *differences* of adjacent segments -- which hold the no-slip ratios exactly, as before, and say that whatever the belt has stretched, it has stretched by the same amount everywhere -- and the loop's length is carried instead by a **force element** (`js/physics.js` §08.1): tension `T = max(0, L - restLen) / soft`, pulling each node's anchor along `T*(u_out - u_in)`, the gradient of the path length. Tension only: belting shorter than its rest length is slack and pushes nothing. Its strain energy `stretch^2 / (2*soft)` joins the spring potential in the ledger (§7, code §12.1), which is what keeps the per-island energy target honest about it. Note what the force does *not* do: `dL/dq` has no `theta` component, so tension alone puts no torque on any wheel. What turns a wheel is the *difference* in tension across it, and that is carried by the no-slip rows -- which is why a soft belt still transmits its ratio exactly, and why a loop with only one gripping node in it (nothing to hold a difference against) correctly drives nothing.
+
+This is a **lumped** elasticity: the belt's compliance is global rather than distributed along the belting, so the model does not resolve a stretch that differs from segment to segment under differing tensions. Everything else -- the no-slip contacts, the ratios, the path -- is exact either way, and at `soft = 0` the question does not arise.
+
+**A belt may be marked `posable`**, the same flag §4.1 gives a rod and with the same meaning: while a body the belt runs on is dragged with the sim paused, the belt is **released**. A released belt is simply not there -- no rows and no tension -- and re-reads its segments and its rest length from the pose the drag leaves behind. A belt has no line to fall back to the way a rod does, so half a belt would be a worse answer than none.
 
 ### 4.2 Nonholonomic bilateral (velocity-only; no stabilization)
 

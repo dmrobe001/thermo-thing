@@ -35,7 +35,13 @@
 // version had to move because the old two-token form still parses under the new
 // reading and means something else (a rack with no pinion at all), which is exactly
 // the silent reinterpretation a version number exists to prevent.
-const SCENE_VERSION = 3;
+// Version 4 rewrote the belt. A belt used to be `belt <disk> -- <disk> rA=... rB=...
+// crossed restPhase=...`, two rims and one phase between them; it is now
+// `belt pt=<node> pt=<node> ...`, a closed loop through an ordered list of wheels and
+// eyelets with no base pair at all (constraints.js §06.2e). The version had to move
+// for the reason version 3 did: the old two-token form still parses under the new
+// reading -- as a belt with no nodes -- and would mean something else.
+const SCENE_VERSION = 4;
 
 // ---- §17.1 · the ledger ----
 // One row per kind of thing a scene can contain. Each row names:
@@ -63,7 +69,8 @@ const SCENE_VERSION = 3;
 //     density-1 value for this radius" is stated once and read by both directions.
 //   * CAPTURED fields carry `always:true` and are written every time. These are
 //     read off the geometry at creation and never recomputed since (a rod's rest
-//     length, a weld's rest angle, a belt's phase, a cable's paid-out length), so
+//     length, a weld's rest angle, a belt's segment material, a cable's paid-out
+//     length), so
 //     the pose in the file does not imply them. Silently recapturing them on load
 //     would be the format quietly editing the physics.
 //
@@ -211,15 +218,28 @@ const SCENE_SCHEMA = [
     },
     build:(q,e)=>{ const [A,B]=endsFlags(q('lock')); return makeSlotCon(e.a, e.b, A, B); } },
 
+  // A belt has NO positional ends: it is a closed loop, and no node of a loop is more
+  // the belt than any other, so every one of them is a `pt` and the order they are
+  // written in is the order the belting runs through them (constraints.js §06.2e).
+  // Two nodes is the classic two-pulley belt; more is a longer route.
+  //
+  // `restLen` is written only for a belt with no gripping node at all -- the one case
+  // whose single segment closes on itself and so has no node to hang its material
+  // constant off. Everywhere else the rest length is the sum of the segments' own
+  // `restSeg`, and writing it too would let a file disagree with itself.
   { kind:'belt', list:'constraints', match:c=>c.type==='belt',
-    ends:[['a','id'], ['b','id']],
     fields:{
-      rA:{t:'num', always:true, get:c=>c.rA, set:(c,v)=>{c.rA=v;}},
-      rB:{t:'num', always:true, get:c=>c.rB, set:(c,v)=>{c.rB=v;}},
-      crossed:{t:'flag', def:false, get:c=>c.sense<0},
-      restPhase:{t:'num', always:true, get:c=>c.restPhase, set:(c,v)=>{c.restPhase=v;}},
+      soft:{t:'num', def:0, get:c=>c.soft, set:(c,v)=>{c.soft=v;}},
+      posable:{t:'flag', def:false, get:c=>!!c.posable},
+      restLen:{t:'num', always:true, when:c=>!beltGripCount(c),
+               get:c=>c.restLen, set:(c,v)=>{c.restLen=v;}},
+      pt:PT_FIELD('belt'),
     },
-    build:(q,e)=>makeBeltCon(e.a.id, e.b.id, q('crossed')?-1:1) },
+    build:q=>makeBeltCon([], {soft:q('soft'), posable:q('posable')}),
+    // Whatever the file did not capture is read off the path the nodes make -- which
+    // is also what makes a terse hand-written belt (nodes and nothing else) legal and
+    // mean the obvious thing: a belt fitted to the machine as drawn, unstressed.
+    finish:o=>beltRefresh(o, true) },
 
   { kind:'cvt', list:'constraints', match:c=>c.type==='cvt',
     ends:[['a','id'], ['b','id']],
@@ -461,10 +481,36 @@ function parseEp(tok, spec, ln, what, env){
 //                                  a rider slides)
 //   pt=3/pinion              a rack's pinion: body 3, meshing wherever it sits
 //
+// A BELT's nodes use the same key and the same endpoint syntax, with its own words
+// (constraints.js §06.2e), and they are the whole of the belt -- one `pt=` per node,
+// in the order the belting runs through them:
+//
+//   pt=3/wheel/restSeg=1.2         body 3, a wheel the belt wraps at the disk's own
+//                                  radius, carrying the segment that departs it
+//   pt=3/wheel/r=0.25/wrap=-1/restSeg=1.2   ...at an authored wrap radius, passed
+//                                  the other way round
+//   pt=5@(0,0.2)                   an eyelet on body 5: the belt passes through it
+//   pt=5@(0,0.2)/tied/restSeg=0.9  ...gripping the belting at one material point
+//   pt=bg(2,1)/lock/restAng=0      an eyelet on the background, turning whatever it
+//                                  is on with the belt's local direction
+//
 // Which of those a token may say depends on the kind it sits on, and saying anything
 // else is a load error rather than a field quietly ignored -- the same rule the
 // unknown-key check enforces for a line's own fields (SCENE.md §S.2).
 function fmtPt(fd, pt){
+  if(fd.kind==='belt'){
+    if(pt.kind==='wheel'){
+      const parts=[fmtEp(pt.ep,'id'), 'wheel'];
+      parts.push(`r=${fmtNum(pt.r||0)}`);
+      if(pt.wrap<0) parts.push('wrap=-1');
+      parts.push(`restSeg=${fmtNum(pt.restSeg||0)}`);
+      return parts.join('/');
+    }
+    const parts=[fmtEp(pt.ep,'ep')];
+    if(pt.tied) parts.push('tied', `restSeg=${fmtNum(pt.restSeg||0)}`);
+    if(pt.lock) parts.push('lock', `restAng=${fmtNum(pt.restAng||0)}`);
+    return parts.join('/');
+  }
   if(pt.kind==='pinion') return `${fmtEp(pt.ep,'id')}/pinion`;
   const parts=[fmtEp(pt.ep,'ep')];
   if(fd.kind==='rod' || fd.kind==='rack') parts.push(`s=${fmtNum(pt.s||0)}`);
@@ -475,7 +521,7 @@ function fmtPt(fd, pt){
 // one option, not two. The split is therefore at the slashes that sit outside every
 // parenthesis AND are followed by one of this format's option words -- nothing else
 // can begin a segment, and no expression can look like one.
-const PT_OPT = /^(s=|restAng=|lock(?=\/|$)|pinion(?=\/|$))/;
+const PT_OPT = /^(s=|r=|wrap=|restAng=|restSeg=|lock(?=\/|$)|pinion(?=\/|$)|wheel(?=\/|$)|tied(?=\/|$))/;
 function splitPt(tok){
   const out=[]; let depth=0, start=0;
   for(let i=0;i<tok.length;i++){
@@ -493,14 +539,16 @@ function parsePt(fd, name, tok, ln, env){
   const out={};
   const rest=parts.slice(1);
   const takes = kind==='pin' ? [] : kind==='slot' ? ['lock','restAng']
-              : kind==='rod' ? ['s','lock','restAng'] : ['s','lock','restAng','pinion'];
+              : kind==='rod' ? ['s','lock','restAng']
+              : kind==='belt' ? ['wheel','r','wrap','tied','lock','restAng','restSeg']
+              : ['s','lock','restAng','pinion'];
   for(const seg of rest){
     const eq=seg.indexOf('=');
     const key = eq<0 ? seg : seg.slice(0,eq);
     if(!takes.includes(key))
       throw new SceneError(ln, `${name}: a ${kind}'s point takes ${takes.join(', ')||'no options'}, got "${key}"`);
     if(out[key]!==undefined) throw new SceneError(ln, `${name}: "${key}" given twice`);
-    if(key==='lock' || key==='pinion'){
+    if(key==='lock' || key==='pinion' || key==='wheel' || key==='tied'){
       if(eq>=0) throw new SceneError(ln, `${name}: "${key}" is a flag -- write it on its own`);
       out[key]=true;
     } else {
@@ -508,6 +556,7 @@ function parsePt(fd, name, tok, ln, env){
       out[key]=numTok(seg.slice(eq+1), ln, `${name} ${key}`, env);
     }
   }
+  if(kind==='belt') return parseBeltPt(name, parts[0], out, ln, env);
   if(out.pinion){
     if(out.s!==undefined || out.lock)
       throw new SceneError(ln, `${name}: a pinion meshes wherever it sits -- it takes no station and no lock`);
@@ -521,6 +570,35 @@ function parsePt(fd, name, tok, ln, env){
   if(!out.lock && out.restAng!==undefined)
     throw new SceneError(ln, `${name}: restAng means nothing on a point that is not locked`);
   return {ep, kind:'point', s:out.s, lock:!!out.lock, restAng:out.restAng};
+}
+
+// One belt node's options -> the node record makeConPoint builds it from
+// (constraints.js §06.2e). The two kinds take disjoint vocabularies, and the pairs
+// that must travel together -- a grip and its segment constant, a lock and its rest
+// angle -- are checked here, as the line joints' are, so a half-written node is a
+// message rather than a belt that quietly holds something else.
+function parseBeltPt(name, epTok, out, ln, env){
+  const said = k => out[k]!==undefined;
+  if(out.wheel){
+    for(const k of ['tied','lock','restAng'])
+      if(said(k)) throw new SceneError(ln, `${name}: a wheel is gripped by its own contact -- "${k}" is an eyelet's word`);
+    const nd = {ep:parseEp(epTok, 'id', ln, name, env), kind:'wheel',
+                wrap: out.wrap!==undefined ? (out.wrap<0?-1:1) : 1};
+    if(out.r!==undefined) nd.r=out.r;
+    if(out.restSeg!==undefined) nd.restSeg=out.restSeg;
+    return nd;
+  }
+  for(const k of ['r','wrap'])
+    if(said(k)) throw new SceneError(ln, `${name}: "${k}" is a wheel's word -- an eyelet has no rim`);
+  const nd = {ep:parseEp(epTok, 'ep', ln, name, env), kind:'eyelet',
+              tied:!!out.tied, lock:!!out.lock};
+  if(!nd.tied && said('restSeg'))
+    throw new SceneError(ln, `${name}: restSeg means nothing on an eyelet the belt slides through -- write "tied" to grip it`);
+  if(!nd.lock && said('restAng'))
+    throw new SceneError(ln, `${name}: restAng means nothing on a node that is not locked`);
+  if(out.restSeg!==undefined) nd.restSeg=out.restSeg;
+  if(out.restAng!==undefined) nd.restAng=out.restAng;
+  return nd;
 }
 
 // A field's value -> its token text, and back. `flag` fields have no token: they

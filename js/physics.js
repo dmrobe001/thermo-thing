@@ -74,7 +74,7 @@ function computeIslands(){
   const worldRoot=ufFind(p,WORLD);
   const byRoot=new Map();
   const islandOf=i=>{ const r=ufFind(p,i); let isl=byRoot.get(r);
-    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[]}; byRoot.set(r,isl); }
+    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[],belts:[]}; byRoot.set(r,isl); }
     return isl; };
   // frozenSolid, not `static`: a vessel pinned at its mid-plane still has a live
   // length, so it belongs to an island and its length energy is that island's.
@@ -84,6 +84,14 @@ function computeIslands(){
   // real body (an element always has at least one).
   for(const sp of springs){ islandOf(bodyIndex((sp.a.id!=null?sp.a:sp.b).id)).springs.push(sp); }
   for(const rs of rotSprings){ islandOf(bodyIndex((rs.a.id!=null?rs.a:rs.b).id)).rotSprings.push(rs); }
+  // A SOFT belt (constraints.js §06.2e) is a force element as much as a spring is,
+  // and the strain it holds is that island's energy -- bucketed here for the same
+  // reason and by the same rule, off whichever of its nodes rides a real body.
+  for(const con of constraints){
+    if(con.type!=='belt' || !(con.soft>0)) continue;
+    const ep=conEndpoints(con).find(e=>e.id!=null); if(!ep) continue;
+    islandOf(bodyIndex(ep.id)).belts.push(con);
+  }
   return [...byRoot.values()];
 }
 // §08.6's rescale is a *multiplicative* correction (v *= sqrt(target/actual)),
@@ -508,6 +516,25 @@ function substep(h){
     // terms integrate to nothing, while a pinned VESSEL's length column -- which is
     // not frozen with its pose -- still has to get its share.
     for(const [idx,cx,cy,cw,cl] of mergeCols([A.velCols(Fx,Fy), B.velCols(-Fx,-Fy)])){
+      FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw; FL[idx]+=cl||0;
+    }
+  }
+  // belt tension (constraints.js §06.2e): a SOFT belt's length is not held by a row
+  // at all -- its stretch beyond the rest length is a strain, and the tension that
+  // strain implies, stretch/soft, is applied around the loop here. The pull at each
+  // node is T*(u_out - u_in), the gradient of the path length, so it reduces to the
+  // familiar "tension pulls a pulley along the bisector of its two spans" and puts
+  // no torque on any wheel: what turns a wheel is the DIFFERENCE in tension across
+  // it, and that is carried exactly by the no-slip rows, not by this force.
+  //
+  // An INEXTENSIBLE belt (soft 0) has no force here: its length is a constraint, and
+  // the rows of §06.2e are what hold it. beltTension returns zero for one, and zero
+  // again for a belt slack of its rest length -- belting pushes nothing.
+  for(const con of constraints){
+    if(con.type!=='belt') continue;
+    const f=beltFrame(con); if(!f) continue;
+    const T=beltTension(con, f); if(!(T>0)) continue;
+    for(const [idx,cx,cy,cw,cl] of beltPullCols(f, T)){
       FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw; FL[idx]+=cl||0;
     }
   }

@@ -106,7 +106,13 @@ function constraintsSatisfied(){
 // ---- §09.3 · reactionOf ----
 function reactionOf(con){
   const l=con._lam; const h=sim.h; if(!l||!l.length) return null;
-  if(con.type==='belt'){ return {belt:true, val:l[0]/h}; }
+  // A belt reports the tension it is carrying: the largest of its segments', since
+  // that is the one sizing the belting (§06.2e beltSegTensions gives them all, and
+  // the inspector lists them span by span).
+  if(con.type==='belt'){
+    let m=0; for(const T of beltSegTensions(con)) if(Math.abs(T)>Math.abs(m)) m=T;
+    return {belt:true, val:m};
+  }
   if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
     return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }

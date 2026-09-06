@@ -23,7 +23,8 @@ const TOOLS=[
   {id:'pin',key:'3',tip:'Pin / hinge (3)',svg:'<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/>'},
   {id:'rod',key:'4',tip:'Rigid rod (4)',svg:'<circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M7.5 16.5l9-9"/>'},
   {id:'slot',key:'5',tip:'Slot / prismatic (5)',svg:'<path d="M3 9h18M3 15h18"/><rect x="9" y="9" width="6" height="6" rx="1"/>'},
-  {id:'belt',key:'b',tip:'Belt (b)',svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
+  {id:'belt',key:'b',tip:'Belt loop \u2014 click a rim for a wheel, anywhere else for an eyelet; click the belting to add another (b)',
+   svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
   {id:'knife',key:'k',tip:'Knife-edge wheel (k)',svg:'<path d="M4 16h16"/><path d="M12 16l3-9 3 9"/><circle cx="8" cy="16" r="1.5"/>'},
   {id:'cvt',key:'v',tip:'Variable gear / CVT (v)',svg:'<circle cx="9" cy="12" r="6"/><circle cx="17" cy="12" r="3"/><path d="M9 12h8"/>'},
   {id:'rack',key:'t',tip:'Rack and pinion \u2014 two pins, then a pinion (t)',svg:'<circle cx="12" cy="13" r="6"/><path d="M2 19h20"/>'},
@@ -99,14 +100,40 @@ function constraintHit(con,wx,wy){
     }
     return false;
   }
+  if(con.type==='belt'){
+    // Picked by its belting -- the straight runs and the wrapped arcs the canvas
+    // actually draws (§06.2e beltNearestSpan) -- not by a line between two centres.
+    const h=beltNearestSpan(con,wx,wy); return !!h && h.d<=tol;
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return false;
   const [ax,ay]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
-  if(con.type==='belt'||con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B) return false;
+  if(con.type==='cvt'){ const B=bodies[bodyIndex(con.b.id)]; if(!B) return false;
     return distSeg(wx,wy,A.x,A.y,B.x,B.y)<=tol; }
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const p1=[ax-hh[0]/hl*0.5,ay-hh[1]/hl*0.5], p2=[ax+hh[0]/hl*0.5,ay+hh[1]/hl*0.5];
     return distSeg(wx,wy,p1[0],p1[1],p2[0],p2[1])<=tol; }
   return false;
+}
+// Which part of a belt a world point is nearest, and how far off it is (§06.2e).
+// The one answer the hit test, the canvas and the insertion of a new node all read:
+// a belt is picked by its BELTING -- the straight runs and the wrapped arcs alike --
+// not by a line between two centres. `i` names the span the point is nearest, which
+// is where a new node inserted here would go.
+function beltNearestSpan(con, wx, wy){
+  const f=beltFrame(con); if(!f) return null;
+  let best=null;
+  for(let i=0;i<f.spans.length;i++){ const s=f.spans[i];
+    const d=distSeg(wx,wy, s.Dx,s.Dy, s.Ax,s.Ay);
+    if(!best || d<best.d) best={i, d, f, arc:false};
+  }
+  // A wrapped arc belongs to the node it is on, and a click there reads as the span
+  // LEAVING that node -- which is the one a new eyelet placed on the far side of a
+  // wheel should join.
+  for(let i=0;i<f.nodes.length;i++){ const N=f.nodes[i]; if(!beltIsWheel(N.nd)) continue;
+    const d=Math.abs(Math.hypot(wx-N.wx, wy-N.wy) - Math.abs(N.sg));
+    if(!best || d<best.d) best={i, d, f, arc:true};
+  }
+  return best;
 }
 function pickConstraint(wx,wy){
   for(let i=constraints.length-1;i>=0;i--){ if(constraintHit(constraints[i],wx,wy)) return i; }
@@ -215,6 +242,9 @@ function conPointHandles(con){
   return conPoints(con).map((pt,k)=>{ const [x,y]=epWorld(pt.ep); return {which:'pt', k, x, y}; });
 }
 function conHandles(con){
+  // Every node of a belt is a control point and nothing else is (§06.2e), so the
+  // whole of its handle set is conPointHandles -- there are no base ends to add.
+  if(con.type==='belt') return conPointHandles(con);
   if(con.type==='rod'||con.type==='slot'||con.type==='rack'){
     // A rack's two pins are handles exactly as a rod's or a slot's two ends are:
     // drag to re-bind, tap to toggle the weld. There is no heading handle any more --
@@ -389,6 +419,21 @@ function applyPointHandle(con, k, wx, wy){
     return;
   }
   if(con.type==='pin'){ return; }              // a pin's points have no handles (§13.3)
+  if(con.type==='belt'){
+    // A belt's node is dragged to wherever it is dropped, keeping its place in the
+    // loop: onto a disk's rim to make it a wheel, anywhere else to make it an eyelet
+    // on that body or on the background. Same rule the belt tool's own click uses
+    // (beltNodeAt), so a node becomes by dragging exactly what it would have been by
+    // clicking. What the belt then holds is re-read against the path it now takes.
+    const spec=beltNodeAt(wx,wy);
+    pt.ep={id:spec.id, off:spec.off};
+    if(spec.kind==='wheel'){ pt.kind='wheel'; pt.r=spec.r; if(pt.wrap===undefined) pt.wrap=1;
+                             delete pt.tied; delete pt.lock; delete pt.restAng; }
+    else { const lock=!!pt.lock, tied=!!pt.tied;
+           pt.kind='eyelet'; pt.tied=tied; pt.lock=lock; delete pt.r; delete pt.wrap; }
+    beltRefresh(con);
+    return;
+  }
   const P=conLineProject(con,wx,wy);
   const bi=pickBody(P[0],P[1]);
   pt.ep = bi>=0 ? {id:bodies[bi].id, off:offOf(bodies[bi],P)} : {id:null, off:[P[0],P[1]]};
@@ -435,11 +480,14 @@ function resizeBody(b, newR){
     // an anchor on a body too, and has to ride the resize like the base pair's.
     for(const ep of conEndpoints(con)) scaleOffOnBody(ep, b.id, ratio);
     if(con.type==='belt'){
+      // A wheel's wrap radius is a copy of the body's own taken when the belt was
+      // built, so it rides the resize; the belt then re-reads its segments and its
+      // rest length against the path the new radius makes, exactly as the old
+      // two-wheel belt recaptured its phase here (constraints.js §06.2e beltRefresh).
       let touched=false;
-      if(con.a.id===b.id){ con.rA*=ratio; touched=true; }
-      if(con.b.id===b.id){ con.rB*=ratio; touched=true; }
-      if(touched){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-        con.restPhase=con.rA*A.th - con.sense*con.rB*B.th; }
+      for(const nd of beltNodes(con))
+        if(beltIsWheel(nd) && nd.ep.id===b.id){ nd.r*=ratio; touched=true; }
+      if(touched) beltRefresh(con);
     }
   }
   for(const cb of cables){ scaleOffOnBody(cb.tether, b.id, ratio); }
@@ -463,14 +511,18 @@ function scaleOffOnBodyXY(ep, bodyId, rx, ry){
 // (per-axis, mirroring resizeBody's uniform-ratio pass), rescale mass to
 // preserve density (area ratio = ratioX*ratioY, the rect analogue of
 // resizeBody's ratio^2), then commit the new half-dimensions and centre.
-// Belt wrap radii need no rect-specific handling here the way resizeBody
-// handles them for a circle: a belt's endpoints are restricted to circle
-// bodies at creation (tools.js §13.5), so a rectangle can never be one.
+// No wrap radius needs rescaling here the way resizeBody does it for a circle: a
+// belt WHEEL is a disk by construction (tools.js §13.5), so a rectangle can only
+// ever carry one of a belt's eyelets -- whose offset the anchor pass below scales
+// like any other, after which the belt is re-fitted to the path it now takes.
 function applyRectResize(b, newHw, newHh, newX, newY){
   newHw=Math.max(0.08,newHw); newHh=Math.max(0.08,newHh);
   const ratioX=newHw/b.hw, ratioY=newHh/b.hh;
   if(!isFinite(ratioX) || !isFinite(ratioY) || ratioX<=0 || ratioY<=0) return;
-  for(const con of constraints) for(const ep of conEndpoints(con)) scaleOffOnBodyXY(ep,b.id,ratioX,ratioY);
+  for(const con of constraints){
+    for(const ep of conEndpoints(con)) scaleOffOnBodyXY(ep,b.id,ratioX,ratioY);
+    if(con.type==='belt' && conEndpoints(con).some(ep=>ep.id===b.id)) beltRefresh(con);
+  }
   for(const cb of cables){ scaleOffOnBodyXY(cb.tether,b.id,ratioX,ratioY); }
   for(const sp of springs){ scaleOffOnBodyXY(sp.a,b.id,ratioX,ratioY); scaleOffOnBodyXY(sp.b,b.id,ratioX,ratioY); }
   b.mass*=ratioX*ratioY; b.hw=newHw; b.hh=newHh; b.x=newX; b.y=newY;
@@ -595,10 +647,19 @@ function updateHover(wx,wy){
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
     return;
   }
-  if(tool==='belt'||tool==='cvt'){
-    // both are rim-based (a wrap radius / rolling contact) and restricted to
-    // circle bodies at creation (§13.5) -- don't highlight a rectangle or a vessel
-    // as if it were a valid pick for either.
+  if(tool==='belt'){
+    // With nothing pending, an existing belt under the cursor takes the click as a
+    // new node spliced into the span it landed on (§13.5) -- highlight the belt
+    // rather than whatever is behind it. Otherwise the pick is an anchor like
+    // pin/rod/slot's: a disk's rim makes a wheel, anything else an eyelet, and empty
+    // space is a valid target because the background can hold an eyelet.
+    if(!pending){ const ci=pickConstraintOfType('belt',wx,wy); if(ci>=0){ hover=constraints[ci]; return; } }
+    const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
+    return;
+  }
+  if(tool==='cvt'){
+    // rim-based (a rolling contact) and restricted to circle bodies at creation
+    // (§13.5) -- don't highlight a rectangle or a vessel as if it were a valid pick.
     const bi=pickBody(wx,wy); if(bi>=0 && bodies[bi].shape==='circle') hover=bodies[bi];
     return;
   }
@@ -643,7 +704,7 @@ function startPinch(){
 // This is where each tool builds its constraint. The branches, in order, handle:
 // pinch guard, explicit pan, select (+handles/resize/grab -- the only case
 // that can claim a one-finger drag instead of panning), body, delete,
-// belt/cvt, knife, cable, pin, rod, slot, spring, rotspring.
+// cvt, belt, knife, cable, pin, rod, slot, spring, rotspring.
 //
 // The four kinds that take extra control points -- pin, rod, slot, rack
 // (constraints.js §06.2c) -- check first, on their FIRST click only, whether the
@@ -775,6 +836,50 @@ function pickConstraintOfType(type,wx,wy){
     const c=constraints[i]; if(c.type===type && constraintHit(c,wx,wy)) return i; }
   return -1;
 }
+// What a click makes of whatever is under it, in the belt's own vocabulary
+// (constraints.js §06.2e): a disk claimed at its EDGE becomes a WHEEL the belt wraps,
+// and anything else -- a click at a body's centre, through its middle, or through
+// empty space -- becomes an EYELET the belt passes through, anchored there. That is
+// the same distinction the rack's pinion draws, and the same one the player already
+// makes everywhere else: an edge is a rolling contact, an interior is an attachment.
+//
+// The test is snapAnchor's own edge/centre verdict (§13.2), not a distance to the
+// rim, and the difference matters on a disk smaller than the snap radius: there a
+// rim test is true everywhere on the body, and clicking such a disk could never mean
+// anything but "wrap it". snapAnchor takes the NEARER of the centre and the edge, so
+// a small disk's middle still reads as its centre, and an eyelet on it stays
+// reachable.
+function beltNodeAt(wx,wy){
+  const s=snapAnchor(wx,wy);
+  if(s && s.kind==='edge' && s.body.shape==='circle')
+    return {id:s.body.id, off:[0,0], kind:'wheel', r:s.body.r, wrap:1};
+  if(s) return {id:s.body.id, off:offOf(s.body,s.wp), kind:'eyelet'};
+  const bi=pickBody(wx,wy);
+  if(bi>=0) return {id:bodies[bi].id, off:offOf(bodies[bi],[wx,wy]), kind:'eyelet'};
+  return {id:null, off:[wx,wy], kind:'eyelet'};
+}
+// Splice a node into an existing belt, at the span the click landed on -- so a belt
+// gains a wheel or an eyelet exactly where the belting was pointed at, and the loop's
+// order (which is what makes a figure-of-eight a figure-of-eight) is preserved. The
+// belt then re-reads every segment and its rest length against its new path: adding a
+// node changes the route, so there is no earlier stress for it to keep.
+function addBeltNode(wx,wy){
+  const ci=pickConstraintOfType('belt',wx,wy); if(ci<0) return false;
+  const con=constraints[ci];
+  const hit=beltNearestSpan(con,wx,wy); if(!hit) return false;
+  const spec=beltNodeAt(wx,wy);
+  // A node on a body the belt already names would only restate what that node says,
+  // exactly as a second point on one rigid body would for a rod (addControlPoint) --
+  // spend the click on this belt rather than starting a new one behind it.
+  if(spec.id!=null && beltNodes(con).some(nd=>nd.ep.id===spec.id)) return true;
+  const nd=makeConPoint(con, spec, spec);
+  const nodes=beltNodes(con);
+  nodes.splice(nodes.indexOf(nd),1);
+  nodes.splice(hit.i+1, 0, nd);
+  beltRefresh(con);
+  selectConstraint(ci); saveState();
+  return true;
+}
 // Clicking an existing joint of the SAME kind, with no pick pending, adds a control
 // point to it instead of starting a new one (constraints.js §06.2c). The point lands
 // where the click met the joint -- on its line, or on a pin's pivot -- and binds
@@ -896,16 +1001,36 @@ function runToolClick(wx,wy){
       bodies.splice(bi,1); clearSelection(); saveState(); }
     return;
   }
-  if(tool==='belt' || tool==='cvt'){
-    // two bodies: A first, then B (occluded B reachable via except-pick).
-    // Both are rim-based (a wrap radius for belt, a rolling contact for
-    // cvt) and only make sense between circular bodies -- neither a rectangle nor
-    // a vessel is a valid pick for either end.
+  if(tool==='cvt'){
+    // two bodies: A first, then B (occluded B reachable via except-pick). Rim-based
+    // (a rolling contact) and only meaningful between circular bodies -- neither a
+    // rectangle nor a vessel is a valid pick for either end.
     if(!pending){ const bi=pickBody(wx,wy); if(bi<0||bodies[bi].shape!=='circle')return; pending={id:bodies[bi].id, wp:[wx,wy]}; return; }
     const bi2=pickBodyExcept(wx,wy,pending.id); if(bi2<0||bodies[bi2].shape!=='circle')return;
     const A=bodies[bodyIndex(pending.id)], B=bodies[bi2];
-    constraints.push(tool==='belt' ? makeBeltCon(A.id,B.id,1) : makeCvtCon(A.id,B.id));
+    constraints.push(makeCvtCon(A.id,B.id));
     pending=null; saveState();
+    return;
+  }
+  if(tool==='belt'){
+    // A belt is a loop, so it is built by naming the places it runs through, and
+    // grown the same way afterwards. TWO clicks make one: each names a node --
+    // a disk's rim for a wheel the belt wraps, anything else for an eyelet it passes
+    // through (beltNodeAt) -- and the pair is already a closed loop, the classic
+    // two-pulley belt. From then on a click on the BELTING itself splices a third,
+    // fourth, ... node into the span it landed on (addBeltNode), which is the same
+    // one-click gesture that adds an arm to a pin or a pinion to a rack (§06.2c).
+    if(!pending && addBeltNode(wx,wy)) return;
+    if(!pending){ const spec=beltNodeAt(wx,wy);
+      pending={belt:spec, wp:epWorld({id:spec.id, off:spec.off})}; return; }
+    const first=pending.belt, second=beltNodeAt(wx,wy);
+    // Two nodes on one body is a loop with nothing to say: both would ride the same
+    // frame and every row would cancel. Wait for a second, different pick.
+    if(second.id!=null && second.id===first.id) return;
+    if(second.id==null && first.id==null &&
+       Math.hypot(second.off[0]-first.off[0], second.off[1]-first.off[1])<1e-6) return;
+    constraints.push(makeBeltCon([first, second]));
+    pending=null; selectConstraint(constraints.length-1); saveState();
     return;
   }
   if(tool==='rack'){
@@ -957,8 +1082,8 @@ function runToolClick(wx,wy){
       pending = t ? {cable:true, tid:t.body.id, toff:offOf(t.body,t.wp), wp:t.wp}
                   : {cable:true, tid:null, toff:[wx,wy], wp:[wx,wy]};
       return; }
-    // SECOND click = spool body -- a cable winds around a rim, so (like
-    // belt/cvt above) the spool must be circular; the tether end above is
+    // SECOND click = spool body -- a cable winds around a rim, so (like a belt's
+    // wheels and the cvt above) the spool must be circular; the tether end above is
     // unrestricted since it's just an attachment point, not a wound rim.
     const bi=pickBody(wx,wy); if(bi<0) return;
     const S=bodies[bi]; if(S.shape!=='circle') return;     // a spool is always a disk
@@ -1061,8 +1186,8 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='rotspring'){
-    // Two bodies, like belt/cvt -- no offset, the whole body frame's theta is
-    // the feature -- but unlike belt/cvt an empty-space click is a valid
+    // Two bodies, like the cvt -- no offset, the whole body frame's theta is
+    // the feature -- but unlike the cvt an empty-space click is a valid
     // pick too (id:null, the background reads as a fixed theta=0 reference,
     // constraints.js §06.6). The rest angle captures whatever relative angle
     // is live at creation, so a freshly-placed rotational spring starts
@@ -1244,7 +1369,10 @@ function endPointer(e){
       // ends do -- a pinion has no lock to toggle, and setConPointLock says so.
       else if(anchorDrag.which==='pt'){
         const pt=conPoints(con)[anchorDrag.k];
-        if(pt && conPointLockable(con,pt)){ toggleConPointLock(con, pt); renderInspector(); saveState(); }
+        // A belt's WHEEL has no lock; what a tap flips there is which way round the
+        // belt passes it (§06.2e), the one per-wheel choice this flatland leaves open.
+        if(pt && conType==='belt' && beltIsWheel(pt)){ toggleBeltWrap(con, pt); renderInspector(); saveState(); }
+        else if(pt && conPointLockable(con,pt)){ toggleConPointLock(con, pt); renderInspector(); saveState(); }
       }
     }
     anchorDrag=null; lastSnap=null; downScreen=null; return;
