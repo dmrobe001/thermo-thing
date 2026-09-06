@@ -16,6 +16,7 @@ function energy(island){
   const bs = island ? island.bodyIdx.map(i=>bodies[i]) : bodies;
   const sps = island ? island.springs : springs;
   const rss = island ? island.rotSprings : rotSprings;
+  const blt = island ? island.belts : constraints.filter(c=>c.type==='belt');
   let ke=0, pe=0, U=0, WA=0;
   for(const b of bs){
     // A vessel's gas internal energy and the atmosphere's own P*V are read even for
@@ -40,6 +41,11 @@ function energy(island){
   for(const sp of sps){ const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
     const L=Math.hypot(wax-wbx,way-wby); SPE += 0.5*sp.k*(L-sp.restLen)*(L-sp.restLen); }
   for(const rs of rss){ const dev=rotSpringRelAngle(rs)-rs.restAngle; SPE += 0.5*rs.k*dev*dev; }
+  // A soft belt's strain energy, stretch^2/(2*soft) (constraints.js §06.2e), belongs
+  // in exactly the same row: it is the potential the tension force of §08.1 is the
+  // gradient of, so §08.6 has to see it as a KE<->PE channel rather than a leak.
+  // An inextensible belt holds no strain and contributes nothing.
+  for(const con of blt) SPE += beltEnergy(con);
   return {ke,pe,SPE,U,WA,tot:ke+pe+SPE+U+WA};
 }
 // ---- §12.1b · bathTotal ----

@@ -106,12 +106,15 @@ function makeGroup(idList){
   g.base = {
     bodies: m.bodies.map(b => ({ b, u:b.x-bx.cx, v:b.y-bx.cy, th:b.th, vx:b.vx, vy:b.vy })),
     anchors: groupAnchors(m).map(ep => ({ ep, u:ep.off[0]-bx.cx, v:ep.off[1]-bx.cy })),
-    // A belt's phase is r_A*th_A - sense*r_B*th_B, which is an angle sum with UNEQUAL
-    // weights -- turning the whole widget rigidly changes it, even though nothing
-    // slipped. The correction is exact and linear, so it is applied from the capture
-    // rather than recaptured (which would silently unstress an authored belt).
-    belts: m.constraints.filter(c => c.type==='belt')
-      .map(c => ({ c, restPhase:c.restPhase, rate:c.rA - c.sense*c.rB })),
+    // A belt holds a material length per segment measured against its own path
+    // (constraints.js §06.2e), so a turn of the box leaves every one of them alone --
+    // there is nothing to correct, and the recapture below is only re-seeding the
+    // headings whose branch the turn may have crossed. What DOES have to survive a
+    // SCALE is a soft belt's slack or stretch: that is a length the belt owns, like a
+    // spring's rest length, so it is carried across the recapture rather than read
+    // off the scaled geometry (which would silently pull the belt taut).
+    belts: m.constraints.filter(c => c.type==='belt' && c.soft>0)
+      .map(c => ({ c, stretch: beltLength(c) - beltRestLen(c) })),
     // Same story for a rotational spring with one end on the background: its
     // reference is the fixed world's theta = 0, so a turn of the box turns it.
     rotSprings: m.rotSprings.filter(rs => rs.a.id==null || rs.b.id==null)
@@ -190,8 +193,8 @@ function groupApply(g){
 //     angle between the points a member names is invariant, because all of those
 //     points moved together.
 //   * A ROTATION is invariant in the same way, with the two exceptions captured in
-//     `base` above -- a belt's phase and a background-referenced rotational spring's
-//     rest angle, both of which measure against the fixed world. Those two shift
+//     `base` above -- a background-referenced rotational spring's rest angle, which
+//     measures against the fixed world. Those two shift
 //     analytically. The rest angles of welds and prismatic locks are re-read rather
 //     than left alone, not because their value changes (it does not) but because
 //     they are measured against a raw atan2 whose branch the turn may have crossed;
@@ -205,7 +208,6 @@ function groupApply(g){
 //     are the opposite case: they are lengths the ELEMENT owns rather than distances
 //     the pose implies, so they scale, and an authored stretch or slack survives.
 function groupRecapture(g){
-  for(const r of g.base.belts) r.c.restPhase = r.restPhase + r.rate*g.ang;
   for(const r of g.base.rotSprings) r.rs.restAngle = r.restAngle + r.sign*g.ang;
   for(const r of g.base.springs) r.sp.restLen = r.restLen * g.s;
   for(const r of g.base.cables) r.cb.Ltot = r.Ltot * g.s;
@@ -220,6 +222,11 @@ function groupRecapture(g){
   for(const c of g.m.constraints){
     if(g.scaled) recaptureConPose(c); else recaptureConAngles(c);
   }
+  // ...and then give a soft belt its slack back, in the scaled units of the box it
+  // travelled in -- the same rule a spring's rest length and a cable's paid-out
+  // length follow just above, applied after the recapture rather than before it
+  // because the recapture is what re-read the path this is measured against.
+  for(const r of g.base.belts) beltSetRestLen(r.c, beltLength(r.c) - r.stretch*g.s);
 }
 
 // ---- the box's handles ----

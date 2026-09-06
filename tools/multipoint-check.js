@@ -226,7 +226,7 @@ ok('conHandles lists the base pair and then every point',
 // its handle still has somewhere to be, which is what makeConPoint's normalization
 // of the endpoint shape buys.
 run(`importScene([
-  'scene 3','sim gravity=off',
+  'scene 4','sim gravity=off',
   'body 1 x=0 y=0 r=0.2','body 2 x=2 y=0 r=0.2','body 3 x=1 y=-1 r=0.4',
   'rack 1 -- 2 pt=3/pinion'].join('\\n'))`);
 ok('a file-loaded pinion resolves to a handle position',
