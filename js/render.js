@@ -510,12 +510,21 @@ function drawConstraint(con){
 // a square where it is welded to the belt's local direction, a joint dot where it is
 // not, over a ground hatch where it rides the background -- the same vocabulary a
 // rod's ends speak. A TIED eyelet, which grips the belting rather than letting it
-// slide, is ringed to say so.
+// slide, is ringed to say so. The belting is dashed while it is carrying nothing --
+// slack, or released for a pose drag.
 function drawBeltConstraint(con,col,sel){
   const f=beltFrame(con); if(!f) return;
-  const slack = con.soft>0 && f.length <= beltRestLen(con)+1e-9;
+  // Dashed wherever the belting is carrying nothing, which happens two ways: a SOFT
+  // belt shorter than its rest length is slack, and a POSABLE belt is released for
+  // the length of a pose drag (constraints.js §06.2d). The second is the belt's
+  // answer to the rail motif a released rod wears -- it says the same thing, that
+  // this member is not holding the machine together just now, in the only vocabulary
+  // a belt has. Read off conPosing (the gesture), not conReleased (the row-building
+  // scope), for the reason §06.2d gives: between two pointermoves the scope is
+  // closed and the canvas would flicker back to solid.
+  const loose = (con.soft>0 && f.length <= beltRestLen(con)+1e-9) || conPosing(con);
   ctx.strokeStyle=col; ctx.lineWidth=sel?3:2.5;
-  if(slack) ctx.setLineDash([6,5]);            // a soft belt shorter than its rest length carries nothing
+  if(loose) ctx.setLineDash([6,5]);
   ctx.beginPath();
   for(const sp of f.spans){
     const [x1,y1]=w2s(sp.Dx,sp.Dy), [x2,y2]=w2s(sp.Ax,sp.Ay);

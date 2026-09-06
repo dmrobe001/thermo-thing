@@ -23,8 +23,10 @@
 //      belt pushes nothing), the strain is in the energy ledger, and the ledger
 //      holds flat over a run -- which is what says the force and the potential are
 //      the same thing.
-//   6. `posable` takes the belt out of the rows entirely while a body it runs on is
-//      dragged, and puts it back re-fitted to the pose the drag leaves.
+//   6. `posable` takes the belt out of the rows entirely while the machine is posed
+//      -- wherever the hand is, not only on a wheel, which is the case a belt is
+//      usually in -- and puts it back re-fitted to the pose the drag leaves. A
+//      posable ROD keeps the narrower rule, because a released rod is still a rail.
 //   7. the scene file carries every node and every captured constant, round-trips
 //      byte-for-byte, and refuses a node that claims a word of the other kind.
 //   8. the tool layer builds one: a click on a disk's EDGE makes a wheel and a click
@@ -207,11 +209,11 @@ console.log('\n6. posable');
   ok('a posable belt is an ordinary belt when nothing is being dragged',
      run('rowsFor(BELT()).length')===2, String(run('rowsFor(BELT()).length')));
   ok('...and no rows at all while a body it runs on is dragged',
-     run('beginPosing(bodies[0].id); const n=withPosing(()=>rowsFor(BELT()).length); endPosing(); n')===0,
+     run('beginPosing(bodies[0].id); var n0=withPosing(()=>rowsFor(BELT()).length); endPosing(); n0')===0,
      'the released belt still had rows');
   ok('...and none of its tension either',
      run(`beltSetRestLen(BELT(), beltLength(BELT())-0.2); BELT().soft=0.01;
-          beginPosing(bodies[0].id); const T=withPosing(()=>beltTension(BELT())); endPosing(); T`)===0,
+          beginPosing(bodies[0].id); var T0=withPosing(()=>beltTension(BELT())); endPosing(); T0`)===0,
      'the released belt still pulled');
   // The drag moves the body itself; the recapture then re-fits the belt to it.
   run(`BELT().soft=0; beginPosing(bodies[1].id); bodies[1].x=2.6;
@@ -219,6 +221,40 @@ console.log('\n6. posable');
   ok('...and the pose the drag leaves is the belt\'s new rest length',
      near(run('beltRestLen(BELT())'), run('beltLength(BELT())'), 1e-12) && run('conMaxC(BELT())')<1e-12,
      `rest=${run('beltRestLen(BELT())')} len=${run('beltLength(BELT())')}`);
+  // The release reaches further than a rod's, and this is the case that needs it: a
+  // belt's wheels are not what you grab. An idler on a swinging bar, dragged BY THE
+  // BAR -- which the belt does not name -- must still pose, and the belt must come
+  // out re-fitted to it rather than having held the bar still.
+  run(`clearScene(); sim.gravity=false; sim.running=false; cam.scale=64;
+    var A=makeBody(0,0,0.4), B=makeBody(2,0,0.25), C=makeBody(2,0,0.15);
+    bodies.push(A,B,C);
+    constraints.push(makeRodCon({id:null,off:[0,-2]},{id:A.id,off:[0,0]},true,false));
+    constraints.push(makeRodCon({id:null,off:[3.2,-1]},{id:C.id,off:[0,0]},false,false));
+    constraints.push(makePinCon({id:C.id,off:[0,0]},{id:B.id,off:[0,0]}));
+    constraints.push(makeBeltCon([{id:A.id,off:[0,0],kind:'wheel'},
+                                  {id:B.id,off:[0,0],kind:'wheel'}], {posable:true}));
+    refreshFrozen(); saveState(true);`);
+  ok('a posable belt is released by a drag on a body it does not name',
+     run(`beginPosing(bodies[2].id); var n1=withPosing(()=>rowsFor(BELT()).length); endPosing(); n1`)===0,
+     'the belt held on through a drag elsewhere in the machine');
+  const bar0 = run('bodies[2].x');
+  run(`setTool('select'); drag={bi:2, off:[0,0]}; beginPosing(bodies[2].id);
+       for(var i=0;i<20;i++) poseDragTo(2 - 0.05*i, -0.05*i);
+       endPosing(); drag=null;`);
+  ok('...so dragging the bar that carries the idler actually poses the machine',
+     Math.abs(run('bodies[2].x')-bar0) > 0.2,
+     `bar x ${bar0} -> ${run('bodies[2].x')}`);
+  ok('...and the belt comes out re-fitted exactly to the pose it was left in',
+     near(run('beltRestLen(BELT())'), run('beltLength(BELT())'), 1e-9) && run('conMaxC(BELT())')<1e-9,
+     `rest=${run('beltRestLen(BELT())')} len=${run('beltLength(BELT())')} maxC=${run('conMaxC(BELT())')}`);
+  // A rod's release is NOT widened with it: it is still a rail while released, and a
+  // rail nobody is holding is a different machine.
+  run(`clearScene(); var A=makeBody(0,0,0.3), B=makeBody(1,0,0.3), C=makeBody(3,0,0.3);
+    bodies.push(A,B,C);
+    constraints.push(makeRodCon({id:A.id,off:[0,0]},{id:B.id,off:[0,0]},false,false,true));`);
+  ok('a posable ROD keeps the narrow rule: a drag elsewhere does not release it',
+     run(`beginPosing(bodies[2].id); var n2=withPosing(()=>rowsFor(constraints[0]).length); endPosing(); n2`)===1,
+     'the rod was released by a drag it has nothing to do with');
 }
 
 console.log('\n7. the scene file');

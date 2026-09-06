@@ -135,7 +135,11 @@ with `v` the nodes' own anchor velocities (a wheel's centre, an eyelet's point).
 
 This is a **lumped** elasticity: the belt's compliance is global rather than distributed along the belting, so the model does not resolve a stretch that differs from segment to segment under differing tensions. Everything else -- the no-slip contacts, the ratios, the path -- is exact either way, and at `soft = 0` the question does not arise.
 
-**A belt may be marked `posable`**, the same flag §4.1 gives a rod and with the same meaning: while a body the belt runs on is dragged with the sim paused, the belt is **released**. A released belt is simply not there -- no rows and no tension -- and re-reads its segments and its rest length from the pose the drag leaves behind. A belt has no line to fall back to the way a rod does, so half a belt would be a worse answer than none.
+**A belt may be marked `posable`**, the same flag §4.1 gives a rod and with the same meaning: while the machine is posed with the sim paused, the belt is **released**. A released belt is simply not there -- no rows and no tension -- and re-reads its segment material, and so its rest length, from the pose the drag leaves behind. A belt has no line to fall back to the way a rod does, so half a belt would be a worse answer than none.
+
+Its release **reaches further than a rod's, and deliberately**. A posable rod is released only where it is directly jointed to the dragged body, because a released rod is still a *rail* and everything riding it rides it differently -- so the reach has to match the gesture. A released belt is not a rail but an absence, so releasing one the drag cannot reach changes nothing at all: its rows were satisfied and stay satisfied, and the recapture re-reads geometry that did not move. A posable belt is therefore released for **any** pose drag. What the narrow rule cost was the case a belt is usually in, since its wheels are not what you grab: mount an idler on a swinging bar and drag the *bar*, and a belt released only on its own nodes holds its length rigidly and the bar does not move -- a posable belt that refuses to be posed through. Released on any drag, the bar swings, the wheels follow, and the belt re-fits to the configuration the hand produced.
+
+The canvas says so: released belting is drawn dashed, the same thing the dash already says about a soft belt gone slack -- this member is not holding the machine together just now.
 
 ### 4.2 Nonholonomic bilateral (velocity-only; no stabilization)
 

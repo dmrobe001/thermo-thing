@@ -130,9 +130,12 @@ never recomputed since. The pose no longer implies them:
   exported pose -- with two deliberate exceptions, both of them rods that are being
   moved *by hand* through geometry the solver is no longer holding: a **grounded**
   body's anchors (`recaptureGrounding`, whose rows are compiled away, §S.8) and a
-  **posable** rod's own length, welds and stations, re-read after each step of a
-  pose drag that reached it -- because for that step the rod was released and held
-  none of them (`constraints.js` §06.2d). Both are the editor writing the scene, which is what
+  **posable** member's own captures -- a rod's length, welds and stations, a belt's
+  segment material and so its rest length -- re-read after each step of a pose drag
+  that reached it, because for that step it was released and held none of them
+  (`constraints.js` §06.2d). A posable belt is reached by ANY pose drag, which is
+  what makes its rest length an editable-by-dragging parameter in the case a belt is
+  usually in: its wheels are not what you grab. Both are the editor writing the scene, which is what
   an editor is for; neither happens while the sim runs.
 - `belt` node data -- each `pt`'s `r`/`wrap` on a wheel, `tied`/`lock` on an eyelet,
   and the captured `restSeg` (the belting held by the segment departing that node)

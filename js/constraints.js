@@ -645,14 +645,14 @@ function dropBodyFromConstraints(id){
 // A rod or a belt may be marked `posable`. It changes nothing about the running
 // physics -- a posable member is an ordinary rigid one at every substep -- and
 // everything about what happens while the player POSES the machine: dragging a body
-// around with the sim paused (tools.js §13.6). A posable joint DIRECTLY JOINTED TO
-// THE DRAGGED BODY is RELEASED for the length of that drag.
+// around with the sim paused (tools.js §13.6). A posable joint is RELEASED for the
+// length of that drag, and re-reads what it holds from the pose the drag leaves.
 //
-// A released BELT is simply not there: it contributes no rows and no tension, so a
-// wheel it turns may be moved or spun freely and the belt re-reads its segments and
-// its rest length from wherever the pose left them. That is the whole of it -- a belt
-// has no line to fall back to the way a rod does, and half a belt would be a worse
-// answer than none.
+// A released BELT is simply not there: it contributes no rows and no tension, so
+// every wheel it turns may be moved or spun freely and the belt re-reads its segment
+// material -- and so its rest length -- from wherever the pose left them. That is the
+// whole of it: a belt has no line to fall back to the way a rod does, and half a belt
+// would be a worse answer than none.
 //
 // A released ROD holds only its own line:
 //
@@ -664,13 +664,30 @@ function dropBodyFromConstraints(id){
 //     and become RIDERS, held on the line and free to slide along it -- the same one
 //     row a slot's riders get, which is the sense in which the bar becomes a rail.
 //
-// "Directly jointed" is conEndpoints (§06.2c) and nothing cleverer: the rod names
-// the dragged body as one of its ends or as one of its extra points. A posable rod
-// one joint further away stays a rigid rod, so the release reaches exactly as far as
-// the hand does -- grab a body and the members it hangs off go slack, and the rest of
-// the machine articulates around them as it always would. The alternative, releasing
-// every posable rod in the scene for the duration of any drag, is both a bigger edit
-// than the gesture asks for and one the player cannot see the extent of.
+// HOW FAR THE RELEASE REACHES is the one place the two differ, and the difference
+// follows from what each of them becomes.
+//
+// A posable ROD is released only where it is DIRECTLY JOINTED to the dragged body --
+// conEndpoints (§06.2c) and nothing cleverer: the rod names that body as one of its
+// ends or as one of its extra points. A posable rod one joint further away stays a
+// rigid rod, so the release reaches exactly as far as the hand does -- grab a body
+// and the members it hangs off go slack, and the rest of the machine articulates
+// around them as it always would. Releasing every posable rod in the scene for the
+// duration of any drag would be both a bigger edit than the gesture asks for and one
+// the player cannot see the extent of: a released rod is still a RAIL, and everything
+// riding it rides it differently.
+//
+// A posable BELT is released for ANY pose drag, wherever the hand is. Nothing about
+// the reach argument above survives the fact that a released belt is not a rail but
+// an absence: releasing one whose wheels the drag cannot reach changes nothing at
+// all, because its rows were satisfied and stay satisfied and the recapture re-reads
+// geometry that did not move. What the narrow rule DID cost was the case a belt is
+// usually in -- its wheels are not what you grab. Mount an idler on a swinging bar
+// and drag the BAR, and under the rod's rule the belt is not released (it does not
+// name the bar), so it holds its length rigidly and the bar does not move: a posable
+// belt that refuses to be posed through. Released on any drag, the bar swings, the
+// wheels follow, and the belt re-fits to the configuration the hand produced -- which
+// is what marking it posable asked for.
 //
 // A rod grounding a body, or locking a vessel's length, releases those too (see
 // rodGrounds/rodLocksLength above): a rod that holds nothing cannot be the thing
@@ -709,7 +726,7 @@ function withPosing(fn){ posing++; try { return fn(); } finally { posing--; } }
 // with no reference to any of the state above, so a check can ask it about a gesture
 // that is not happening (tools/posable-check.js does).
 const conPosableFor = (con, rootId) => !!con.posable && rootId!=null
-  && conEndpoints(con).some(ep => ep.id===rootId);
+  && (con.type==='belt' || conEndpoints(con).some(ep => ep.id===rootId));
 // Released by the gesture in progress (what the canvas draws) ...
 const conPosing = con => conPosableFor(con, posingRoot);
 // ... and released right now, in the rows being built (what the solver sees).
