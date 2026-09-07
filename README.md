@@ -59,5 +59,6 @@ DEVELOPMENT.md          physics engine and constraint library design
 CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
 VESSEL.md               design note for the gas vessel (slots alongside DEVELOPMENT.md)
 SCENE.md                design note for the scene file format and the constructible set
+VERTEX.md               design note for the planned vertex/line scene model (not yet built)
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```
