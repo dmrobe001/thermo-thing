@@ -11,9 +11,8 @@
 //   3. a rigid transform (translate + turn) turns every selected body by the box's
 //      own delta, holds every distance between them, and leaves every member
 //      coupling exactly as satisfied and as stressed as it was -- including the two
-//      that measures against the fixed world, a background rotational spring's rest
-//      angle -- and the belt, whose material lengths measure against its own path
-//      and so want no correction at all.
+//      that measure against the fixed world, a belt's phase and a background
+//      rotational spring's rest angle.
 //   4. ...and a coupling with a foot outside the selection is NOT carried, which is
 //      what makes the box honest about cutting through a machine.
 //   5. scaling spreads the parts without resizing them, and the machine stays
@@ -68,7 +67,7 @@ var BENCH = () => { clearScene(); sim.gravity=false; cam.x=0; cam.y=2; cam.scale
   bodies.push(b1,b2,b3,b4);
   constraints.push(makeRodCon({id:null,off:[0,3]}, {id:b1.id,off:[0,0]}, true, true));
   constraints.push(makeRodCon({id:b1.id,off:[0,0]}, {id:b2.id,off:[0.1,0]}, false, true));
-  constraints.push(makeBeltCon([{id:b2.id,off:[0,0],kind:'wheel'},{id:b3.id,off:[0,0],kind:'wheel'}]));
+  constraints.push(makeBeltCon(b2.id, b3.id, 1));
   constraints.push(makeRodCon({id:b3.id,off:[0,0]}, {id:b4.id,off:[0,0]}, false, false));
   springs.push(makeSpringCon({id:b2.id,off:[0,0]}, {id:null,off:[1,3.2]}));
   rotSprings.push(makeRotSpringCon(null, b3.id));
@@ -81,7 +80,7 @@ var poseOf = () => bodies.map(b=>[b.id,b.x,b.y,b.th]);
 var maxC = () => Math.max(0, ...constraints.map(c=>conMaxC(c)));
 var memberMaxC = () => Math.max(0, ...selGroup.m.constraints.map(c=>conMaxC(c)));
 var rsTorque = rs => rs.k*(rs.restAngle - rotSpringRelAngle(rs));
-var beltRest = c => beltRestLen(c);
+var beltC = c => (c.rA*bodies[bodyIndex(c.a.id)].th - c.sense*c.rB*bodies[bodyIndex(c.b.id)].th) - c.restPhase;
 `);
 
 console.log('\n1. the membership rule');
@@ -128,12 +127,12 @@ console.log('\n2. the lasso');
 console.log('\n3. a rigid transform: the box carries the bodies');
 {
   run('WIDGET()');
-  const before = run(`(()=>({ pose:poseOf(), c:maxC(), belt:beltRest(constraints[2]),
+  const before = run(`(()=>({ pose:poseOf(), c:maxC(), belt:beltC(constraints[2]),
      tau:rsTorque(rotSprings[0]), rest:springs[0].restLen, rodLen:constraints[1].len,
      ang:constraints[1].restAngB }))()`);
   const DTH=0.9;
   run(`groupSetFrame(selGroup.cx+0.7, selGroup.cy-0.4, ${DTH}, 1)`);
-  const after = run(`(()=>({ pose:poseOf(), c:memberMaxC(), belt:beltRest(constraints[2]),
+  const after = run(`(()=>({ pose:poseOf(), c:memberMaxC(), belt:beltC(constraints[2]),
      tau:rsTorque(rotSprings[0]), rest:springs[0].restLen, rodLen:constraints[1].len }))()`);
   const dth = after.pose.filter(p=>p[0]<4).map((p,i)=>p[3]-before.pose[i][3]);
   ok('every selected body turned by the box\'s own change in angle',
@@ -147,10 +146,7 @@ console.log('\n3. a rigid transform: the box carries the bodies');
      near(dist(after.pose[1],after.pose[2]), dist(before.pose[1],before.pose[2]), 1e-12),
      'pairwise distance moved');
   ok('every member coupling is still satisfied', after.c<1e-9, String(after.c));
-  // A rigid turn cannot change how much belting the loop holds, and the check above
-  // -- every selected body turned by exactly the box's own delta -- is what says the
-  // wheels did not slip against each other on the way round.
-  ok('the belt holds the same rest length through the turn',
+  ok('the belt did not slip: its phase followed the turn',
      near(after.belt, before.belt, 1e-12), `${before.belt} -> ${after.belt}`);
   ok('the background rotational spring carries the same torque',
      near(after.tau, before.tau, 1e-12), `${before.tau} -> ${after.tau}`);
@@ -208,7 +204,7 @@ console.log('\n7. a selection copies, pastes and stands alone');
   const text = run('selectionFragment()');
   ok('the fragment carries no sim and no cam line',
      !/^\s*(sim|cam)\b/m.test(text), text);
-  ok('...and opens as a scene file', /^scene 4/.test(text), text.split('\n')[0]);
+  ok('...and opens as a scene file', /^scene 3/.test(text), text.split('\n')[0]);
   const shape = run(`(()=>{ const g=selGroup;
     const P=g.m.bodies.map(b=>[b.x,b.y,b.th]);
     return JSON.stringify([Math.hypot(P[0][0]-P[1][0],P[0][1]-P[1][1]),
@@ -245,7 +241,7 @@ console.log('\n8. a fragment that names a body it does not define is refused');
 {
   run('BENCH()');
   const before = run('JSON.stringify(poseOf())');
-  const bad = 'scene 4\n\n# bodies\nbody 1 x=0 y=0 r=0.2\n\n# constraints\nrod 1 -- 9 len=1\n';
+  const bad = 'scene 3\n\n# bodies\nbody 1 x=0 y=0 r=0.2\n\n# constraints\nrod 1 -- 9 len=1\n';
   const caught = run(`(()=>{ try{ pasteFragment(${JSON.stringify(bad)}); return null; }
     catch(e){ return String(e.message||e); } })()`);
   ok('the paste raises, naming the line and the missing body',

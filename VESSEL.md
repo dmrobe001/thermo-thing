@@ -631,8 +631,7 @@ energy rather than the large constant `U + P_bg*V` offset:
   whether the wall is actually *between* the two vessels -- a body overlapping both
   conducts between them however it is oriented. It is a rate-law input, not a
   geometric argument about heat paths.
-* A belt's WHEELS, CVT contacts and cable spools are restricted to disks, as before
-  (a belt's EYELETS are ordinary anchors and may sit on a vessel like any other); a vessel
+* Belt, CVT and cable-spool attachments are restricted to disks, as before; a vessel
   is not a valid pick for any of them. A cable *tether* on a vessel does work.
 * A vessel's default shell density (`VESSEL_DENSITY`, 2000 kg/m^3) is a usability
   default, not a physical claim: at 1 atm and human-scale geometry a gas spring is

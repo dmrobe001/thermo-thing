@@ -134,13 +134,7 @@ never recomputed since. The pose no longer implies them:
   pose drag that reached it -- because for that step the rod was released and held
   none of them (`constraints.js` §06.2d). Both are the editor writing the scene, which is what
   an editor is for; neither happens while the sim runs.
-- `belt` node data -- each `pt`'s `r`/`wrap` on a wheel, `tied`/`lock` on an eyelet,
-  and the captured `restSeg` (the belting held by the segment departing that node)
-  and `restAng` that go with them. `restSeg` is the belt's `restPhase`, one per
-  gripping node; the belt's REST LENGTH is their sum and so is derived rather than
-  written -- except on a belt with no gripping node at all, whose one segment closes
-  on itself and has no node to hang a constant off, where `belt.restLen` is written
-  instead (`when:` on the ledger row says exactly that).
+- `belt.restPhase`, `belt.rA`, `belt.rB`, `belt.sense`.
 - `rotspring.restAngle`.
 - `cable.Ltot`, `cable.localAngle`, `cable.spoolAngle`.
 - `knife.dir` (body-frame).
@@ -185,8 +179,7 @@ const SCENE_SCHEMA = {
   rod:    { make:(f)=>makeRodCon(f.a,f.b,f.weldA,f.weldB,f.posable),
             keys:{ weldA:false, weldB:false, posable:false },
             captured:{ len:null, restAngA:null, restAngB:null } },
-  // slot, pin, belt (no ends at all -- every node is a `pt`), cvt, knife, cable,
-  // spring, rotspring, heat, flow
+  // slot, pin, belt, cvt, knife, cable, spring, rotspring, heat, flow
 };
 ```
 
@@ -563,7 +556,7 @@ reader's own dangling-id check already walks, which is why that check and the re
 are the same short list rather than two lists that could disagree.
 
 Everything else is carried literally, captured fields included. A rod's rest length
-travels with the rod; a belt's segment constants travel with the belt. A pasted widget is the
+travels with the rod; a belt's phase travels with the belt. A pasted widget is the
 part as it was, not the part as its new pose would imply -- which is the same rule
 `always:true` states for a file (§S.3), applied to a piece of one.
 
@@ -604,8 +597,8 @@ they live:
 | the transform | what happens to captured fields |
 |---|---|
 | translate | nothing. Every distance and relative angle between the points a member names is invariant, because they all moved together. |
-| rotate | invariant too, with one exception that measures against the fixed world rather than against the selection: a background-referenced rotational spring's rest angle, which shifts analytically from the capture, so an authored stress survives. The rest angles of welds and prismatic locks are re-read -- not because their value changes, but because they are measured against a raw `atan2` whose branch the turn may have crossed, and the re-read re-seeds both sides of that comparison together. A belt's segment constants are re-read for exactly that second reason and no other: what they measure -- belting held between two points of the belt's own path -- is invariant under a turn, and only the branch of the headings they are read against is not. |
-| scale | every joint's geometry is re-read from the live pose: a rod's length, a control point's station, every rotation lock's rest angle. The new value the geometry shows is the only correct one, and it is exactly what building the joint there would have captured -- which is what keeps a scaled mechanism assembled instead of snapping the moment it runs. A spring's rest length and a cable's paid-out length are the opposite case: lengths the *element* owns rather than distances the pose implies, so they scale, and an authored stretch or slack survives. A SOFT belt's slack is the same case, and is restored after its recapture (which is what re-read the path it is measured against) rather than before. |
+| rotate | invariant too, with two exceptions that measure against the fixed world rather than against the selection: a belt's phase (`rA*thA - sense*rB*thB`, an angle sum with unequal weights) and a background-referenced rotational spring's rest angle. Both shift analytically from the capture, so an authored stress survives. The rest angles of welds and prismatic locks are re-read -- not because their value changes, but because they are measured against a raw `atan2` whose branch the turn may have crossed, and the re-read re-seeds both sides of that comparison together. |
+| scale | every joint's geometry is re-read from the live pose: a rod's length, a control point's station, every rotation lock's rest angle. The new value the geometry shows is the only correct one, and it is exactly what building the joint there would have captured -- which is what keeps a scaled mechanism assembled instead of snapping the moment it runs. A spring's rest length and a cable's paid-out length are the opposite case: lengths the *element* owns rather than distances the pose implies, so they scale, and an authored stretch or slack survives. |
 
 Two consequences worth stating plainly, because both are choices and not accidents:
 

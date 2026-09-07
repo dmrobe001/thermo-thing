@@ -103,7 +103,7 @@ for(const src of ['globalThis', 'this', 'bodies', 'sim', 'constructor', 'toStrin
   ok(`${src} reaches nothing`, /unknown (name|function)|unexpected|is a function/.test(String(val(src))), `got ${val(src)}`);
 
 console.log('\n2. a file reads its own names');
-const S = `scene 4
+const S = `scene 3
 
 sim gravity=off bg.P=2*101325 bg.T=250+50
 cam x=0 y=2 scale=64
@@ -168,7 +168,7 @@ for(const [text, want] of [
   ['sim bg.P=b1.r\nbody 1 x=0 y=0 r=0.5',              'unknown name "b1.r"'],
   ['body 1 x=0 y=0 r=0.5 mass=b1.zz',                  'has no property "zz"'],
 ]){
-  const msg = load('scene 4\n'+text);
+  const msg = load('scene 3\n'+text);
   ok(`refused: ${want}`, msg!==null && msg.includes(want), `got ${msg}`);
 }
 ok('every refusal left the bench standing', run('exportScene()')===before);

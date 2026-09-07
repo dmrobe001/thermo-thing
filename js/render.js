@@ -8,7 +8,7 @@
 //    §11.4  cable              (drawCable)
 //    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
 //    §11.4c interactions      (drawInteraction -- heat & mass exchange couplings)
-//    §11.5  constraints       (drawConstraint + drawRim, drawBeltConstraint, beltTangents)
+//    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
 //    §11.7  interaction overlays (drawPending, drawPreview, drawHandles, drawSnap,
 //                            drawLasso, drawGroupBox -- the selection box, §18)
@@ -399,7 +399,7 @@ function drawInteraction(it){
   ctx.restore();
 }
 
-// ---- §11.5 · constraints (drawConstraint + drawRim, drawBeltConstraint, beltTangents) ----
+// ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
 // Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
 function drawConstraint(con){
   const viol = !sim.running && conMaxC(con) > CON_DRIFT_TOL;
@@ -476,10 +476,17 @@ function drawConstraint(con){
     return;
   }
   if(con.type==='rack'){ drawRackConstraint(con,col,sel); return; }
-  if(con.type==='belt'){ drawBeltConstraint(con,col,sel); return; }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
-  if(con.type==='knife'){
+  if(con.type==='belt'){
+    const B=bodies[bodyIndex(con.b.id)]; if(!B)return;
+    drawRim(A.x,A.y,con.rA,col); drawRim(B.x,B.y,con.rB,col);
+    ctx.strokeStyle=col; ctx.lineWidth=2.5;
+    for(const [p,q] of beltTangents(A.x,A.y,con.rA, B.x,B.y,con.rB, con.sense)){
+      const [x1,y1]=w2s(p[0],p[1]), [x2,y2]=w2s(q[0],q[1]);
+      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke(); }
+  }
+  else if(con.type==='knife'){
     const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1; const hx=hh[0]/hl,hy=hh[1]/hl;
     const p1=[wax-hx*0.5,way-hy*0.5], p2=[wax+hx*0.5,way+hy*0.5];
     const [x1,y1]=w2s(p1[0],p1[1]), [x2,y2]=w2s(p2[0],p2[1]);
@@ -495,51 +502,6 @@ function drawConstraint(con){
     const rB=Math.max(d-A.r,0);                        // current contact radius on B, the disk
     drawRim(A.x,A.y,A.r,col,A.th);                      // wheel: fixed perimeter
     drawRim(B.x,B.y,rB,col,B.th);                       // disk: current contact radius
-  }
-}
-// A belt (constraints.js §06.2e): the BELTING itself, drawn as the closed path it
-// is -- a straight run between each pair of tangent points, and a wrapped arc across
-// every wheel, in the direction that wheel's own `wrap` sends it. That path is the
-// constraint's own geometry (beltFrame), not a decoration over it, so what is on the
-// canvas is exactly what the rows measure: flip a wheel and the belting visibly
-// crosses; add an eyelet and the belting visibly bends through it.
-//
-// Each wheel also gets the dashed pitch rim every rolling contact in this engine
-// wears (drawRim, its dash phase tied to the body's spin), because a belt's wrap
-// radius is authored and need not be the body's own. Each eyelet gets an end marker:
-// a square where it is welded to the belt's local direction, a joint dot where it is
-// not, over a ground hatch where it rides the background -- the same vocabulary a
-// rod's ends speak. A TIED eyelet, which grips the belting rather than letting it
-// slide, is ringed to say so.
-function drawBeltConstraint(con,col,sel){
-  const f=beltFrame(con); if(!f) return;
-  const slack = con.soft>0 && f.length <= beltRestLen(con)+1e-9;
-  ctx.strokeStyle=col; ctx.lineWidth=sel?3:2.5;
-  if(slack) ctx.setLineDash([6,5]);            // a soft belt shorter than its rest length carries nothing
-  ctx.beginPath();
-  for(const sp of f.spans){
-    const [x1,y1]=w2s(sp.Dx,sp.Dy), [x2,y2]=w2s(sp.Ax,sp.Ay);
-    ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
-  }
-  for(const N of f.nodes){
-    if(!beltIsWheel(N.nd) || !(Math.abs(N.sg)>0)) continue;
-    const r=Math.abs(N.sg), [cx,cy]=w2s(N.wx,N.wy);
-    // The arc runs from where the belt arrives to where it leaves, the long way round
-    // if that is the way it wraps. Screen y is flipped, so a world-positive turn is a
-    // canvas-negative one and the sweep flag inverts with it.
-    const ccw = N.sg>0;
-    const a0 = -(N.inPsi  - (ccw?1:-1)*Math.PI/2);
-    const a1 = -(N.outPsi - (ccw?1:-1)*Math.PI/2);
-    ctx.moveTo(cx+r*cam.scale*Math.cos(a0), cy+r*cam.scale*Math.sin(a0));
-    ctx.arc(cx, cy, r*cam.scale, a0, a1, ccw);
-  }
-  ctx.stroke(); ctx.setLineDash([]);
-  for(const N of f.nodes){
-    if(beltIsWheel(N.nd)){ drawRim(N.wx, N.wy, Math.abs(N.sg), col, N.th); continue; }
-    drawEndMarker(N.wx, N.wy, !!N.nd.lock, N.nd.ep.id==null, col);
-    if(N.nd.tied){ const [sx,sy]=w2s(N.wx,N.wy);
-      ctx.strokeStyle=col; ctx.lineWidth=1.5;
-      ctx.beginPath(); ctx.arc(sx,sy,8,0,Math.PI*2); ctx.stroke(); }
   }
 }
 // A rack and pinion (constraints.js §06.2/§06.5). The rack is a dashed line spanning
@@ -595,10 +557,6 @@ function drawRim(x,y,r,col,ang=0){ const [sx,sy]=w2s(x,y); const rr=r*cam.scale;
   ctx.strokeStyle=col;ctx.lineWidth=3;ctx.setLineDash([8,6]);ctx.lineDashOffset=ang*rr;
   ctx.beginPath();ctx.arc(sx,sy,rr,0,Math.PI*2);ctx.stroke();
   ctx.setLineDash([]);ctx.lineDashOffset=0; }
-// The two tangent lines between a pair of rims. The BELT no longer comes through
-// here -- it draws its own path off beltFrame, which is the geometry its rows read
-// (drawBeltConstraint above) -- but the rotational spring's belt-style motif still
-// does, and wants exactly this: a decoration, with no constraint behind it.
 function beltTangents(ax,ay,ra, bx,by,rb, sense){
   const dx=bx-ax, dy=by-ay, d=Math.hypot(dx,dy)||1e-6; const base=Math.atan2(dy,dx); const segs=[];
   if(sense>0){ let c=(ra-rb)/d; c=Math.max(-1,Math.min(1,c)); const g=Math.acos(c);
