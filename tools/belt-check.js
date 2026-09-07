@@ -29,6 +29,11 @@
 //      posable ROD keeps the narrower rule, because a released rod is still a rail.
 //   7. the scene file carries every node and every captured constant, round-trips
 //      byte-for-byte, and refuses a node that claims a word of the other kind.
+//   9. belting can only bear on a wheel from outside: a wrap is a length of contact
+//      and cannot go negative, so a wheel the belting no longer reaches leaves the
+//      path entirely and the belt runs straight by, continuously and at the same
+//      boundary in both directions -- and the belt distances of the wheels it stayed
+//      on are untouched by that, which is the point of storing distances not gaps.
 //   8. the tool layer builds one: a click on a disk's EDGE makes a wheel and a click
 //      anywhere else an eyelet, and a click on the belting splices a node into the
 //      span it landed on.
@@ -56,6 +61,7 @@ for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js',
                 'js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
 const run = s => vm.runInContext(s, ctx);
+const substepOnce = () => run('substep(sim.h)');
 
 let pass=0, fail=0;
 const ok=(name,good,detail)=>{ good?pass++:fail++;
@@ -268,19 +274,19 @@ console.log('\n7. the scene file');
                                   {id:null,off:[0.5,1.2],kind:'eyelet'}], {soft:0.002, posable:true}));`);
   const text = run('exportScene()');
   const line = text.split('\n').find(l=>l.startsWith('belt'));
-  ok('the belt line names every node, in order, with its captured constants',
-     /^belt soft=0\.002 posable pt=1\/wheel\/r=0\.5\/restSeg=[-\d.]+ pt=2\/wheel\/r=0\.25\/wrap=-1\/restSeg=[-\d.]+ pt=3\/tied\/restSeg=[-\d.]+\/lock\/restAng=[-\d.]+ pt=bg\(0\.5,1\.2\)$/.test(line),
+  ok('the belt line names every node, in order, with its belt distance',
+     /^belt soft=0\.002 posable restLen=[\d.]+ pt=1\/wheel\/r=0\.5\/mu=[-\d.]+ pt=2\/wheel\/r=0\.25\/wrap=-1\/mu=[-\d.]+ pt=3\/tied\/mu=[-\d.]+\/lock\/restAng=[-\d.]+ pt=bg\(0\.5,1\.2\)$/.test(line),
      line);
   run(`importScene(${JSON.stringify(text)})`);
   ok('...and it round-trips byte-for-byte', run('exportScene()')===text, run('exportScene()'));
   ok('...to a belt that is still exactly satisfied', run('conMaxC(constraints[0])')<1e-9,
      String(run('conMaxC(constraints[0])')));
-  // A belt with no gripping node writes its own rest length, since it has no segment
-  // constant to hang it off -- and holds its one closed loop's length.
+  // A belt with no gripping node has nowhere to hold the belting, so no node carries
+  // a belt distance -- but the loop still has its own length.
   run(`clearScene(); var C0=makeBody(0,0,0.1), D0=makeBody(2,0,0.1); bodies.push(C0,D0);
        constraints.push(makeBeltCon([{id:C0.id,off:[0,0],kind:'eyelet'},{id:D0.id,off:[0,0],kind:'eyelet'}]));`);
   const t2=run('exportScene()');
-  ok('a belt with nothing gripping it writes restLen instead',
+  ok('a belt with nothing gripping it carries only its rest length',
      /^belt restLen=4 pt=1 pt=2$/.test(t2.split('\n').find(l=>l.startsWith('belt'))),
      t2.split('\n').find(l=>l.startsWith('belt')));
   ok('...and holds exactly one row: the loop\'s own length',
@@ -288,7 +294,7 @@ console.log('\n7. the scene file');
   const bad = [
     ['a wheel claiming an eyelet\'s word', 'belt pt=1/wheel/tied'],
     ['an eyelet claiming a rim',           'belt pt=1/r=0.5'],
-    ['a segment constant on a node that does not grip', 'belt pt=1/restSeg=1 pt=2'],
+    ['a belt distance on a node that does not grip', 'belt pt=1/mu=1 pt=2'],
     ['a rest angle with no lock',          'belt pt=1/restAng=1 pt=2'],
   ];
   for(const [what, tail] of bad){
@@ -343,5 +349,63 @@ console.log('\n8. the tool layer builds one');
      run('JSON.stringify(constraints.map(c=>c.type))'));
 }
 
+console.log('\n9. belting can only bear on a wheel from outside');
+{
+  // An idler proud of the straight run between two wheels, slid down until the
+  // belting no longer reaches it. The wrap is a length of contact, so it cannot go
+  // negative: past that point the belt has PEELED OFF and runs straight by.
+  const build = () => run(`clearScene(); sim.gravity=false;
+    var A=makeBody(0,0,0.5), B=makeBody(4,0,0.5), M=makeBody(2,0.9,0.3);
+    bodies.push(A,B,M);
+    constraints.push(makeBeltCon([{id:A.id,off:[0,0],kind:'wheel'},
+                                  {id:M.id,off:[0,0],kind:'wheel',wrap:-1},
+                                  {id:B.id,off:[0,0],kind:'wheel'}]));`);
+  build();
+  const at = y => run(`bodies[2].y=${y}; beltSettle(constraints[0]);
+    (()=>{ const c=constraints[0], f=beltFrame(c);
+      return { on:f.nodes.length, alpha:f.at[1]?f.at[1].alpha:null,
+               len:f.length, rows:rowsFor(c).length, mu:beltNodes(c)[1].mu }; })()`);
+  const wrapped = at(-0.72), peeled = at(-0.80);
+  ok('a wheel the belting reaches is on the path, wrapped, and gripping it',
+     wrapped.on===3 && wrapped.alpha>0 && wrapped.rows===3, JSON.stringify(wrapped));
+  ok('...and one it does not reach is off the path entirely, gripping nothing',
+     peeled.on===2 && peeled.alpha===null && peeled.rows===2, JSON.stringify(peeled));
+  // Two r=0.5 wheels 4 apart: 2*4 + 2*pi*0.5. The peeled path is exactly that -- the
+  // idler contributes nothing at all, rather than a negative arc.
+  ok('...and the peeled path is exactly the belt without it',
+     near(peeled.len, 8+Math.PI, 1e-12), String(peeled.len));
+  ok('...reached continuously: no jump in length across the boundary',
+     Math.abs(peeled.len-wrapped.len) < 0.01, `${wrapped.len} -> ${peeled.len}`);
+  ok('a peeled wheel seats again at the same place it came off',
+     at(-0.80).on===2 && at(-0.72).on===3, 'the boundary moved between peeling and seating');
+  // The belt distances are what make that silent: peeling and seating change which
+  // grips are consecutive, and touch none of the stored constants.
+  build();
+  const mu0 = run('JSON.stringify(beltNodes(constraints[0]).map(n=>n.mu))');
+  at(-0.80); at(0.9);
+  ok('...and the wheels the belting stayed on never changed their belt distance',
+     JSON.parse(run('JSON.stringify(beltNodes(constraints[0]).map(n=>n.mu))'))
+       .every((v,i)=> i===1 || near(v, JSON.parse(mu0)[i], 1e-12)),
+     run('JSON.stringify(beltNodes(constraints[0]).map(n=>n.mu))')+' vs '+mu0);
+  // The scene the redesign was reported against: a rider hanging on a vertical belt,
+  // swinging under the bottom wheel. It used to read a NEGATIVE wrap there, which
+  // subtracts arc length, so the path length stood still while the drawn belt wrapped
+  // the wheel the wrong way round.
+  run(`importScene(${JSON.stringify(['scene 4','sim gravity=on','cam x=0 y=0 scale=100',
+    'body 1 x=0 y=2 r=1','body 2 x=0 y=-2 r=1','body 3 x=1 y=0 r=1',
+    'belt pt=1/wheel pt=2/wheel pt=3/tied',
+    'rod bg(-2,2) -- 1 len=2 weld=A restAngA=-3.14159265359',
+    'rod bg(-2,-2) -- 2 len=2 weld=A restAngA=-3.14159265359',''].join('\n'))}); sim.h=1/240;`);
+  let worst=0;
+  for(let i=0;i<960;i++){ substepOnce();
+    const a=run(`(()=>{ const f=beltFrame(constraints[0]);
+      return Math.min(...f.nodes.map(N=>beltIsWheel(N.nd)?N.alpha:1)); })()`);
+    if(a<worst) worst=a;
+  }
+  ok('the reported rider scene never reads a wheel as negatively wrapped',
+     worst >= 0, `worst wrap ${worst}`);
+  ok('...and the ledger holds flat through it', near(run('energy().tot'), 0, 1e-6),
+     String(run('energy().tot')));
+}
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

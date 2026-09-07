@@ -561,7 +561,7 @@ function makeConPoint(con, ep, opts){
       ? { ep:e, kind:'wheel', r: o.r!==undefined ? o.r : ((bodies[bodyIndex(e.id)]||{}).r || 0),
           wrap: o.wrap<0 ? -1 : 1 }
       : { ep:e, kind:'eyelet', tied: !!o.tied, lock: !!o.lock };
-    if(o.restSeg!==undefined && beltGrips(nd)) nd.restSeg=o.restSeg;
+    if(o.mu!==undefined && beltGrips(nd)) nd.mu=o.mu;
     if(o.restAng!==undefined && nd.lock) nd.restAng=o.restAng;
     conPoints(con).push(nd);
     return nd;
@@ -777,8 +777,31 @@ function recapturePosable(){
 //           follows the belt's local direction through the eyelet.
 //
 // A wheel and a tied eyelet are the two GRIPPING nodes: the belt's material is held
-// at them. They cut the loop into SEGMENTS, and a segment is what this constraint
-// actually holds -- see beltRows below.
+// at them, and they are what this constraint is about.
+//
+// BELT DISTANCE is the one idea the rest of this section is built on. Run a tape
+// measure round the unstretched belting from an arbitrary mark on it and every point
+// of the belt has a coordinate, `mu`, running 0 .. restLen and wrapping round. Each
+// gripping node stores ONE number: the belt distance of the belting it holds.
+//
+//   tied eyelet   mu is exactly that -- how far round the belt this body is clamped.
+//   wheel         mu is the same thing carried in the wheel's own frame, so that the
+//                 belting at the contact is  mu + sigma*r*(psi - theta)  with psi the
+//                 belt's heading there. Turn the wheel and the belting at the contact
+//                 changes, which is what no-slip means; the constant does not.
+//
+// Both are the one expression beltMu below, since sigma*r is zero on an eyelet.
+//
+// The constants are ABSOLUTE, not gaps between neighbours, and that is the whole
+// point of them. What the belt HOLDS is that consecutive grips are the right belting
+// apart -- but WHICH grips are consecutive is not a fact about the belt, it is a fact
+// about where everything currently is: a wheel the belting peels off stops being a
+// grip, a tied eyelet carried round a wheel ends up between a different pair. Stored
+// as gaps, every one of those events means re-deriving constants that did not
+// physically change, and the belt loses whatever it was holding. Stored as belt
+// distances, none of them touch the stored data at all: the pairing is derived, the
+// constants are not. `restLen` is then the loop's own period -- how much belting
+// there is -- and is a field of the belt rather than a sum over its nodes.
 const beltNodes = con => conPoints(con);
 const beltIsWheel = nd => nd.kind==='wheel';
 // Whether this node holds the belt's material rather than letting it slide past.
@@ -788,89 +811,146 @@ const beltGrips = nd => nd.kind==='wheel' || !!nd.tied;
 // radius everywhere below rather than a case of its own.
 const beltSignedR = nd => nd.kind==='wheel' ? (nd.wrap<0?-1:1)*(nd.r||0) : 0;
 const beltGripCount = con => beltNodes(con).filter(beltGrips).length;
+// The belt distance of the belting AT this node, given the heading the belt has
+// there -- a wheel's arrival and departure differ by its wrap arc, an eyelet's do
+// not. `N` is a frame node (below), which carries the live sg and theta.
+const beltMu = (N, psi) => (N.nd.mu||0) + N.sg*(psi - N.th);
+const beltRestLen = con => con.restLen||0;
 
 // The belt's live geometry, and the one place its path is worked out. Everything
 // else -- the rows, the tension, the canvas, the hit test, the inspector -- reads
 // this and nothing of its own.
 //
-// For each SPAN (node i to node i+1, cyclically) the belt leaves node i's rim on
-// tangent and arrives on node i+1's rim on tangent, on each node's own wrap side. In
-// terms of the span's heading psi, the outward radial at a tangency is
+// For each SPAN (one path node to the next, cyclically) the belt leaves the first
+// node's rim on tangent and arrives on the second's on tangent, on each node's own
+// wrap side. In terms of the span's heading psi, the outward radial at a tangency is
 // sigma*rot(u,-90) = sigma*(sin psi, -cos psi), so with d the centre-to-centre vector
 // and k the difference of the two signed radii, tangency is d.rot(u,-90) + k = 0 --
 // one equation for psi, solved as psi = atan2(d) + asin(-k/|d|) with the branch that
 // makes the span's length positive. The span's length is then sqrt(|d|^2 - k^2), the
-// familiar external/internal tangent length, and an eyelet (k contribution zero, no
-// rim) falls out of the same formula as a plain straight run to the point.
+// familiar external/internal tangent length, and an eyelet (no rim, k contribution
+// zero) falls out of the same formula as a plain straight run to the point.
 //
 // psi is UNWRAPPED against the previous call's value (con._psi, transient scratch
 // that restoreState clears -- §16.1) for the same reason twoPointFrame unwraps its
 // phi: the rows measure sigma*r*psi against a captured constant, and a raw atan2
 // jumping a full turn as a span swings through pointing along -x would land in the
 // Baumgarte bias whole. Unwrapped, it also lets a belt genuinely wind more than once
-// around a wheel and keeps the wrap arc counting the turns.
+// around a wheel and keeps the wrap arc counting the turns. The reference is keyed by
+// the node the span LEAVES rather than by position along the path, so that a wheel
+// dropping out of the path (below) leaves its neighbours' continuity untouched.
 //
-// The unwrapped headings are a LADDER of n+1 rungs, not a ring of n, and the extra
-// rung is the whole of what makes a loop a loop. Traverse a closed belt once and the
-// heading turns by a full 2*pi (more, if the belt winds), so no single branch of psi
-// can serve every wrap: the span you started on is met again a turn further on. So
-// the seed walks the ladder -- each rung taken to the branch that makes the wrap it
-// completes turn the way that wheel's sigma says, which puts every wrap angle in
-// [0, 2pi) -- and then takes the FIRST span a second time, as rung n, for the wrap
-// that closes the loop. A node's arrival heading is the rung below it and its
-// departure heading the rung above, and the first node reads both off the top of the
-// ladder. Nothing downstream needs the two copies of that span to agree: every place
-// psi is used, it appears once as some node's arrival and once as some node's
-// departure, and what is between them is that node's own wrap.
-function beltFrame(con){
-  const nds = beltNodes(con);
-  const n = nds.length;
-  if(n < 2) return null;
-  const nodes = nds.map(nd => {
-    const epf = epFrame(nd.ep);
-    return { nd, epf, wx:epf.wx, wy:epf.wy, th:epf.th, sg:beltSignedR(nd) };
+// The unwrapped headings are a LADDER of m+1 rungs over m path nodes, not a ring of
+// m, and the extra rung is the whole of what makes a loop a loop. Traverse a closed
+// belt once and the heading turns by a full 2*pi (more, if the belt winds), so no
+// single branch of psi can serve every wrap: the span you started on is met again a
+// turn further on. So the seed walks the ladder -- each rung taken to the branch that
+// makes the wrap it completes turn the way that wheel's sigma says, which puts every
+// wrap angle in [0, 2pi) -- and then takes the FIRST span a second time, as the top
+// rung, for the wrap that closes the loop. A node's arrival heading is the rung below
+// it and its departure heading the rung above, and the first node reads both off the
+// top of the ladder. Nothing downstream needs the two copies of that span to agree:
+// every place psi is used it appears once as some node's arrival and once as some
+// node's departure, and what is between them is that node's own wrap.
+function beltPath(con, nds, live){
+  const idx = [];
+  for(let i=0;i<nds.length;i++) if(live[i]) idx.push(i);
+  const m = idx.length;
+  if(m < 2) return null;
+  const nodes = idx.map((i,j) => {
+    const nd = nds[i], epf = epFrame(nd.ep);
+    return { i, j, nd, epf, wx:epf.wx, wy:epf.wy, th:epf.th, sg:beltSignedR(nd) };
   });
-  const ref = (con._psi && con._psi.length===n+1) ? con._psi : null;
-  // Each span's raw heading, and the geometry that goes with it.
-  const raw=new Array(n), spans=new Array(n);
-  for(let i=0;i<n;i++){
-    const ia=i, ib=(i+1)%n, a=nodes[ia], b=nodes[ib];
+  const ref = con._psi || (con._psi = {});
+  const raw = new Array(m), spans = new Array(m);
+  for(let j=0;j<m;j++){
+    const a=nodes[j], b=nodes[(j+1)%m];
     const dx=b.wx-a.wx, dy=b.wy-a.wy;
     const D=Math.hypot(dx,dy), k=b.sg-a.sg;
     const sn = D>1e-9 ? Math.max(-1,Math.min(1,-k/D)) : 0;
-    raw[i]=Math.atan2(dy,dx)+Math.asin(sn);
-    spans[i]={ ia, ib, L:Math.sqrt(Math.max(0, D*D-k*k)) };
+    raw[j]=Math.atan2(dy,dx)+Math.asin(sn);
+    spans[j]={ ia:j, ib:(j+1)%m, L:Math.sqrt(Math.max(0, D*D-k*k)) };
   }
-  // The ladder: rung i is the heading of span i as node i leaves on it, and rung n is
-  // span 0 again, as node 0 leaves on it a full traversal later.
-  const lad=new Array(n+1);
-  for(let i=0;i<=n;i++){
-    const r=raw[i%n];
-    lad[i] = ref ? unwrapNear(r, ref[i])
-           : i===0 ? r
-           : beltSeedPsi(r, lad[i-1], nodes[i%n].sg, nds[i%n]);
+  // The ladder: rung j is the heading of the span node j leaves on, and the top rung
+  // is the first span again, as the first node leaves on it a full traversal later.
+  const lad=new Array(m+1);
+  for(let j=0;j<=m;j++){
+    const r=raw[j%m], key = j<m ? nodes[j].i : 'close';
+    lad[j] = ref[key]!==undefined ? unwrapNear(r, ref[key])
+           : j===0 ? r
+           : beltSeedPsi(r, lad[j-1], nodes[j%m].sg, nodes[j%m].nd);
+    ref[key]=lad[j];
   }
-  con._psi = lad;
-  for(let i=0;i<n;i++){
-    const p=lad[i], ux=Math.cos(p), uy=Math.sin(p);
+  for(let j=0;j<m;j++){
+    const p=lad[j], ux=Math.cos(p), uy=Math.sin(p);
     const rx=uy, ry=-ux;                                  // rot(u,-90): the +sigma radial
-    const s=spans[i], a=nodes[s.ia], b=nodes[s.ib];
+    const s=spans[j], a=nodes[s.ia], b=nodes[s.ib];
     s.psi=p; s.ux=ux; s.uy=uy; s.nx=-uy; s.ny=ux;
-    s.Dx=a.wx+a.sg*rx; s.Dy=a.wy+a.sg*ry;                 // leaves node i here
-    s.Ax=b.wx+b.sg*rx; s.Ay=b.wy+b.sg*ry;                 // arrives at node i+1 here
+    s.Dx=a.wx+a.sg*rx; s.Dy=a.wy+a.sg*ry;                 // leaves this node here
+    s.Ax=b.wx+b.sg*rx; s.Ay=b.wy+b.sg*ry;                 // arrives at the next one here
   }
   let straight=0, arcs=0;
   for(const s of spans) straight+=s.L;
-  for(let i=0;i<n;i++){
-    // Node 0 reads both its headings off the top of the ladder; every other node
-    // straddles one rung.
-    nodes[i].inPsi  = i===0 ? lad[n-1] : lad[i-1];
-    nodes[i].outPsi = i===0 ? lad[n]   : lad[i];
-    nodes[i].alpha = beltIsWheel(nodes[i].nd)
-      ? (nodes[i].sg<0?-1:1)*(nodes[i].outPsi-nodes[i].inPsi) : 0;
-    arcs += Math.abs(nodes[i].sg)*nodes[i].alpha;
+  for(let j=0;j<m;j++){
+    nodes[j].inPsi  = j===0 ? lad[m-1] : lad[j-1];
+    nodes[j].outPsi = j===0 ? lad[m]   : lad[j];
+    nodes[j].alpha = beltIsWheel(nodes[j].nd)
+      ? (nodes[j].sg<0?-1:1)*(nodes[j].outPsi-nodes[j].inPsi) : 0;
+    arcs += Math.abs(nodes[j].sg)*nodes[j].alpha;
   }
   return { con, nodes, spans, psi:lad, straight, arcs, length:straight+arcs };
+}
+// ...and which nodes the belting is actually ON. A wheel is only in the path while
+// the belt WRAPS it, and belting can only bear on a wheel from outside: the wrap
+// angle is a length of contact, and a negative one is the belt cutting through the
+// disk rather than lying on it. So a wheel whose wrap would come out negative has
+// been PEELED OFF -- the belting runs straight past it and it turns free.
+//
+// This is not an approximation bolted on. It is exactly continuous: at the moment a
+// wrap reaches zero the wheel's arrival and departure tangent points coincide AND
+// its two spans are the same tangent line, so the three points are collinear and
+// dropping the wheel changes neither the path, its length, nor the belting held
+// between the grips on either side. Peeling off and re-seating are both silent.
+//
+// Resolved by a fixed point rather than one pass, because dropping one wheel moves
+// its neighbours' tangents and can peel another; only DROPS are taken in a pass, so
+// it terminates, and re-seating is re-decided from scratch on the next call.
+//
+// A peeled wheel KEEPS its heading anchor, and that is not housekeeping -- it is what
+// makes the test mean anything. The wrap is only negative relative to the branch the
+// anchor picks; clear the anchor and the next call re-seeds the wrap into [0, 2pi)
+// (beltSeedPsi), reads a hair under a full turn instead of a hair below zero, and
+// seats the wheel straight back on. So the anchor is kept, and while the wheel is off
+// the path it is carried along by the belting that passes it, so that whenever the
+// belt does come back the two agree on which turn they are on.
+function beltFrame(con){
+  const nds = beltNodes(con), n = nds.length;
+  if(n < 2) return null;
+  const live = nds.map(()=>true);
+  let f=null;
+  for(let pass=0; pass<=n; pass++){
+    f = beltPath(con, nds, live);
+    if(!f) return null;
+    let dropped=false, m=f.nodes.length;
+    for(const N of f.nodes){
+      if(m<=2) break;                         // a loop needs two points; never below
+      if(beltIsWheel(N.nd) && N.alpha < 0){ live[N.i]=false; m--; dropped=true; }
+    }
+    if(!dropped) break;
+  }
+  f.live = live;
+  f.at = new Array(n); for(const N of f.nodes) f.at[N.i]=N;
+  // Carry each peeled wheel's anchor on the belting that now runs past it: the span
+  // leaving the nearest node still on the path before it.
+  for(let i=0;i<n;i++){
+    if(live[i]) continue;
+    // f.psi[N.j], not N.outPsi: the first path node's DEPARTURE is the ladder's top
+    // rung, a whole traversal above the span's own heading, and anchoring to that
+    // would leave the wheel a full turn out when it tried to seat again.
+    for(let k=1;k<=n;k++){ const N=f.at[(i-k+n)%n];
+      if(N){ con._psi[i]=f.psi[N.j]; break; } }
+  }
+  return f;
 }
 // Unwrap `a` to the branch nearest `ref` -- twoPointFrame's own move (§06.1), pulled
 // out because the belt does it once per span.
@@ -880,10 +960,10 @@ function unwrapNear(a, ref){
   while(d<-Math.PI) d+=Math.PI*2;
   return ref+d;
 }
-// The seed branch for one span's heading, given the previous span's: on a wheel,
-// the one that makes the wrap this node completes turn the way its sigma says, so
-// the wrap angle seeds into [0, 2pi); on an eyelet (nothing wrapped) simply the
-// nearest, since there is no arc for the choice to be about.
+// The seed branch for one span's heading, given the previous span's: on a wheel, the
+// one that makes the wrap this node completes turn the way its sigma says, so the
+// wrap angle seeds into [0, 2pi); on an eyelet (nothing wrapped) simply the nearest,
+// since there is no arc for the choice to be about.
 function beltSeedPsi(p, prev, sg, nd){
   if(!beltIsWheel(nd)) return unwrapNear(p, prev);
   const s = sg<0 ? -1 : 1;
@@ -895,85 +975,69 @@ function beltSeedPsi(p, prev, sg, nd){
 function beltLength(con, f){ const g=f||beltFrame(con); return g?g.length:0; }
 
 // ---- what the belt HOLDS -----------------------------------------------------
-// Cut the loop at its gripping nodes and it falls into SEGMENTS, each running from
-// one gripping node's departure tangent point to the next one's arrival tangent
-// point, through however many untied eyelets route it on the way. A segment holds a
-// fixed amount of belt material, and THAT is the belt's constraint:
+// Consecutive GRIPS along the path -- wheels the belting is on, and tied eyelets --
+// with the belting that runs between them. One PAIR each, and one row each:
 //
-//     (material at the far end) - (material at the near end) = (segment's length)
+//     (belt distance where the belting meets the far grip)
+//   - (belt distance where it left the near one)
+//   = (the straight belting between them)
 //
-// Reading the belt's material coordinate mu along the loop, a wheel's no-slip
-// contact pins d(mu)/dt at its rim to sigma*r*(d psi/dt - omega), and an untied
-// eyelet pins nothing at all (the belt slides through). Writing that out and
-// differencing across a segment, every d psi/dt term cancels against the tangent
-// points' own drift, and what is left is entirely local and velocity-linear:
+// plus one whole restLen on the pair that closes the loop, since belt distance is
+// only defined round the loop. Reading the belt's material coordinate along the
+// loop, a wheel's no-slip contact pins its rate at the rim to sigma*r*(dpsi/dt -
+// omega) and an untied eyelet pins nothing (the belt slides through), so writing the
+// row out and differencing across the pair, every dpsi/dt term cancels against the
+// tangent points' own drift and what is left is entirely local and velocity-linear:
 //
-//     sigma_p r_p omega_p - sigma_q r_q omega_q  =  sum over the segment's spans of
-//                                                    u . (v_next - v_this)
+//     sigma_p r_p omega_p - sigma_q r_q omega_q  =  sum over the pair's spans of
+//                                                     u . (v_next - v_this)
 //
 // with v the nodes' own anchor velocities (a wheel's centre, an eyelet's point). It
 // is a material balance: what the near wheel feeds in, less what the far wheel takes
-// out, is what the segment lengthens by. A tied eyelet feeds and takes nothing
-// (sigma*r is zero there), so a segment between two ties simply holds its length.
-//
-// The relation INTEGRATES -- it is holonomic, not a rolling row -- because the
-// cancelled terms leave a position function behind:
-//
-//     C = sigma_q r_q (psi_in,q - theta_q) - sigma_p r_p (psi_out,p - theta_p)
-//         - (segment length) + restSeg_p
-//
-// restSeg is the captured constant, one per gripping node, standing for the belt
-// material in the segment that DEPARTS it. It is this belt's `restPhase`: the two-
-// pulley case reduces to exactly the fixed phase ratio the belt has always held.
-// Summed over the loop the psi terms telescope into the wrapped arcs, so the whole
-// set says nothing more nor less than L = restLen, with restLen = sum of restSeg --
-// which is why the rest length is not stored twice.
-const beltSegRestSum = con => beltNodes(con).reduce((s,nd)=>s+(beltGrips(nd)?(nd.restSeg||0):0), 0);
-// The belt's rest length: the material in all its segments, or -- for a belt with no
-// gripping node at all, whose one segment closes on itself and so has no node to
-// hang a constant off -- the belt's own stored length.
-function beltRestLen(con){
-  return beltGripCount(con) ? beltSegRestSum(con) : (con.restLen||0);
-}
-// The segments, as index ranges over the node list. Each is {p, q, spans:[...]}: the
-// gripping node it leaves, the gripping node it arrives at, and the spans between.
-// With no gripping node the loop is ONE segment closing on itself (p and q null); with
-// exactly one, that node is both ends of a segment that goes all the way round.
-function beltSegments(con){
-  const nds=beltNodes(con), n=nds.length, segs=[];
-  if(n<2) return segs;
-  const grips=[]; for(let i=0;i<n;i++) if(beltGrips(nds[i])) grips.push(i);
-  if(!grips.length){ const spans=[]; for(let i=0;i<n;i++) spans.push(i);
-                     return [{p:null, q:null, spans}]; }
-  for(let g=0; g<grips.length; g++){
-    const p=grips[g], q=grips[(g+1)%grips.length], spans=[];
-    for(let i=p; ; i=(i+1)%n){ spans.push(i); if((i+1)%n===q) break; }
-    segs.push({p, q, spans});
+// out, is what the belting between them lengthens by. Summed over the loop the belt
+// distances telescope into the wrapped arcs, so the whole set says nothing more nor
+// less than L = restLen -- which is why the rest length is a field and not a row.
+function beltPairs(con, f){
+  const g=[]; for(const N of f.nodes) if(beltGrips(N.nd)) g.push(N.j);
+  const m=f.nodes.length, out=[];
+  if(!g.length) return out;                    // no grip: the loop closes on itself
+  for(let k=0;k<g.length;k++){
+    const pj=g[k], qj=g[(k+1)%g.length], spans=[];
+    for(let j=pj; ; j=(j+1)%m){ spans.push(j); if((j+1)%m===qj) break; }
+    // The pair that closes the loop is the one whose spans wrap past the start; with
+    // one grip only, its single pair goes all the way round and closes.
+    out.push({ p:pj, q:qj, spans, closes: k===g.length-1 });
   }
-  return segs;
+  return out;
 }
-// One segment's row: the material balance above, as columns and as C.
-function beltSegRow(con, f, seg){
-  const parts=[], nds=beltNodes(con);
+// One pair's row: the material balance above, as columns and as C.
+function beltPairRow(con, f, pr){
+  const parts=[];
   let L=0;
-  for(const si of seg.spans){ const s=f.spans[si];
+  for(const sj of pr.spans){ const s=f.spans[sj];
     parts.push(f.nodes[s.ia].epf.velCols(s.ux, s.uy));
     parts.push(f.nodes[s.ib].epf.velCols(-s.ux, -s.uy));
     L+=s.L;
   }
-  let C = -L;
-  if(seg.p!=null){
-    const P=f.nodes[seg.p], Q=f.nodes[seg.q];
-    // p and q are the SAME node on a loop with one gripping node; mergeCols sums the
-    // two angular columns to nothing there, which is the right answer -- a belt with
-    // one wheel in it has no second grip to hold a ratio against.
-    parts.push(scaleCols(P.epf.angCols(),  P.sg));
-    parts.push(scaleCols(Q.epf.angCols(), -Q.sg));
-    C += Q.sg*(Q.inPsi - Q.th) - P.sg*(P.outPsi - P.th) + (nds[seg.p].restSeg||0);
-  } else {
-    C += con.restLen||0;                       // no grip: the closed loop's own length
-  }
+  const P=f.nodes[pr.p], Q=f.nodes[pr.q];
+  // p and q are the SAME node on a loop with one grip; mergeCols sums the two
+  // angular columns to nothing there, which is the right answer -- a belt with one
+  // wheel in it has no second grip to hold a ratio against.
+  parts.push(scaleCols(P.epf.angCols(),  P.sg));
+  parts.push(scaleCols(Q.epf.angCols(), -Q.sg));
+  const C = beltMu(Q, Q.inPsi) + (pr.closes ? beltRestLen(con) : 0)
+          - beltMu(P, P.outPsi) - L;
   return { cols: mergeCols(parts), C };
+}
+// The one row a belt with NO gripping node at all has: nothing holds its material, so
+// all it can say is that the loop is as long as it is.
+function beltLoopRow(con, f){
+  const parts=[], m=f.nodes.length;
+  for(let j=0;j<m;j++){
+    const sIn=f.spans[(j-1+m)%m], sOut=f.spans[j];
+    parts.push(f.nodes[j].epf.velCols(sIn.ux-sOut.ux, sIn.uy-sOut.uy));
+  }
+  return { cols: mergeCols(parts), C: f.length - beltRestLen(con) };
 }
 // One locked eyelet's row: its body's angle held to the belt's LOCAL DIRECTION there,
 // which is the bisector of the headings the belt arrives and leaves on -- the two
@@ -982,24 +1046,24 @@ function beltSegRow(con, f, seg){
 // n.(v_next - v_this)/L (the tangent points' own drift along n is zero), so the row
 // is the endpoint's angular column less half of each neighbouring span's turn rate.
 // This is pointAngleLockRow's counterpart for a joint whose "line" is a path.
-function beltLockRow(con, f, i){
-  const n=f.nodes.length, K=f.nodes[i];
+function beltLockRow(con, f, j){
+  const m=f.nodes.length, K=f.nodes[j];
   const parts=[K.epf.angCols()];
-  for(const si of [(i-1+n)%n, i]){
-    const s=f.spans[si], L=Math.max(s.L, 1e-9);
+  for(const sj of [(j-1+m)%m, j]){
+    const s=f.spans[sj], L=Math.max(s.L, 1e-9);
     parts.push(scaleCols(mergeCols([ f.nodes[s.ib].epf.velCols(s.nx, s.ny),
                                      f.nodes[s.ia].epf.velCols(-s.nx, -s.ny) ]), -0.5/L));
   }
-  return { cols: mergeCols(parts), C: K.th - beltNodeAngle(f, i) - (K.nd.restAng||0) };
+  return { cols: mergeCols(parts), C: K.th - beltNodeAngle(f, j) - (K.nd.restAng||0) };
 }
-// The belt's local direction at a node: the bisector of the two span headings. The
-// difference is taken WRAPPED, which makes the answer independent of which copy of a
-// span's heading the ladder handed over (§06.2e beltFrame) -- the two differ by whole
-// turns, and a whole turn is exactly what the wrap discards. The cost is a branch cut
-// where the belt doubles back on itself through an eyelet, folded flat: a locked
-// eyelet wants belting that runs on through it, which is what an eyelet is for.
-function beltNodeAngle(f, i){
-  const n=f.nodes.length, a=f.psi[(i-1+n)%n], b=f.psi[i];
+// The belt's local direction at a path node: the bisector of the two span headings.
+// The difference is taken WRAPPED, which makes the answer independent of which copy
+// of a span's heading the ladder handed over -- the two differ by whole turns, and a
+// whole turn is exactly what the wrap discards. The cost is a branch cut where the
+// belt doubles back on itself through an eyelet, folded flat: a locked eyelet wants
+// belting that runs on through it, which is what an eyelet is for.
+function beltNodeAngle(f, j){
+  const m=f.nodes.length, a=f.psi[(j-1+m)%m], b=f.psi[j];
   let d=b-a;
   while(d> Math.PI) d-=Math.PI*2;
   while(d<-Math.PI) d+=Math.PI*2;
@@ -1007,9 +1071,9 @@ function beltNodeAngle(f, i){
 }
 // The rows the belt contributes (§06.5 dispatches here).
 //
-//   softness 0   every segment row, holonomic. Their sum is the whole loop's
+//   softness 0   every pair row, holonomic. Their sum is the whole loop's
 //                L = restLen, so an inextensible belt needs nothing added.
-//   softness > 0 the DIFFERENCES of adjacent segment rows -- one fewer row, saying
+//   softness > 0 the DIFFERENCES of adjacent pair rows -- one fewer row, saying
 //                that whatever the belt has stretched, it has stretched by the same
 //                amount everywhere. The length itself is then not held at all: it is
 //                carried by the tension force element of §08.1, which is what makes
@@ -1022,21 +1086,40 @@ function beltRows(con){
   if(conReleased(con)) return [];
   const f=beltFrame(con); if(!f) return [];
   const rows=[];
-  const segs=beltSegments(con);
-  const raw=segs.map(seg=>beltSegRow(con, f, seg));
+  const prs=beltPairs(con,f);
+  const raw = prs.length ? prs.map(pr=>beltPairRow(con, f, pr)) : [beltLoopRow(con, f)];
   if(!(con.soft>0)) rows.push(...raw);
   else for(let j=0;j+1<raw.length;j++)
     rows.push({ cols: mergeCols([raw[j].cols, scaleCols(raw[j+1].cols,-1)]),
                 C: raw[j].C - raw[j+1].C });
-  const nds=beltNodes(con);
-  for(let i=0;i<nds.length;i++) if(!beltIsWheel(nds[i]) && nds[i].lock) rows.push(beltLockRow(con, f, i));
+  for(const N of f.nodes) if(!beltIsWheel(N.nd) && N.nd.lock) rows.push(beltLockRow(con, f, N.j));
   return rows;
+}
+// The tension each stretch of belting is carrying, read off the solve -- one number
+// per pair, in beltPairs order, positive when that belting is taut. A pair row's own
+// multiplier IS its tension (its columns are the pull the tension applies, so
+// lambda/h is the force), which is what makes a belt's instrumentation free in the
+// same way every other joint's is (§09.3).
+//
+// A SOFT belt's rows are the DIFFERENCES of adjacent pairs (beltRows), so their
+// multipliers are tension differences: undo the differencing by a running sum, and
+// add the elastic tension every stretch carries alike.
+function beltTensions(con){
+  const f=beltFrame(con);
+  const n = f ? Math.max(1, beltPairs(con,f).length) : 1;
+  const l=con._lam||[], h=sim.h;
+  const out=new Array(n).fill(0);
+  if(!(con.soft>0)){ for(let j=0;j<n;j++) out[j]=(l[j]||0)/h; return out; }
+  const T=beltTension(con, f);
+  let prev=0;
+  for(let j=0;j<n;j++){ const mu = j<n-1 ? (l[j]||0) : 0; out[j]=T+(mu-prev)/h; prev=mu; }
+  return out;
 }
 // The belt's tension, as a force element (§08.1) -- the whole of what `soft` buys.
 // soft is a COMPLIANCE, the reciprocal of the belt's elastic modulus: T = stretch /
 // soft, so soft = 0 is the inextensible belt (held by the rows above instead) and a
-// bigger soft is a slacker belt. Tension only: a belt shorter than its rest length
-// is slack, and slack belting pushes nothing.
+// bigger soft is a slacker belt. Tension only: a belt shorter than its rest length is
+// slack, and slack belting pushes nothing.
 function beltTension(con, f){
   if(!(con.soft>0) || conReleased(con)) return 0;
   const g=f||beltFrame(con); if(!g) return 0;
@@ -1055,10 +1138,10 @@ function beltEnergy(con){
 // which is exactly why a soft belt transmits its torque through the no-slip rows
 // above and not through this force.
 function beltPullCols(f, T){
-  const parts=[], n=f.nodes.length;
-  for(let i=0;i<n;i++){
-    const sIn=f.spans[(i-1+n)%n], sOut=f.spans[i];
-    parts.push(f.nodes[i].epf.velCols(T*(sOut.ux-sIn.ux), T*(sOut.uy-sIn.uy)));
+  const parts=[], m=f.nodes.length;
+  for(let j=0;j<m;j++){
+    const sIn=f.spans[(j-1+m)%m], sOut=f.spans[j];
+    parts.push(f.nodes[j].epf.velCols(T*(sOut.ux-sIn.ux), T*(sOut.uy-sIn.uy)));
   }
   return mergeCols(parts);
 }
@@ -1066,8 +1149,8 @@ function beltPullCols(f, T){
 // ---- building and recapturing a belt ----------------------------------------
 // THE constructor (SCENE.md §S.2). `nodes` is the ordered loop: each entry an
 // endpoint plus what that node is, in makeConPoint's own vocabulary. A freshly built
-// belt is unstressed -- every segment constant, and so the rest length, is read off
-// the geometry it was built at.
+// belt is unstressed -- every belt distance, and so the rest length, is read off the
+// geometry it was built at.
 function makeBeltCon(nodes, opts){
   const o=opts||{};
   const con={type:'belt', pts:[], soft:o.soft||0, posable:!!o.posable, restLen:0, sel:false};
@@ -1075,84 +1158,147 @@ function makeBeltCon(nodes, opts){
   beltRefresh(con, true);
   return con;
 }
-// Re-read every constant the belt holds off its live path: each gripping node's
-// segment material, each locked eyelet's rest angle, and the rest length that is
-// their sum. With `fill` set only the ones that are MISSING are computed, which is
-// what a scene file's own captured values are loaded through (§17.4) -- the file is
-// authoritative where it speaks, and the geometry fills the rest.
+// Re-read what the belt holds off its live path: every grip's belt distance, the rest
+// length that is the loop's own period, and each locked eyelet's rest angle. With
+// `fill` set the file's own captured values stand and only what is MISSING is read
+// off the geometry (§17.4) -- and because belt distances are one measurement round
+// one loop, they are missing together or not at all: a line that names some and not
+// others gets the whole loop fitted to the machine as drawn, which is also what makes
+// a terse hand-written belt (nodes and nothing else) legal and mean the obvious thing.
 //
-// The phi anchor goes first, and raw captures follow it, for exactly the reason
-// recaptureConAngles gives (§06.2b): a constant captured against an unwrapped
+// The heading anchors go first, and the captures follow them raw, for exactly the
+// reason recaptureConAngles gives (§06.2b): a constant captured against an unwrapped
 // heading would disagree by a whole turn with the rows after the next Reset re-seeded
 // that heading from a fresh atan2.
 function beltRefresh(con, fill){
   if(!fill) con._psi=undefined;
-  const f=beltFrame(con); if(!f){ con.restLen=con.restLen||0; return; }
-  const nds=beltNodes(con);
-  for(const seg of beltSegments(con)){
-    if(seg.p==null) continue;
-    if(fill && nds[seg.p].restSeg!==undefined) continue;
-    const P=f.nodes[seg.p], Q=f.nodes[seg.q];
-    let L=0; for(const si of seg.spans) L+=f.spans[si].L;
-    nds[seg.p].restSeg = L - Q.sg*(Q.inPsi - Q.th) + P.sg*(P.outPsi - P.th);
+  const f=beltFrame(con); if(!f) return;
+  const grips=f.nodes.filter(N=>beltGrips(N.nd));
+  const haveAll = grips.length && grips.every(N=>N.nd.mu!==undefined) && con.restLen>0;
+  if(!(fill && haveAll)){
+    // One walk round the loop with the tape measure: the first grip's arrival is the
+    // origin, every span adds its straight run, every wheel its arc, and coming back
+    // to the origin gives the loop's period.
+    let mu=0;
+    if(grips.length){
+      const m=f.nodes.length;
+      let j=grips[0].j;
+      grips[0].nd.mu = -grips[0].sg*(grips[0].inPsi - grips[0].th);
+      for(let step=0; step<m; step++){
+        const N=f.nodes[j];
+        mu += Math.abs(N.sg)*N.alpha;                 // across this node's own arc
+        mu += f.spans[j].L;                           // and along the span it leaves on
+        j=(j+1)%m;
+        const K=f.nodes[j];
+        if(K.j===grips[0].j) break;
+        if(beltGrips(K.nd)) K.nd.mu = mu - K.sg*(K.inPsi - K.th);
+      }
+      con.restLen = mu;
+    } else {
+      con.restLen = f.length;
+    }
   }
-  for(let i=0;i<nds.length;i++){
-    if(beltIsWheel(nds[i]) || !nds[i].lock) continue;
-    if(fill && nds[i].restAng!==undefined) continue;
-    nds[i].restAng = f.nodes[i].th - beltNodeAngle(f, i);
+  for(const N of f.nodes){
+    if(beltIsWheel(N.nd) || !N.nd.lock) continue;
+    if(fill && N.nd.restAng!==undefined) continue;
+    N.nd.restAng = N.th - beltNodeAngle(f, N.j);
   }
-  con.restLen = beltGripCount(con) ? beltSegRestSum(con) : (fill && con.restLen ? con.restLen : f.length);
 }
-// Set the belt's rest length, spreading the change over its segments in proportion
-// to the belting each currently holds -- so lengthening a belt adds slack evenly
-// rather than parking it all in one span, and the wheels' phases are undisturbed.
+// Set the belt's rest length: there is more (or less) belting, and it is the WHOLE
+// belt that is longer, so every grip's belt distance scales with the loop's period.
+// Lengthen a belt and the slack appears evenly all round rather than parked in one
+// span, and the wheels' phases relative to one another are undisturbed.
 function beltSetRestLen(con, v){
-  const now=beltRestLen(con), d=v-now;
-  if(!isFinite(d) || d===0){ con.restLen=v; return; }
-  const nds=beltNodes(con), grips=nds.filter(beltGrips);
-  if(!grips.length){ con.restLen=Math.max(1e-6, v); return; }
-  const f=beltFrame(con);
-  const segs=beltSegments(con);
-  const w=segs.map(seg=>{ let L=0; if(f) for(const si of seg.spans) L+=f.spans[si].L; return Math.max(L,1e-9); });
-  const tot=w.reduce((a,b)=>a+b,0);
-  segs.forEach((seg,j)=>{ if(seg.p!=null) nds[seg.p].restSeg += d*w[j]/tot; });
-  con.restLen=beltSegRestSum(con);
+  const now=beltRestLen(con);
+  if(!(v>0) || !(now>0)){ con.restLen=Math.max(1e-9, v); return; }
+  const k=v/now, f=beltFrame(con), nds=beltNodes(con);
+  for(let i=0;i<nds.length;i++){
+    const nd=nds[i];
+    if(!beltGrips(nd) || nd.mu===undefined) continue;
+    const N = f && f.at[i];
+    if(N) nd.mu = k*beltMu(N, N.inPsi) - N.sg*(N.inPsi - N.th);
+    else   nd.mu = k*nd.mu;                          // peeled off: no contact to read
+  }
+  con.restLen=v;
+}
+// A wheel the belting has peeled off is not gripping anything, so there is no grip
+// point for it to hold: its belt distance follows whatever belting is passing nearest
+// to it, which is what makes it seat again silently wherever the belt comes back.
+// Called once per substep (physics.js §08.1), the belt's counterpart of the cable's
+// slack-time bookkeeping (CABLE.md §C.5) -- and, like it, the reason this constant is
+// something a RUN can change and so is in the Reset snapshot (§17.6).
+//
+// The wheel re-seats in phase but not necessarily at speed: it has been turning free
+// while the belt was off it, and the rows put it back on the belt's own rim speed the
+// step it returns. That is a clutch, and a real one dissipates; this engine has no
+// dissipation channel, so §08.6 holds the ledger flat across it instead. Brief
+// peel-offs (the common case, a belt shaken off and back) barely show it.
+function beltSettle(con){
+  const f=beltFrame(con); if(!f) return;
+  const nds=beltNodes(con), m=f.nodes.length;
+  const prs=beltPairs(con,f);
+  if(!prs.length) return;
+  for(let i=0;i<nds.length;i++){
+    const nd=nds[i];
+    if(!beltIsWheel(nd) || f.at[i]) continue;         // on the path: it holds its own
+    // Walk the pairs for the span that passes nearest this wheel's centre, carrying
+    // the belt distance along with us, and read the distance off at the closest point.
+    const [cx,cy]=epWorld(nd.ep);
+    let best=null;
+    for(const pr of prs){
+      let mu=beltMu(f.nodes[pr.p], f.nodes[pr.p].outPsi);
+      for(const sj of pr.spans){
+        const s=f.spans[sj];
+        const dx=s.Ax-s.Dx, dy=s.Ay-s.Dy, L2=dx*dx+dy*dy;
+        const t = L2>0 ? Math.max(0, Math.min(1, ((cx-s.Dx)*dx+(cy-s.Dy)*dy)/L2)) : 0;
+        const d = Math.hypot(cx-(s.Dx+t*dx), cy-(s.Dy+t*dy));
+        if(!best || d<best.d) best={d, mu: mu + t*s.L, psi:s.psi};
+        mu += s.L;
+      }
+    }
+    if(best) nd.mu = best.mu - beltSignedR(nd)*(best.psi - epFrame(nd.ep).th);
+  }
 }
 // Set (or clear) a node's own flags, recapturing what that changes. Toggling `tied`
-// or `wrap` re-cuts the loop or re-routes it, so every segment constant is re-read;
-// a lock only needs its own rest angle. Each is the belt's counterpart of setRodWeld.
+// gives a node a belt distance it did not have (or takes one away), so it is read off
+// the live geometry; toggling `wrap` re-routes the belt around that wheel, which is a
+// different loop, so the whole tape measure is run again. Each is the belt's
+// counterpart of setRodWeld.
 function setBeltWrap(con, nd, v){ if(!beltIsWheel(nd)) return; nd.wrap = v<0?-1:1; beltRefresh(con); }
 function toggleBeltWrap(con, nd){ setBeltWrap(con, nd, beltSignedR(nd)<0 ? 1 : -1); }
 function setBeltTied(con, nd, v){
   if(beltIsWheel(nd)) return;
   nd.tied=!!v;
-  if(!nd.tied) delete nd.restSeg;
-  beltRefresh(con);
+  if(!nd.tied){ delete nd.mu; return; }
+  // A grip added to a loop that already has some reads its own belt distance off the
+  // belting it is on, leaving every other grip's alone -- which is the whole payoff
+  // of storing distances rather than gaps.
+  const f=beltFrame(con); if(!f) return;
+  const N=f.at[beltNodes(con).indexOf(nd)];
+  nd.mu = N ? beltDistanceAt(con, f, N) : 0;
 }
 function setBeltLock(con, nd, v){
   if(beltIsWheel(nd)) return;
   nd.lock=!!v;
   if(!nd.lock){ delete nd.restAng; return; }
   const f=beltFrame(con); if(!f) return;
-  nd.restAng = f.nodes[beltNodes(con).indexOf(nd)].th - beltNodeAngle(f, beltNodes(con).indexOf(nd));
+  const N=f.at[beltNodes(con).indexOf(nd)];
+  if(N) nd.restAng = N.th - beltNodeAngle(f, N.j);
 }
-// The tension each segment of the belt is carrying, read off the solve -- one number
-// per segment, in beltSegments order, positive when that stretch of belting is taut.
-// A segment row's own multiplier IS its tension (its columns are the pull the tension
-// applies, so lambda/h is the force), which is what makes a belt's instrumentation
-// free in the same way every other joint's is (§09.3).
-//
-// A SOFT belt's rows are the DIFFERENCES of adjacent segments (§06.2e), so their
-// multipliers are tension differences: undo the differencing by a running sum, and
-// add the elastic tension every segment carries alike.
-function beltSegTensions(con){
-  const n=beltSegments(con).length, l=con._lam||[], h=sim.h;
-  const out=new Array(n).fill(0);
-  if(!(con.soft>0)){ for(let j=0;j<n;j++) out[j]=(l[j]||0)/h; return out; }
-  const T=beltTension(con);
-  let prev=0;
-  for(let j=0;j<n;j++){ const mu = j<n-1 ? (l[j]||0) : 0; out[j]=T+(mu-prev)/h; prev=mu; }
-  return out;
+// The belt distance of the belting where it meets path node N, worked out by walking
+// back to the nearest grip before it and adding the belting in between. The reading a
+// node takes when it starts gripping -- and every other grip's own reading is left
+// exactly as it was, which is the whole payoff of storing distances rather than gaps.
+function beltDistanceAt(con, f, N){
+  const m=f.nodes.length;
+  let j=N.j, back=0;
+  for(let step=0; step<m; step++){
+    const prev=(j-1+m)%m;
+    back += f.spans[prev].L;
+    if(beltGrips(f.nodes[prev].nd)) return beltMu(f.nodes[prev], f.nodes[prev].outPsi) + back;
+    j=prev;                       // an untied eyelet bends the belting, adds none
+  }
+  return 0;
 }
 
 // ---- §06.3 · cableFrame ----

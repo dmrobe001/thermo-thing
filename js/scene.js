@@ -37,10 +37,12 @@
 // the silent reinterpretation a version number exists to prevent.
 // Version 4 rewrote the belt. A belt used to be `belt <disk> -- <disk> rA=... rB=...
 // crossed restPhase=...`, two rims and one phase between them; it is now
-// `belt pt=<node> pt=<node> ...`, a closed loop through an ordered list of wheels and
-// eyelets with no base pair at all (constraints.js §06.2e). The version had to move
-// for the reason version 3 did: the old two-token form still parses under the new
-// reading -- as a belt with no nodes -- and would mean something else.
+// `belt restLen=... pt=<node> pt=<node> ...`, a closed loop through an ordered list of
+// wheels and eyelets with no base pair at all, each gripping node carrying its own
+// BELT DISTANCE `mu` -- how far round the belting it holds -- against the loop's
+// period `restLen` (constraints.js §06.2e). The version had to move for the reason
+// version 3 did: the old two-token form still parses under the new reading -- as a
+// belt with no nodes -- and would mean something else.
 const SCENE_VERSION = 4;
 
 // ---- §17.1 · the ledger ----
@@ -223,23 +225,28 @@ const SCENE_SCHEMA = [
   // written in is the order the belting runs through them (constraints.js §06.2e).
   // Two nodes is the classic two-pulley belt; more is a longer route.
   //
-  // `restLen` is written only for a belt with no gripping node at all -- the one case
-  // whose single segment closes on itself and so has no node to hang its material
-  // constant off. Everywhere else the rest length is the sum of the segments' own
-  // `restSeg`, and writing it too would let a file disagree with itself.
+  // `restLen` is how much belting there is -- the loop's own period, against which
+  // every node's `mu` (its belt distance) is read. It is captured, not authored: a
+  // freshly built belt is as long as the path it was built on.
+  //
+  // A wheel's `mu` is state a RUN can change, which is why it has an entry below as
+  // well: while the belting is peeled off a wheel there is no grip point to hold, so
+  // the wheel's belt distance follows the belting nearest it (constraints.js §06.2e
+  // beltSettle) and Reset has to put it back.
   { kind:'belt', list:'constraints', match:c=>c.type==='belt',
     fields:{
       soft:{t:'num', def:0, get:c=>c.soft, set:(c,v)=>{c.soft=v;}},
       posable:{t:'flag', def:false, get:c=>!!c.posable},
-      restLen:{t:'num', always:true, when:c=>!beltGripCount(c),
-               get:c=>c.restLen, set:(c,v)=>{c.restLen=v;}},
+      restLen:{t:'num', always:true, get:c=>c.restLen, set:(c,v)=>{c.restLen=v;}},
       pt:PT_FIELD('belt'),
     },
     build:q=>makeBeltCon([], {soft:q('soft'), posable:q('posable')}),
     // Whatever the file did not capture is read off the path the nodes make -- which
     // is also what makes a terse hand-written belt (nodes and nothing else) legal and
     // mean the obvious thing: a belt fitted to the machine as drawn, unstressed.
-    finish:o=>beltRefresh(o, true) },
+    finish:o=>beltRefresh(o, true),
+    state:[ ['mu', c=>beltNodes(c).map(nd=>nd.mu),
+                  (c,a)=>{ beltNodes(c).forEach((nd,i)=>{ if(a[i]!==undefined) nd.mu=a[i]; }); }] ] },
 
   { kind:'cvt', list:'constraints', match:c=>c.type==='cvt',
     ends:[['a','id'], ['b','id']],
@@ -485,12 +492,12 @@ function parseEp(tok, spec, ln, what, env){
 // (constraints.js §06.2e), and they are the whole of the belt -- one `pt=` per node,
 // in the order the belting runs through them:
 //
-//   pt=3/wheel/restSeg=1.2         body 3, a wheel the belt wraps at the disk's own
-//                                  radius, carrying the segment that departs it
-//   pt=3/wheel/r=0.25/wrap=-1/restSeg=1.2   ...at an authored wrap radius, passed
-//                                  the other way round
+//   pt=3/wheel/mu=1.2              body 3, a wheel the belt wraps at the disk's own
+//                                  radius, gripping the belting at belt distance 1.2
+//   pt=3/wheel/r=0.25/wrap=-1/mu=1.2   ...at an authored wrap radius, passed the
+//                                  other way round
 //   pt=5@(0,0.2)                   an eyelet on body 5: the belt passes through it
-//   pt=5@(0,0.2)/tied/restSeg=0.9  ...gripping the belting at one material point
+//   pt=5@(0,0.2)/tied/mu=0.9       ...clamped to the belting 0.9 round the loop
 //   pt=bg(2,1)/lock/restAng=0      an eyelet on the background, turning whatever it
 //                                  is on with the belt's local direction
 //
@@ -503,11 +510,11 @@ function fmtPt(fd, pt){
       const parts=[fmtEp(pt.ep,'id'), 'wheel'];
       parts.push(`r=${fmtNum(pt.r||0)}`);
       if(pt.wrap<0) parts.push('wrap=-1');
-      parts.push(`restSeg=${fmtNum(pt.restSeg||0)}`);
+      parts.push(`mu=${fmtNum(pt.mu||0)}`);
       return parts.join('/');
     }
     const parts=[fmtEp(pt.ep,'ep')];
-    if(pt.tied) parts.push('tied', `restSeg=${fmtNum(pt.restSeg||0)}`);
+    if(pt.tied) parts.push('tied', `mu=${fmtNum(pt.mu||0)}`);
     if(pt.lock) parts.push('lock', `restAng=${fmtNum(pt.restAng||0)}`);
     return parts.join('/');
   }
@@ -521,7 +528,7 @@ function fmtPt(fd, pt){
 // one option, not two. The split is therefore at the slashes that sit outside every
 // parenthesis AND are followed by one of this format's option words -- nothing else
 // can begin a segment, and no expression can look like one.
-const PT_OPT = /^(s=|r=|wrap=|restAng=|restSeg=|lock(?=\/|$)|pinion(?=\/|$)|wheel(?=\/|$)|tied(?=\/|$))/;
+const PT_OPT = /^(s=|r=|mu=|wrap=|restAng=|lock(?=\/|$)|pinion(?=\/|$)|wheel(?=\/|$)|tied(?=\/|$))/;
 function splitPt(tok){
   const out=[]; let depth=0, start=0;
   for(let i=0;i<tok.length;i++){
@@ -540,7 +547,7 @@ function parsePt(fd, name, tok, ln, env){
   const rest=parts.slice(1);
   const takes = kind==='pin' ? [] : kind==='slot' ? ['lock','restAng']
               : kind==='rod' ? ['s','lock','restAng']
-              : kind==='belt' ? ['wheel','r','wrap','tied','lock','restAng','restSeg']
+              : kind==='belt' ? ['wheel','r','wrap','tied','lock','restAng','mu']
               : ['s','lock','restAng','pinion'];
   for(const seg of rest){
     const eq=seg.indexOf('=');
@@ -585,18 +592,18 @@ function parseBeltPt(name, epTok, out, ln, env){
     const nd = {ep:parseEp(epTok, 'id', ln, name, env), kind:'wheel',
                 wrap: out.wrap!==undefined ? (out.wrap<0?-1:1) : 1};
     if(out.r!==undefined) nd.r=out.r;
-    if(out.restSeg!==undefined) nd.restSeg=out.restSeg;
+    if(out.mu!==undefined) nd.mu=out.mu;
     return nd;
   }
   for(const k of ['r','wrap'])
     if(said(k)) throw new SceneError(ln, `${name}: "${k}" is a wheel's word -- an eyelet has no rim`);
   const nd = {ep:parseEp(epTok, 'ep', ln, name, env), kind:'eyelet',
               tied:!!out.tied, lock:!!out.lock};
-  if(!nd.tied && said('restSeg'))
-    throw new SceneError(ln, `${name}: restSeg means nothing on an eyelet the belt slides through -- write "tied" to grip it`);
+  if(!nd.tied && said('mu'))
+    throw new SceneError(ln, `${name}: an eyelet the belt slides through has no belt distance of its own -- write "tied" to clamp it`);
   if(!nd.lock && said('restAng'))
     throw new SceneError(ln, `${name}: restAng means nothing on a node that is not locked`);
-  if(out.restSeg!==undefined) nd.restSeg=out.restSeg;
+  if(out.mu!==undefined) nd.mu=out.mu;
   if(out.restAng!==undefined) nd.restAng=out.restAng;
   return nd;
 }

@@ -532,6 +532,10 @@ function substep(h){
   // again for a belt slack of its rest length -- belting pushes nothing.
   for(const con of constraints){
     if(con.type!=='belt') continue;
+    // A wheel the belting has peeled off holds no grip point, so its belt distance
+    // follows the belting passing nearest it -- once per substep, the belt's
+    // counterpart of the cable's slack-time bookkeeping (constraints.js §06.2e).
+    beltSettle(con);
     const f=beltFrame(con); if(!f) continue;
     const T=beltTension(con, f); if(!(T>0)) continue;
     for(const [idx,cx,cy,cw,cl] of beltPullCols(f, T)){

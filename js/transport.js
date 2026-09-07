@@ -50,7 +50,12 @@ function restoreState(){
   // restored geometry's raw atan2, matching how restAngA/B were themselves
   // captured from a fresh, un-accumulated angle. Mirrors cables' _spoolAngle
   // reset below.
-  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._phiRef=undefined; });
+  // _psi is the belt's own counterpart of _phiRef -- the per-span heading anchors it
+  // unwraps against (constraints.js §06.2e) -- and goes stale the same way: a belt
+  // that has wound several turns and is then snapped back to the saved pose would
+  // otherwise unwrap the restored geometry onto the winding it had accumulated,
+  // disagreeing with belt distances that were captured against a fresh atan2.
+  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._phiRef=undefined; c._psi=undefined; });
   cables.forEach(c=>{
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
     c._Lallow=null; c._spoolAngle=undefined;

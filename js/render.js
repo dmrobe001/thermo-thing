@@ -550,6 +550,18 @@ function drawBeltConstraint(con,col,sel){
       ctx.strokeStyle=col; ctx.lineWidth=1.5;
       ctx.beginPath(); ctx.arc(sx,sy,8,0,Math.PI*2); ctx.stroke(); }
   }
+  // A wheel the belting has PEELED OFF (constraints.js §06.2e) is not on the path at
+  // all, so the loop above never reaches it. Draw its pitch circle anyway, and faintly
+  // -- the wheel is still part of this belt and will seat again when the belting comes
+  // back; it just is not carrying anything now, which is what the belting running past
+  // it already says.
+  const nds=beltNodes(con);
+  for(let i=0;i<nds.length;i++){
+    if(f.at[i] || !beltIsWheel(nds[i])) continue;
+    const [wx,wy]=epWorld(nds[i].ep);
+    ctx.globalAlpha=0.4; drawRim(wx, wy, Math.abs(beltSignedR(nds[i])), col, epFrame(nds[i].ep).th);
+    ctx.globalAlpha=1;
+  }
 }
 // A rack and pinion (constraints.js §06.2/§06.5). The rack is a dashed line spanning
 // the viewport -- infinite, as the constraint treats it, and the same viewport-

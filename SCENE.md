@@ -137,13 +137,19 @@ never recomputed since. The pose no longer implies them:
   what makes its rest length an editable-by-dragging parameter in the case a belt is
   usually in: its wheels are not what you grab. Both are the editor writing the scene, which is what
   an editor is for; neither happens while the sim runs.
-- `belt` node data -- each `pt`'s `r`/`wrap` on a wheel, `tied`/`lock` on an eyelet,
-  and the captured `restSeg` (the belting held by the segment departing that node)
-  and `restAng` that go with them. `restSeg` is the belt's `restPhase`, one per
-  gripping node; the belt's REST LENGTH is their sum and so is derived rather than
-  written -- except on a belt with no gripping node at all, whose one segment closes
-  on itself and has no node to hang a constant off, where `belt.restLen` is written
-  instead (`when:` on the ledger row says exactly that).
+- `belt.restLen` -- how much belting the loop has -- and each gripping `pt`'s `mu`,
+  its BELT DISTANCE: how far round that belting the node holds it, measured against
+  the same period. Plus each node's own `r`/`wrap` (a wheel), `tied`/`lock` and
+  `restAng` (an eyelet). `mu` is the belt's `restPhase`, one per gripping node, and it
+  is deliberately an ABSOLUTE reading rather than a gap to the next grip: which grips
+  are consecutive changes as the machine runs -- a wheel the belting peels off, a tied
+  eyelet carried round one -- and a gap would have to be re-derived at every such
+  event, losing whatever the belt was holding. A distance survives all of them
+  untouched (`DEVELOPMENT.md` §4.1c).
+  `mu` is also the one belt field a RUN can change, which is why it has a `state`
+  entry too: while the belting is off a wheel there is no grip point to hold, so that
+  wheel's reading follows the belting nearest it and Reset has to put it back -- the
+  same shape as the cable's `spoolAngle`.
 - `rotspring.restAngle`.
 - `cable.Ltot`, `cable.localAngle`, `cable.spoolAngle`.
 - `knife.dir` (body-frame).

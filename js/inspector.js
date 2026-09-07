@@ -229,19 +229,24 @@ function renderVesselInspector(v){
 function beltNodesCard(c){
   const nds=beltNodes(c);
   if(!nds.length) return '';
-  const segs=beltSegments(c);
-  const segAt=new Map(); segs.forEach((sg,j)=>{ if(sg.p!=null) segAt.set(sg.p,j); });
+  const f=beltFrame(c);
+  const prs=f?beltPairs(c,f):[];
+  const segAt=new Map(); prs.forEach((pr,j)=>{ segAt.set(f.nodes[pr.p].i, j); });
   const rows=nds.map((nd,k)=>{
     const where = nd.ep.id==null ? 'background' : ('body '+nd.ep.id);
+    const off = f && !f.at[k];                 // peeled off: the belting no longer reaches it
     const j=segAt.get(k);
     const tens = j===undefined ? '' :
       `<div class="field force"><span class="lab">tension after</span><span class="val" data-btens="${j}">--</span></div>`;
     const body = beltIsWheel(nd)
-      ? `${numRow('wrap radius', 'bn_r'+k, (nd.r||0).toFixed(3), {step:0.02, min:0.02})}
+      ? `${numRow('belt distance', 'bn_mu'+k, (nd.mu||0).toFixed(3), {step:0.05})}
+         ${numRow('wrap radius', 'bn_r'+k, (nd.r||0).toFixed(3), {step:0.02, min:0.02})}
          <label class="chk"><input type="checkbox" data-bwrap="${k}" ${nd.wrap<0?'checked':''}> belt passes the other way round</label>`
-      : `<label class="chk"><input type="checkbox" data-btied="${k}" ${nd.tied?'checked':''}> tied to the belt</label>
+      : `${nd.tied?numRow('belt distance', 'bn_mu'+k, (nd.mu||0).toFixed(3), {step:0.05}):''}
+         <label class="chk"><input type="checkbox" data-btied="${k}" ${nd.tied?'checked':''}> tied to the belt</label>
          <label class="chk"><input type="checkbox" data-block="${k}" ${nd.lock?'checked':''}> welded to the belt&rsquo;s direction</label>`;
-    return `<div class="field"><span class="lab">${k+1}. ${where}</span><span class="val">${beltIsWheel(nd)?'wheel':'eyelet'}</span></div>
+    const what = beltIsWheel(nd) ? (off?'wheel &middot; peeled off':'wheel') : 'eyelet';
+    return `<div class="field"><span class="lab">${k+1}. ${where}</span><span class="val">${what}</span></div>
             ${body}${tens}
             <div class="field"><span class="lab">order</span><span class="val">
               <button class="del" data-bup="${k}" style="display:inline-block;width:auto;padding:2px 8px">&uarr;</button>
@@ -267,6 +272,13 @@ function bindBeltNodesCard(c){
   }
   for(const nd of nodes()){
     const k=nodes().indexOf(nd);
+    // A belt distance typed in slides this ONE grip along the belting and leaves every
+    // other node's alone -- which is the whole point of storing distances rather than
+    // gaps, and is why nothing is recaptured here.
+    if(beltGrips(nd) && document.getElementById('bn_mu'+k))
+      document.getElementById('bn_mu'+k).onchange=()=>{ const v=numVal('bn_mu'+k);
+        if(!isFinite(v)) return;
+        nd.mu=v; projectPositions(8); commit(); };
     if(!beltIsWheel(nd) || !document.getElementById('bn_r'+k)) continue;
     document.getElementById('bn_r'+k).onchange=()=>{ const v=numVal('bn_r'+k, x=>x>0.02);
       if(!isFinite(v)) return;
@@ -408,7 +420,7 @@ function renderInspector(){
         <label class="chk"><input type="checkbox" id="f_posable" ${c.posable?'checked':''}> posable</label>`;
     if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
         <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
-    const note = isBelt ? 'A closed loop of belting through the wheels and eyelets listed below, in that order. It grips a wheel and a <b>tied</b> eyelet and slides through an untied one, so each stretch of belting between two grips holds a fixed amount of belt \u2014 which is what fixes the wheels\u2019 speed ratios and the belt\u2019s own length together. Nothing collides here, so which way round the belt passes each wheel is a free choice: flip one and the belt crosses. <b>Softness</b> is the reciprocal of the belting\u2019s elastic modulus \u2014 zero is inextensible, and anything larger lets the loop stretch, carrying tension = stretch/softness and pushing nothing when it is slack. <b>Posable</b> takes the belt out of the way entirely while you pose the machine \u2014 wherever you drag, not just on a wheel \u2014 and re-fits its segments, and so its rest length, to the configuration you leave behind.'
+    const note = isBelt ? 'A closed loop of belting through the wheels and eyelets listed below, in that order. It grips a wheel and a <b>tied</b> eyelet and slides through an untied one. Each gripping node holds the belting at its own <b>belt distance</b> \u2014 how far round the loop, against the rest length \u2014 so the belting between each pair of grips is a fixed amount, which is what fixes the wheels\u2019 speed ratios and the belt\u2019s own length together. Belting only bears on a wheel from outside, so a wheel it no longer reaches drops off the belt and turns free until the belting comes back. Nothing collides here, so which way round the belt passes each wheel is a free choice: flip one and the belt crosses. <b>Softness</b> is the reciprocal of the belting\u2019s elastic modulus \u2014 zero is inextensible, and anything larger lets the loop stretch, carrying tension = stretch/softness and pushing nothing when it is slack. <b>Posable</b> takes the belt out of the way entirely while you pose the machine \u2014 wherever you drag, not just on a wheel \u2014 and re-fits its segments, and so its rest length, to the configuration you leave behind.'
                : c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
                : isRack ? 'Nonholonomic: an infinite, massless rack line named by its two pins \u2014 pin A locates it, pin B aims it, and drag either to move the rack. Put both on one body and the rack rides that body\u2019s frame. A welded pin also locks its body\u2019s rotation to the rack\u2019s heading; tap a pin on the canvas to toggle it. Each pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
@@ -640,7 +652,7 @@ function updateInspectorLive(){
     if(c.type==='belt'){
       const eL=document.getElementById('f_blen');
       if(eL){ eL.textContent=beltLength(c).toFixed(3); setLive('f_brest', beltRestLen(c).toFixed(3)); }
-      const T=beltSegTensions(c);
+      const T=beltTensions(c);
       for(const el of document.querySelectorAll('[data-btens]'))
         el.textContent=(T[Number(el.dataset.btens)]||0).toFixed(2);
     }

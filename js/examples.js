@@ -172,6 +172,12 @@ belt: `scene 4
 # it as a MATERIAL BALANCE rather than as an asserted gear law: what the drive feeds
 # into a run of belting is what the load takes out of it.
 #
+# Every gripping node carries its BELT DISTANCE, mu -- how far round the belting it
+# holds, measured against the loop's own period, restLen. Run a tape measure round
+# this belt and the drive holds it at -1.03, the load at 4.73, the idler at 9.78.
+# They are absolute readings, not gaps between neighbours, which is what lets the
+# belting peel off a wheel and seat again without any of them changing.
+#
 # The third node is an EYELET on the background, and it is what a belt gains over
 # the old two-rim one. The belt passes through it, so the lower run is pulled down
 # to clear the idler below rather than running straight. It is untied, so the belt
@@ -207,7 +213,7 @@ body 3 x=1.3 y=1.15 r=0.25 w=-6
 rod bg(0,0.6) -- 1 len=1.4 weld=A restAngA=1.57079632679
 rod bg(2.6,0.6) -- 2 len=1.4 weld=A restAngA=1.57079632679
 rod bg(1.3,0.35) -- 3 len=0.8 weld=A restAngA=1.57079632679
-belt pt=1/wheel/r=0.5/restSeg=5.75891962537 pt=2/wheel/r=0.2/restSeg=5.04699943063 pt=bg(1.3,2.9) pt=3/wheel/r=0.25/wrap=-1/restSeg=-0.183797356431
+belt restLen=10.6221216996 pt=1/wheel/r=0.5/mu=-1.02929627154 pt=2/wheel/r=0.2/mu=4.72962335384 pt=bg(1.3,2.9) pt=3/wheel/r=0.25/wrap=-1/mu=9.77662278447
 `,
 
 cable: `scene 4
