@@ -4,6 +4,9 @@
 //    §14.0  numeric fields (numRow/numVal -- one editable number, as arithmetic)
 //    §14.1  selection state (clearSelection, select*, pickCable)
 //    §14.2  renderInspector    (build the panel DOM per selection type)
+//    §14.2b renderVesselInspector (the vessel's own panel)
+//    §14.2c the incidence row (one relation, three panels: a vertex's, a body's,
+//           a line's -- all built out of incidenceRow)
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
 // ---- §14.0 · numeric fields ----
@@ -143,7 +146,9 @@ function renderVesselInspector(v){
       ${numRow('w', 'v_w', v.w.toFixed(3), {step:0.1})}
       ${numRow('len rate', 'v_vlen', v.vlen.toFixed(3), {step:0.1})}
     </div>
+    ${bodyVerticesCard(v)}
     <button class="del" id="v_del">Delete vessel</button>`;
+  wireIncidenceRows();
   const commit=()=>{ renderInspector(); saveState(); };
   // Geometry edits go through resizeVessel, which keeps the gas sealed (mass and
   // temperature carry over) and scales the shell mass with the footprint to hold
@@ -194,12 +199,12 @@ function renderVesselInspector(v){
     bodies=bodies.filter(x=>x!==v); clearSelection(); saveState(); };
 }
 
-// ---- §14.2 · renderInspector (panel DOM per selection type) ----
-// One branch per selection: body, constraint, cable, spring, rotational
-// spring, or the empty bench.
-// ---- the two lists a vertex and a body show of each other (constraints.js §06.2e) ----
-// One relation, read from either side: a vertex lists the bodies it touches, a body
-// lists the vertices on it. VERTEX.md §X.11.
+// ---- §14.2c · the two lists a vertex and a body show of each other ----
+// One relation, read from either side: a vertex lists what it is at, a body lists the
+// vertices at it. What each list holds is the EXTENT relation of constraints.js
+// §06.2e -- everything the point is inside, not just what has been joined to it --
+// so the two panels agree with each other and with the picture, and the tick that
+// says `joined` is the only control either of them needs.
 // What to call a body in a list: its label, and a line says so, because "line 7" and
 // "body 7" are two very different things to be attached to.
 function bodyName(id){
@@ -208,30 +213,163 @@ function bodyName(id){
   const b=bodies[bodyIndex(id)];
   return b ? `body ${b.label!==undefined?b.label:b.id}` : `body ${id}`;
 }
-// A vertex's own panel: its label, where it is, and one row per incidence -- the
-// body, where the vertex sits in that body's frame, and the two ticks.
-function vertexInspectorHTML(v){
-  const ons=vertexOns(v);
+// ---- the incidence ROW, which all three panels are built out of ----
+// A vertex's panel, a body's and a line's show the same row from different sides, so
+// there is one builder and they cannot drift apart. It is also the one place that
+// says what an edit in such a row MEANS:
+//
+//   the coordinates  are where the vertex sits in that body's own frame -- its
+//                    station, for a line. Committing one moves something and then
+//                    asks the assembly to agree (projectPositions): where an
+//                    incidence holds the vertex there, it is that ANCHOR that moves
+//                    and the bodies that have to follow; where nothing holds it,
+//                    there is no anchor to move, so the VERTEX goes to the point
+//                    named and its own joins are re-read. Either way it is a solve
+//                    attempt and not an assertion -- a distance the mechanism cannot
+//                    take leaves the bench where the solver could get to.
+//   joined           makes the incidence, or releases it. Releasing leaves the body
+//                    on the list holding nothing, which is what a "remove" button
+//                    used to be for and is why there is no longer one.
+//   welded / slide   are what a joined incidence may additionally hold; both are
+//                    disabled without it, because both are things a JOIN does.
+//
+// `incRows` is the render-scoped registry the fields and ticks index into. It is
+// cleared by renderInspector before any panel is built, so a row's number means the
+// same thing to the markup that wrote it and the handler that reads it.
+let incRows=[];
+// Where a row's coordinates come from: the incidence's own stored offset where there
+// is one -- that is the authored number, and under a violation it is not what the
+// geometry reads -- and the live geometry where there is none to read.
+function incidenceOff(v, id){
+  const e=vertexOns(v).find(x=>x.id===id);
+  if(e && !isLineOn(e)) return e.off;
   const [wx,wy]=vertexWorld(v);
-  const P=vertexPrimary(v);
-  const welds=ons.filter(e=>e.join&&e.weld).length;
-  const rows=ons.map((e,k)=>{
-    // A LINE entry says where along the bar the vertex sits, and carries the one tick
-    // the others do not: whether it may travel (constraints.js §06.2f).
-    const where = isLineOn(e)
-      ? (e.join ? (e.slide ? 'slides along it' : `station ${(e.s||0).toFixed(3)}`) : 'not held')
-      : e.id==null ? `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)}) world`
-      : `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)})${bodies[bodyIndex(e.id)] && bodies[bodyIndex(e.id)].shape==='vessel' ? ' material' : ''}`;
-    const slide = isLineOn(e)
-      ? `<label class="chk"><input type="checkbox" data-vslide="${k}" ${e.slide?'checked':''} ${e.join?'':'disabled'}> slide</label>` : '';
-    return `<div class="field"><span class="lab">${bodyName(e.id)}${e===P?' &middot; primary':''}</span><span class="val">${where}</span></div>
-      <label class="chk"><input type="checkbox" data-vjoin="${k}" ${e.join?'checked':''}> joined</label>
-      ${slide}<label class="chk"><input type="checkbox" data-vweld="${k}" ${e.weld?'checked':''} ${e.join?'':'disabled'}> welded</label>
-      <button class="del" data-vdel="${k}">Remove ${bodyName(e.id)}</button>`;
-  }).join('');
-  const hasBg = ons.some(e=>e.id==null);
-  const addBg = hasBg ? '' :
-    `<button class="del" id="vt_addbg">Pin to the background here</button>`;
+  if(id==null) return [wx,wy];
+  const b=bodies[bodyIndex(id)];
+  return b ? epOffOf(b,wx,wy) : [0,0];
+}
+function incidenceStation(v, line){
+  const e=vertexOns(v).find(x=>x.id===line.id);
+  if(e && e.join && !e.slide) return e.s||0;
+  const [wx,wy]=vertexWorld(v);
+  return lineStationAt(line, wx, wy);
+}
+function incidenceRow(v, id, o={}){
+  const k=incRows.length;
+  incRows.push({v, id});
+  const line = id!=null ? lineById(id) : null;
+  const e = vertexOns(v).find(x=>x.id===id) || null;
+  const join = !!(e && e.join);
+  // Whose name the row carries: the BODY's on a vertex's panel, the VERTEX's on a
+  // body's or a line's -- and there it is a link, because the other panel is where
+  // the rest of what that vertex holds is said.
+  const name = o.selVertex ? `<a href="#" data-inc-sel="${k}">${v.label}</a>` : bodyName(id);
+  const P = vertexPrimary(v);
+  const b = id!=null ? bodies[bodyIndex(id)] : null;
+  const what = line
+    ? (!e ? 'lies on it' : !join ? 'not held' : e.slide ? 'slides along it' : 'held')
+    : (!e ? 'inside it' : !join ? 'marks a spot' : e===P ? 'joined &middot; locates it' : 'joined');
+  const coords = line
+    ? numRow('station', `inc_s${k}`, incidenceStation(v,line).toFixed(3), {step:0.05})
+    : (()=>{ const off=incidenceOff(v,id);
+        const unit = b && b.shape==='vessel' ? ' material' : '';
+        return numRow('x'+unit, `inc_x${k}`, off[0].toFixed(3), {step:0.05})
+             + numRow('y'+unit, `inc_y${k}`, off[1].toFixed(3), {step:0.05}); })();
+  const slide = line
+    ? `<label class="chk"><input type="checkbox" data-inc-slide="${k}" ${e&&e.slide?'checked':''} ${join?'':'disabled'}> slide</label>` : '';
+  return `<div class="inc">
+    <div class="field"><span class="lab">${name}</span><span class="val">${what}</span></div>
+    ${coords}
+    <div class="chkrow">
+      <label class="chk"><input type="checkbox" data-inc-join="${k}" ${join?'checked':''}> joined</label>
+      ${slide}
+      <label class="chk"><input type="checkbox" data-inc-weld="${k}" ${e&&e.weld?'checked':''} ${join?'':'disabled'}> welded</label>
+    </div>
+  </div>`;
+}
+// Ticking `joined` on. Where there is no incidence yet it makes one AT THE PLACE THE
+// VERTEX ALREADY IS, so the tick never snaps anything -- the discipline every capture
+// in the engine follows. A line's joint is made sliding, as the line tool makes them
+// (VERTEX.md §X.11), and gets the quick solve that brings the vertex onto the bar; a
+// body's is exact where it stands and needs none.
+function setIncidenceJoin(v, id, want){
+  const e = vertexOns(v).find(x=>x.id===id) || null;
+  if(e){ setVertexJoin(v, e, want); return; }
+  if(!want) return;
+  const line = id!=null ? lineById(id) : null;
+  const [wx,wy]=vertexWorld(v);
+  const b = id!=null ? bodies[bodyIndex(id)] : null;
+  const off = id==null ? [wx,wy] : b ? epOffOf(b,wx,wy) : [0,0];
+  if(!makeVertexOn(v, {id, off}, {join:true, slide:true})) return;
+  if(line) projectPositions(12);
+}
+// The two commits a row's coordinates make, lifted out of the handlers so the panel
+// wiring is only wiring and each is one testable thing. Both snapshot the pose first:
+// whatever moves here is a rigid move like any other, so a rolling pair on it takes
+// it up as slip (projection.js §09.1). Both end in a projection, which is an ATTEMPT
+// -- a distance the mechanism cannot take leaves the bench wherever the solver got to,
+// exactly as typing a body's pose does.
+function commitIncidenceOff(v, id, x, y){
+  const e=vertexOns(v).find(z=>z.id===id);
+  if(e && isLineOn(e)) return;             // a line holds a station, not an offset
+  const q0=poseSnapshot();
+  if(e) e.off=[x,y];
+  else {
+    // Nothing stored to move, so the VERTEX goes to the point named: the same edit
+    // its own x/y field makes, said in this body's frame instead.
+    const b = id!=null ? bodies[bodyIndex(id)] : null;
+    const [wx,wy] = id==null ? [x,y] : b ? epWorldPt(b,[x,y]) : [x,y];
+    setVertexWorld(v, wx, wy);
+  }
+  projectPositions(8, null, q0);
+}
+// A HELD joint owns its station, so the number is stored and the bar rearranges
+// around it. A slider owns none -- and neither does a vertex merely lying on the line
+// -- so there the number says where to put the point, and the joins re-read.
+function commitIncidenceStation(v, line, s){
+  const q0=poseSnapshot();
+  const e=vertexOns(v).find(z=>z.id===line.id);
+  if(e && e.join && !e.slide) e.s=s;
+  else { const p=lineStationPoint(line, s); if(!p) return; setVertexWorld(v, p[0], p[1]); }
+  projectPositions(8, null, q0);
+}
+function wireIncidenceRows(){
+  const done=()=>{ renderInspector(); saveState(); };
+  const el=id=>document.getElementById(id);
+  incRows.forEach((R,k)=>{
+    const v=R.v, id=R.id, line = id!=null ? lineById(id) : null;
+    const fx=el(`inc_x${k}`), fy=el(`inc_y${k}`), fs=el(`inc_s${k}`);
+    if(fx && fy){
+      const commit=()=>{ const x=numVal(`inc_x${k}`), y=numVal(`inc_y${k}`);
+        if(!isFinite(x) || !isFinite(y)) return;
+        commitIncidenceOff(v, id, x, y); done(); };
+      fx.onchange=commit; fy.onchange=commit;
+    }
+    if(fs && line) fs.onchange=()=>{ const s=numVal(`inc_s${k}`);
+      if(!isFinite(s)) return;
+      commitIncidenceStation(v, line, s); done(); };
+  });
+  for(const t of document.querySelectorAll('[data-inc-join]')){
+    const R=incRows[Number(t.dataset.incJoin)]; if(!R) continue;
+    t.onchange=ev=>{ setIncidenceJoin(R.v, R.id, ev.target.checked); done(); }; }
+  for(const t of document.querySelectorAll('[data-inc-weld]')){
+    const R=incRows[Number(t.dataset.incWeld)]; if(!R) continue;
+    t.onchange=ev=>{ const e=vertexOns(R.v).find(z=>z.id===R.id);
+      if(e) setVertexWeld(R.v, e, ev.target.checked); done(); }; }
+  for(const t of document.querySelectorAll('[data-inc-slide]')){
+    const R=incRows[Number(t.dataset.incSlide)]; if(!R) continue;
+    t.onchange=ev=>{ const e=vertexOns(R.v).find(z=>z.id===R.id);
+      if(e) setVertexSlide(R.v, e, ev.target.checked); done(); }; }
+  for(const t of document.querySelectorAll('[data-inc-sel]')){
+    const R=incRows[Number(t.dataset.incSel)]; if(!R) continue;
+    t.onclick=ev=>{ ev.preventDefault(); selectConstraint(constraints.indexOf(R.v)); }; }
+}
+// A vertex's own panel: its label, where it is, and one row per site -- every body
+// whose extent covers the point, the background included, with the joined ones ticked.
+function vertexInspectorHTML(v){
+  const [wx,wy]=vertexWorld(v);
+  const welds=vertexOns(v).filter(e=>e.join&&e.weld).length;
+  const rows=vertexSites(v).map(s=>incidenceRow(v, s.id)).join('');
   // A single weld holds nothing, and saying so is better than drawing a tick that
   // does not do anything: welding ties one frame to another, and one frame has
   // nothing to tie to (VERTEX.md §X.3).
@@ -248,7 +386,8 @@ function vertexInspectorHTML(v){
       <p class="muted" style="margin:8px 0 0">Moving the vertex re-reads every joined body's own anchor, so the bodies stay where they are and the point moves between them.</p>
     </div>
     <div class="card"><div class="cardhead">bodies at this vertex</div>
-      ${rows || '<p class="muted">none</p>'}${weldNote}${addBg}
+      ${rows || '<p class="muted">none</p>'}${weldNote}
+      <p class="muted" style="margin:8px 0 0">Everything whose extent covers this point, whether it is held here or not &mdash; the background always, since its extent is the whole plane. Tick <b>joined</b> to hold the vertex to one, untick it to let go; the body stays listed either way, because what is listed is where the point <em>is</em>. Editing a coordinate moves the anchor and asks the assembly to follow.</p>
     </div>
     <button class="del" id="vt_del">Delete vertex</button>`;
 }
@@ -266,53 +405,31 @@ function wireVertexCard(v){
     setVertexWorld(v,x,y); projectPositions(8,null,q0);
     renderInspector(); saveState(); };
   el('vt_x').onchange=commitPos; el('vt_y').onchange=commitPos;
-  for(const e2 of document.querySelectorAll('[data-vjoin]')){
-    const k=Number(e2.dataset.vjoin);
-    e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexJoin(v,e,ev.target.checked);
-      renderInspector(); saveState(); }; }
-  for(const e2 of document.querySelectorAll('[data-vslide]')){
-    const k=Number(e2.dataset.vslide);
-    e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexSlide(v,e,ev.target.checked);
-      renderInspector(); saveState(); }; }
-  for(const e2 of document.querySelectorAll('[data-vweld]')){
-    const k=Number(e2.dataset.vweld);
-    e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexWeld(v,e,ev.target.checked);
-      renderInspector(); saveState(); }; }
-  for(const e2 of document.querySelectorAll('[data-vdel]')){
-    const k=Number(e2.dataset.vdel);
-    e2.onclick=()=>{ v.on.splice(k,1);
-      // A vertex with no incidence has no position and nothing to say (§06.2e).
-      if(!vertexOns(v).length) constraints=constraints.filter(c=>c!==v);
-      clearSelection(); saveState(); }; }
-  if(el('vt_addbg')) el('vt_addbg').onclick=()=>{
-    const [wx,wy]=vertexWorld(v);
-    makeVertexOn(v, {id:null, off:[wx,wy]}, {join:true});
-    renderInspector(); saveState(); };
   el('vt_del').onclick=()=>{ constraints=constraints.filter(c=>c!==v); clearSelection(); saveState(); };
 }
-// ...and the same relation from the body's side: every vertex on it, selectable.
+// ...and the same relation from the body's side: every vertex INSIDE this body, each
+// with its place in the body's frame and the same ticks the vertex's own panel shows.
 function bodyVerticesCard(b){
-  const vs=verticesOn(b.id);
-  if(!vs.length) return '';
-  const rows=vs.map(v=>{
-    const e=vertexOns(v).find(x=>x.id===b.id);
-    const what = !e.join ? 'marked' : e.weld ? 'joined, welded' : 'joined';
-    return `<div class="field"><span class="lab"><a href="#" data-vsel="${constraints.indexOf(v)}">${v.label}</a></span>
-      <span class="val">(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)}) &middot; ${what}</span></div>`;
-  }).join('');
-  return `<div class="card"><div class="cardhead">vertices on this body</div>${rows}</div>`;
+  const vs=verticesInExtent(b.id);
+  const rows=vs.map(v=>incidenceRow(v, b.id, {selVertex:true})).join('');
+  return `<div class="card"><div class="cardhead">vertices on this body</div>
+    ${rows || '<p class="muted">none</p>'}
+    <p class="muted" style="margin:8px 0 0">Every vertex this body's extent covers, held here or not. Coordinates are in the body's own frame, and editing one moves the anchor and asks the assembly to follow.</p></div>`;
 }
-function bindBodyVerticesCard(){
-  for(const el of document.querySelectorAll('[data-vsel]'))
-    el.onclick=ev=>{ ev.preventDefault(); selectConstraint(Number(el.dataset.vsel)); };
-}
+// ---- §14.2 · renderInspector (panel DOM per selection type) ----
+// One branch per selection: body, constraint, cable, spring, rotational
+// spring, or the empty bench.
 function renderInspector(){
   const p=document.getElementById('panelBody');
+  // Every incidence row any panel below draws numbers itself out of this, so it is
+  // cleared here, once, before any of them is built (§14.2c).
+  incRows=[];
   // A group is checked first: it is a selection of many bodies, so none of the
   // single-object branches below can speak for it (select.js §18.5).
   if(selGroup){ p.innerHTML=groupInspectorHTML(selGroup); wireGroupCard(); return; }
   if(selConstraint && isVertex(selConstraint)){
-    p.innerHTML=vertexInspectorHTML(selConstraint); wireVertexCard(selConstraint); wireNumIns(); return; }
+    p.innerHTML=vertexInspectorHTML(selConstraint);
+    wireVertexCard(selConstraint); wireIncidenceRows(); wireNumIns(); return; }
   if(selBody && selBody.shape==='vessel'){ renderVesselInspector(selBody); return; }
   if(selBody){
     const b=selBody; const isRect=b.shape==='rect';
@@ -341,7 +458,7 @@ function renderInspector(){
       </div>
       ${bodyVerticesCard(b)}
       <button class="del" id="f_del">Delete body</button>`;
-    bindBodyVerticesCard();
+    wireIncidenceRows();
     document.getElementById('f_label').onchange=ev=>{
       const want=String(ev.target.value).trim();
       const taken=bodies.some(x=>x!==b && String(x.label)===want)
@@ -395,11 +512,14 @@ function renderInspector(){
     const f=lineFrame(c);
     const J=f?f.J:[];
     const bar=lineIsBar(c);
-    const jointRows = J.map(K=>{
-      const held=!K.e.slide;
-      return `<div class="field"><span class="lab"><a href="#" data-jsel="${constraints.indexOf(K.v)}">${K.v.label}</a></span>
-        <span class="val">${held?`station ${(K.e.s||0).toFixed(3)}`:'slides'}${K.e.weld?' &middot; welded':''}</span></div>`;
-    }).join('');
+    // Every vertex the line's extent covers, in station order -- its joints, and the
+    // ones merely lying on it, which are a tick away from being joints (§14.2c). P
+    // sits at the highest station and Q at the lowest, which is the order lineFrame
+    // already sorts its own joints into.
+    const onLine = verticesInExtent(c.id)
+      .map(v=>({v, s:incidenceStation(v,c)}))
+      .sort((a,b2)=>b2.s-a.s);
+    const jointRows = onLine.map(K=>incidenceRow(K.v, c.id, {selVertex:true})).join('');
     // One row per stretch between consecutive held joints -- editable, and editing one
     // shifts the stations after it, which is what changing a bar's length means.
     const segs = lineSegments(c);
@@ -414,9 +534,9 @@ function renderInspector(){
         <div class="field force"><span class="lab">|force|</span><span class="val" id="f_rf">--</span></div>
         <div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>
       </div>
-      <div class="card"><div class="cardhead">joints, in order along the line</div>
+      <div class="card"><div class="cardhead">vertices along the line</div>
         ${jointRows || '<p class="muted">none</p>'}
-        <p class="muted" style="margin:8px 0 0">Every joint lies on the line. A joint that <em>slides</em> may travel along it; one that is held keeps its station, and the distances below are what that comes to. Tick <b>slide</b> on a vertex&rsquo;s own panel to change which.</p>
+        <p class="muted" style="margin:8px 0 0">Every vertex on this line, held here or not. A joint that <em>slides</em> may travel along it; one that is held keeps its station, and the distances below are what that comes to. Editing a station moves that joint and asks the assembly to follow.</p>
         ${J.filter(K=>!K.e.slide).length===1 ? '<p class="muted" style="margin:8px 0 0">Only one joint here is held, so nothing is: a station is a distance from another held joint, and the first one is what the rest are measured from. Hold a second joint &mdash; one of the ones placing the line, if you want this one pinned in the world &mdash; and the distance between them becomes real.</p>' : ''}
       </div>
       ${segs.length?`<div class="card"><div class="cardhead">held distances</div>${segRows}</div>`:''}
@@ -429,8 +549,7 @@ function renderInspector(){
         c.mesh.map(id=>`<div class="field"><span class="lab">body ${id}</span><span class="val">rolls on the line</span></div>`).join('')}
         <p class="muted" style="margin:8px 0 0">Rolling contact with perfect traction wherever the disk sits, at a pitch radius that is its own live distance from the line. Nonholonomic.</p></div>`:''}
       <button class="del" id="f_del">Delete line</button>`;
-    for(const el of document.querySelectorAll('[data-jsel]'))
-      el.onclick=ev=>{ ev.preventDefault(); selectConstraint(Number(el.dataset.jsel)); };
+    wireIncidenceRows();
     document.getElementById('L_label').onchange=ev=>{
       const want=String(ev.target.value).trim();
       const taken=constraints.some(x=>x!==c && x.label===want) || bodies.some(b2=>String(b2.label)===want);

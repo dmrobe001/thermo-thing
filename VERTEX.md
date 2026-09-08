@@ -540,19 +540,45 @@ vertex C on=2/join/weld     on=6/join/weld    # the piston, riding it, angle hel
     where the line is already welded makes body 3 rigid with the bar immediately.
     Untick the line's own weld and everything at that vertex hinges again.
 
-**The inspector is two lists, and they are one relation seen from both sides.**
+**The inspector is two lists, and they are one relation seen from both sides.** What
+each list holds is the **extent** relation, not the incidence one: everything the
+point is *inside*, and not just what has been joined to it. A vertex sitting in a
+body is at a place on that body whether or not anything has said so yet, so the list
+is a fact about the geometry rather than a record of the editing history -- which
+means the body underneath is listed exactly like the one on top, the background is in
+every list (its extent is the whole plane, which is what a body with a fixed frame
+comes to), and `joined` is the only control such a list needs. Ticking it on makes
+the incidence, at the place the vertex already occupies, so it snaps nothing; ticking
+it off releases it and *leaves the body listed*, holding nothing. There is therefore
+no "remove" button on either side, and nothing a press could lose.
 
-- *A vertex selected*: its label, its world position, and one row per incidence --
-  the body, the offset in that body's frame, `joined`, `welded`, and `slide` for line
-  bodies. Plus a button to remove an incidence, and the honest note when fewer than
-  two incidences are welded.
-- *A body selected*: its label, its own properties as now, and one row per vertex on
-  it -- the same relation, read the other way. Selecting a row selects that vertex.
-- *A line selected*: its label, `soft`, `posable`, its joints in station order, and
-  the distance between each consecutive non-sliding pair, editable. Plus its meshing
-  disks.
+A body's extent is its own outline, so `bodyContains` answers it exactly. A line has
+no width, so "on it" has to be a tolerance rather than a test: a millimetre, which at
+any zoom the bench is usable at sits well inside one pixel.
+
+- *A vertex selected*: its label, its world position, and one row per **site** -- the
+  body, where the vertex sits in that body's frame, `joined`, `welded`, and `slide`
+  for line bodies. Plus the honest note when fewer than two incidences are welded.
+- *A body selected*: its label, its own properties as now, and one row per vertex
+  **inside** it -- the same relation, read the other way, with the same coordinates
+  and the same ticks. Selecting a row selects that vertex.
+- *A line selected*: its label, `soft`, `posable`, every vertex on it in station
+  order -- its joints and the ones merely lying on it alike -- and the distance
+  between each consecutive non-sliding pair, editable. Plus its meshing disks.
 - *The background selected*: reachable from the empty-bench panel, listing every
   vertex pinned to ground.
+
+**Every coordinate in one of those rows is editable, and committing one is a solve
+attempt.** Where an incidence holds the vertex there, the number *is* the anchor, so
+the anchor moves and the assembly has to follow; where nothing holds it, there is no
+anchor to move, so the vertex goes to the point named and its own joins are re-read
+-- the same edit its own x/y field makes, said in another body's frame. A line's
+coordinate is its station: a held joint owns one, so the number is stored and the bar
+rearranges around it, while a slider -- or a vertex with no joint at all -- owns
+none, so the number says where along the bar to put the point. Either way it ends in
+`projectPositions`, which is an *attempt*: a distance the mechanism cannot take
+leaves the bench wherever the solver could get to, exactly as typing a body's pose
+does.
 
 **Canvas.** Vertices draw as dots -- one dot per joint, not the stack of coincident
 endpoints the pin draws today -- filled when joined, hollow when merely marking a

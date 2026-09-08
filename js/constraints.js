@@ -22,9 +22,12 @@
 //    §06.2d the pose-time release (withPosing, recapturePosable) -- what a
 //           `posable` LINE does while a body it touches is dragged
 //    §06.2e the VERTEX (makeVertex, makeVertexOn, vertexWorld, verticesOn) -- a
-//           named point and the bodies it touches, which is what a pin became
-//    §06.2f the LINE (makeLine, lineFrame, lineJoints) -- a straight bar whose
-//           frame is derived from its joints, which is what rod/slot/rack became
+//           named point and the bodies it touches, which is what a pin became;
+//           plus vertexSites/verticesInExtent, the same relation widened to what
+//           the point is INSIDE, which is what the two panels list
+//    §06.2f the LINE (makeLine, lineFrame, lineJoints, lineStationAt) -- a straight
+//           bar whose frame is derived from its joints, which is what rod/slot/rack
+//           became
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -555,8 +558,76 @@ function setVertexWorld(v, wx, wy){
   }
 }
 // Every vertex touching a body, and every body a vertex touches -- the one relation,
-// read from either side, which is what the two inspector lists show (§14.2).
+// read from either side. This is the INCIDENCE relation, which is what the rows, the
+// scene walk and the selection's membership rule read; what the two inspector lists
+// show is the wider one just below.
 const verticesOn = id => constraints.filter(c => isVertex(c) && vertexOns(c).some(e=>e.id===id));
+
+// ---- what the two lists LIST: extent, not incidence (§14.2c) ----
+// A vertex sitting inside a body is at a place on that body whether or not anything
+// has said so yet, and that is what the panels show: every body whose extent covers
+// the point, with the joined ones ticked. The list is therefore not a record of what
+// has been attached -- it is what the vertex is *at*, which is a fact about the
+// geometry and not about the editing history. Three things follow, and they are the
+// point of it:
+//
+//   * `joined` is the only control such a list needs. Ticking it on makes the
+//     incidence; ticking it off releases it and leaves the body listed, holding
+//     nothing. There is no "remove" to press, and so nothing a press can lose.
+//   * the background is in every list. Its extent is the whole plane -- which is what
+//     a body with a fixed frame comes to -- and a ground pin is what ticking it on is.
+//   * a body under another body is listed too. Depth decides what a CLICK lands on
+//     (§13.2 pickBody); it has nothing to say about what a point is inside.
+//
+// A body's extent is its own outline, so `bodyContains` (§05.2) answers it exactly. A
+// LINE has no width, so "on it" has to be a tolerance rather than a test: a
+// millimetre, which at any zoom the bench is usable at sits well inside one pixel, so
+// a line the vertex is not visibly on does not appear.
+const LINE_EXTENT_TOL = 1e-3;
+function lineCovers(line, wx, wy){
+  const f=lineFrame(line); if(!f) return false;
+  if(Math.abs(f.nx*(wx-f.wax) + f.ny*(wy-f.way)) > LINE_EXTENT_TOL) return false;
+  if(!lineIsBar(line)) return true;                    // a rail runs on past its joints
+  const du = f.ux*(wx-f.wax) + f.uy*(wy-f.way);        // P sits at 0, Q at -L (§06.2f)
+  return du <= LINE_EXTENT_TOL && du >= -f.L - LINE_EXTENT_TOL;
+}
+function extentCovers(id, wx, wy){
+  if(id==null) return true;
+  const L=lineById(id); if(L) return lineCovers(L, wx, wy);
+  const b=bodies[bodyIndex(id)];
+  return !!b && bodyContains(b, wx, wy);
+}
+// The vertex's side of it: one SITE per thing the vertex is at, each carrying the
+// incidence that holds it there or null where nothing does yet. Ordered background,
+// bodies, lines -- deterministic, and the order `vertexPrimary` already ranks by. An
+// incidence naming something the list did not reach is appended rather than dropped,
+// so a stored one is never hidden behind a list read off live geometry.
+function vertexSites(v){
+  const [wx,wy]=vertexWorld(v);
+  const ons=vertexOns(v);
+  const at = id => ons.find(e=>e.id===id) || null;
+  const out=[{ id:null, e:at(null) }];
+  for(const b of bodies){ const e=at(b.id); if(e || bodyContains(b,wx,wy)) out.push({id:b.id, e}); }
+  for(const c of constraints){ if(!isLine(c)) continue;
+    const e=at(c.id); if(e || lineCovers(c,wx,wy)) out.push({id:c.id, e}); }
+  const shown=new Set(out.map(s=>s.id));
+  for(const e of ons) if(!shown.has(e.id)) out.push({id:e.id, e});
+  return out;
+}
+// ...and the body's side of the same list. `verticesOn` above stays what it was --
+// the incidence relation, which is what the row assembly and the scene walk want;
+// this one is what a PANEL wants, and the difference between them is the whole of the
+// paragraph above.
+function verticesInExtent(id){
+  const out=[];
+  for(const c of constraints){
+    if(!isVertex(c)) continue;
+    if(vertexOns(c).some(e=>e.id===id)){ out.push(c); continue; }
+    const [wx,wy]=vertexWorld(c);
+    if(extentCovers(id, wx, wy)) out.push(c);
+  }
+  return out;
+}
 
 // Labels. A vertex defaults to A, B, ... Z, AA, AB, ..., taking the first name not
 // already in use, so deleting one frees its letter again. One namespace with bodies
@@ -752,6 +823,22 @@ function captureLineStation(line, v){
   const f=lineFrame(line); if(!f || !f.O) return 0;
   const K=f.J.find(x=>x.v===v); if(!K) return 0;
   return K.du - f.O.du;
+}
+// The station a world POINT sits at -- the same measure, read off the geometry rather
+// than off the joint list, so a vertex that merely LIES on the line has one too and
+// the panel can show it (§14.2c). For a vertex that is a joint the two agree exactly:
+// a joint's `du` is taken from its locator's world point, which is where the vertex is.
+function lineStationAt(line, wx, wy){
+  const f=lineFrame(line); if(!f) return 0;
+  return f.ux*(wx-f.wax) + f.uy*(wy-f.way) - (f.O ? f.O.du : 0);
+}
+// ...and back again: the world point a station names. What the panel's station field
+// commits for a joint that holds no station of its own -- a slider, or a vertex on
+// the line with nothing joining it there.
+function lineStationPoint(line, s){
+  const f=lineFrame(line); if(!f) return null;
+  const du = s + (f.O ? f.O.du : 0);
+  return [f.wax + f.ux*du, f.way + f.uy*du];
 }
 // The distances between consecutive NON-SLIDING joints, in station order: what the
 // inspector lists (VERTEX.md §X.4) and what the file writes. A line with fewer than

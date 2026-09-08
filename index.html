@@ -172,6 +172,13 @@
   .field .numin.bad{border-color:var(--force);color:var(--force)}
   .chk{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--mid);cursor:pointer;margin-top:8px}
   .chk input{accent-color:var(--accent)}
+  /* One incidence: a vertex, a body, and what is held between them (inspector.js
+     §14.2c). A panel lists several, so each is ruled off from the next, and its
+     ticks sit on one line rather than stacking three deep. */
+  .inc{padding-bottom:2px}
+  .inc + .inc{border-top:1px solid var(--hair);padding-top:8px;margin-top:8px}
+  .chkrow{display:flex;flex-wrap:wrap;gap:6px 16px}
+  .chkrow .chk{margin-top:6px}
   .del{width:100%;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--force);
        background:transparent;border:1px solid rgba(236,91,82,.4);border-radius:6px;padding:7px;cursor:pointer}
   .del:hover{background:rgba(236,91,82,.12)}

@@ -20,6 +20,16 @@
 //      flags and rest angles, and a scaled selection box leaves it assembled.
 //   7. the tool: one tap plants a vertex, and the same tap again in the same place
 //      reaches through to join the body underneath -- which is how a hinge is made.
+//   8. the two lists the panels show: EXTENT, not incidence. A vertex lists every
+//      body whose outline covers it -- the background always, and the one underneath
+//      exactly like the one on top -- and a body lists every vertex inside it. Ticking
+//      `joined` off leaves the body listed holding nothing, which is why there is no
+//      longer a "remove" button and nothing a press could lose.
+//   9. what a coordinate in one of those rows commits: the ANCHOR where an incidence
+//      holds one, the VERTEX where nothing does, and a solve attempt either way.
+//  10. the same from a line's side: a vertex merely lying on the bar is listed by it
+//      and has a station, ticking `joined` makes it a slider, and a held joint takes
+//      the station it is given.
 const fs=require('fs'), path=require('path'), vm=require('vm');
 const ROOT=path.join(__dirname,'..');
 const stubEl = () => new Proxy({}, { get:(t,k)=>
@@ -280,6 +290,124 @@ run(`(()=>{ clearScene(); setTool('vertex'); runToolClick(3,4); })()`);
   const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>[e.id,e.off]))');
   ok('a tap on empty space anchors to the background there',
      JSON.stringify(vs)==='[[[null,[3,4]]]]', JSON.stringify(vs));
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n8. the two lists: extent, not incidence (constraints.js §06.2e, inspector.js §14.2c)');
+// Two overlapping disks and a vertex joined to ONE of them, at a point inside both.
+const OVERLAP = `(()=>{ clearScene(); sim.gravity=false;
+  const a=makeBody(0,0,1.0);   bodies.push(a);
+  const b=makeBody(0.5,0,0.8); bodies.push(b);
+  const v=makeVertex(null);
+  makeVertexOn(v,{id:b.id,off:[-0.05,0.3]},{join:true});
+  constraints.push(v); refreshFrozen(); return v; })()`;
+run(OVERLAP);
+{
+  const sites=J('vertexSites(constraints[0]).map(s=>[s.id, !!s.e])');
+  ok('a vertex lists the background, and BOTH bodies it is inside',
+     JSON.stringify(sites)==='[[null,false],[1,false],[2,true]]', JSON.stringify(sites));
+}
+ok('...and the one underneath is listed exactly like the one on top',
+   J('vertexSites(constraints[0]).map(s=>s.id)').includes(1),
+   'depth decides what a click lands on, not what a point is inside');
+{
+  // Ticking `joined` on a body that was only listed: it takes the incidence at the
+  // place the vertex already occupies, so nothing moves.
+  const before=J('vertexWorld(constraints[0])');
+  run(`setIncidenceJoin(constraints[0], 1, true)`);
+  const after=J('vertexWorld(constraints[0])');
+  const e=J('vertexOns(constraints[0]).find(x=>x.id===1)');
+  ok('ticking joined on a listed body makes the incidence, and snaps nothing',
+     near(before[0],after[0],1e-12) && near(before[1],after[1],1e-12) && e && e.join===true,
+     JSON.stringify([before,after,e]));
+}
+{
+  // ...and ticking it off leaves the body ON the list. That is the whole reason the
+  // panel has no "remove" button: there is nothing a press could take away.
+  run(`setIncidenceJoin(constraints[0], 1, false)`);
+  const sites=J('vertexSites(constraints[0]).map(s=>s.id)');
+  ok('unticking joined leaves the body listed', sites.includes(1), JSON.stringify(sites));
+  ok('...holding nothing', J('vertexOns(constraints[0]).find(x=>x.id===1).join')===false);
+}
+{
+  // The same relation from the body's side. Disk 1 holds nothing here, so the two
+  // readings differ, and the difference is exactly what the panel needed: `verticesOn`
+  // is the incidence relation the row assembly and the scene walk read, and
+  // `verticesInExtent` is what the point is inside.
+  run(OVERLAP);
+  ok('a body lists a vertex inside it that it holds nothing of',
+     JSON.stringify(J('verticesInExtent(1).map(v=>v.label)'))==='["A"]');
+  ok('...where the INCIDENCE relation, which the rows read, is still empty',
+     JSON.stringify(J('verticesOn(1).map(v=>v.label)'))==='[]');
+  run(`bodies[0].x = 8`);                       // walk the disk away from the vertex
+  ok('a body that no longer covers the vertex stops listing it',
+     JSON.stringify(J('verticesInExtent(1).map(v=>v.label)'))==='[]');
+  ok('...and one that holds an incidence keeps listing it wherever it goes',
+     JSON.stringify(J('verticesInExtent(2).map(v=>v.label)'))==='["A"]',
+     'an incidence is a stored fact, not a geometric one');
+}
+
+console.log('\n9. what a coordinate in one of those rows commits');
+run(PAIR);
+{
+  // A joined incidence: the number IS the anchor, so committing it moves the anchor
+  // and the assembly has to follow. Both disks are free, so the solve brings them
+  // back into coincidence at the new material point.
+  run(`commitIncidenceOff(constraints[0], 1, 0.3, 0.15)`);
+  const e=J('vertexOns(constraints[0]).find(x=>x.id===1)');
+  ok('editing the coordinates of a joined body writes the anchor',
+     JSON.stringify(e.off)==='[0.3,0.15]', JSON.stringify(e.off));
+  ok('...and the solve puts the assembly back together',
+     run('conMaxC(constraints[0])')<1e-8, String(run('conMaxC(constraints[0])')));
+}
+run(OVERLAP);
+{
+  // A body the vertex is merely INSIDE has no anchor to move, so the number says
+  // where in that body's frame to put the vertex -- the same edit its own x/y field
+  // makes, said in another frame.
+  run(`commitIncidenceOff(constraints[0], 1, 0.4, -0.2)`);
+  const w=J('vertexWorld(constraints[0])');
+  ok('editing a body it is only inside moves the VERTEX there',
+     near(w[0],0.4,1e-9) && near(w[1],-0.2,1e-9), JSON.stringify(w));
+  ok('...and the body it IS joined to re-read its own anchor, so it did not move',
+     near(J('bodies[1].x'),0.5,1e-9) && near(J('bodies[1].y'),0,1e-9));
+}
+
+console.log('\n10. a line lists the vertices on it, joint or not');
+run(`(()=>{ clearScene(); sim.gravity=false;
+  const L=makeLine(); constraints.push(L);
+  for(const x of [-1,1]){
+    const v=makeVertex(null); makeVertexOn(v,{id:null,off:[x,0]},{join:true});
+    constraints.push(v); makeVertexOn(v,{id:L.id},{join:true,slide:false}); }
+  // A third vertex sitting ON the bar, pinned to a disk, joined to nothing else.
+  const b=makeBody(0.25,0,0.2); bodies.push(b);
+  const v=makeVertex(null); makeVertexOn(v,{id:b.id,off:[0,0]},{join:true});
+  constraints.push(v);
+  refreshFrozen(); })()`);
+{
+  const on=J('verticesInExtent(constraints.find(isLine).id).map(v=>v.label)');
+  ok('a vertex lying on the bar is listed by it, with no joint at all',
+     on.length===3, JSON.stringify(on));
+  // Stations run from the origin -- the first HELD joint in joint order, the one at
+  // x=-1 -- along the line's own u, which points from the second end to the first.
+  const st=run(`incidenceStation(constraints[3], constraints.find(isLine))`);
+  ok('...and has a station, read off the geometry', near(st, -1.25, 1e-9), String(st));
+}
+{
+  run(`setIncidenceJoin(constraints[3], constraints.find(isLine).id, true)`);
+  const e=J('vertexOns(constraints[3]).find(x=>x.kind==="line")');
+  ok('ticking joined on a line makes a SLIDING joint', !!e && e.join===true && e.slide===true,
+     JSON.stringify(e));
+  run(`setVertexSlide(constraints[3], vertexOns(constraints[3]).find(x=>x.kind==="line"), false)`);
+  run(`commitIncidenceStation(constraints[3], constraints.find(isLine), 0.5)`);
+  const s2=J('vertexOns(constraints[3]).find(x=>x.kind==="line").s');
+  ok('...and a held joint takes the station it is given', near(s2,0.5,1e-12), String(s2));
+  // Station 0.5 from an origin at x=-1, along a u that points toward -x: the disk is
+  // pulled to x=-1.5, which is the solve doing what the number asked for.
+  ok('...which the solve made true of the disk carrying it',
+     near(J('bodies[0].x'), -1.5, 1e-6) && near(J('bodies[0].y'), 0, 1e-6),
+     JSON.stringify([J('bodies[0].x'), J('bodies[0].y')]));
 }
 
 console.log(`\n${pass} ok, ${fail} failed\n`);
