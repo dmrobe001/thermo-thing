@@ -330,5 +330,70 @@ const MULTI = [
   }
 }
 
+console.log('\n9. a scene loads the same whatever was on the bench before it');
+// A load must not be able to see the bench it replaced. It could, through a path
+// with three independent faults in it. commitScene ended by clearing the selection,
+// which renders the panel; an empty panel draws the scene-file card; and that card
+// writes the RESET BASELINE (sceneBaselineText) -- which at that moment still
+// belonged to the OUTGOING scene. Its snapshot was applied to the incoming bodies,
+// matched by index and by id, with nothing checking that the record and the body
+// were the same KIND. Two scenes each numbering their first body 1 is the ordinary
+// case, so loading the gas spring after the pendulum wrote a disk's six state values
+// over a vessel's nine: the vessel took the disk's position, and its length, length
+// rate and gas all became undefined. The export that followed threw on the wreckage,
+// and because the swap sat OUTSIDE its own try/finally the live pose was never put
+// back -- so the corrupted bench became the baseline, and the example loaded broken.
+//
+// This harness stubs clearSelection and renderInspector out (see the top of the
+// file), so for the pair sweep below clearSelection is pointed at the one thing
+// about the real panel that matters here: clearing the selection renders the panel,
+// an empty panel draws the scene-file card, and drawing the card reads the baseline.
+{
+  const names = JSON.parse(run('JSON.stringify(Object.keys(SCENES))'));
+  // The reference reading of each file is gathered FIRST, with the harness's own
+  // do-nothing clearSelection still in place -- so the thing being measured against
+  // cannot itself have been damaged by the fault under test.
+  const cold = {};
+  for(const n of names){ run(`clearScene(); importScene(SCENES[${JSON.stringify(n)}])`); cold[n]=run('exportScene()'); }
+  run('var _cs = clearSelection; clearSelection = function(){ sceneCardText(); };');
+  let bad=null, pairs=0;
+  for(const a of names) for(const b of names){
+    pairs++;
+    // A throw is the failure too, not a reason to stop: the fault this covers made
+    // the second import throw partway through, on a bench it had already damaged.
+    const got = run(`(()=>{ try{
+      importScene(SCENES[${JSON.stringify(a)}]); importScene(SCENES[${JSON.stringify(b)}]);
+      return exportScene(); } catch(e){ return '\\u0000threw: '+(e.message||e); } })()`);
+    if(!bad && got!==cold[b])
+      bad = `${b} loaded after ${a} `+(got[0]==='\u0000' ? got.slice(1) : `is not ${b}`);
+  }
+  ok(`all ${pairs} ordered pairs load identically`, !bad, bad);
+  // ...and what the old order produced was a live NaN, not merely different text.
+  let nan=null;
+  for(const n of names){
+    const why = run(`(()=>{ try{
+      importScene(SCENES[${JSON.stringify(n)}]); for(let i=0;i<37;i++) substep(sim.h);
+      return bodies.every(b=>[b.x,b.y,b.th,b.len===undefined?0:b.len].every(isFinite))
+        ? '' : 'went non-finite'; } catch(e){ return 'threw: '+(e.message||e); } })()`);
+    if(!nan && why) nan=`${n} ${why}`;
+  }
+  ok('and every scene, run in sequence, stays finite', !nan, nan);
+  run('clearSelection = _cs;');
+
+  // The two faults that made the damage possible, each stated on its own so a
+  // future path to the same place is caught even if this one is closed: a baseline
+  // belonging to a bench that no longer exists must not be able to touch the one
+  // that replaced it, and the routine that borrows a baseline must put the live pose
+  // back whether or not what it wrapped threw.
+  const err = run(`(()=>{ try{
+    importScene(SCENES.pendulum); const stale = snapshotState();
+    importScene(SCENES.gasspring); const before = exportScene();
+    saved = stale;                       // exactly the state commitScene rendered in
+    try { sceneBaselineText(); } catch(e) { return 'sceneBaselineText threw: '+e.message; }
+    return exportScene()===before ? '' : 'the stale baseline changed the bench';
+  } catch(e){ return 'threw: '+(e.message||e); } })()`);
+  ok('a stale baseline cannot damage the bench that replaced it', err==='', err);
+}
+
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

@@ -1104,8 +1104,14 @@ function commitScene(parsed){
   // (§06.2b) -- do it now so the first render, the first Reset baseline and any
   // inspector readout all see the same answer the substep will.
   refreshFrozen();
-  clearSelection();
+  // The baseline goes up BEFORE the selection is cleared, and the order is the whole
+  // point: clearSelection renders the panel, an empty panel draws the scene-file
+  // card, and that card writes the RESET BASELINE (sceneBaselineText) -- so with the
+  // old scene's snapshot still standing, drawing it borrows a pose belonging to a
+  // bench that no longer exists onto the one just built. Nothing downstream of an
+  // import should be able to see a baseline older than the import.
   saveState(true);
+  clearSelection();
 }
 
 // The whole of it: parse (throws on anything wrong), then commit.
@@ -1193,7 +1199,13 @@ function snapshotState(){
     rec[list] = arr.map(o=>{
       const row = SCENE_SCHEMA.find(r => r.list===list && r.match(o));
       if(!row || !row.state) return null;
-      return { id:o.id, v:row.state.map(([,get]) => get(o)) };
+      // The KIND travels with the record. A state list is per-kind and they are not
+      // the same length -- a disk's is six values, a vessel's is nine -- so a record
+      // read off one kind and applied to another writes `undefined` into whatever
+      // the shorter list does not reach, which for a vessel is its length, its
+      // length rate and its gas. The id alone does not rule that out: two scenes
+      // each numbering their first body 1 is the ordinary case, not a strange one.
+      return { id:o.id, k:row.kind, v:row.state.map(([,get]) => get(o)) };
     });
   }
   rec.bathQ = sim.bathQ;
@@ -1208,6 +1220,8 @@ function applyState(rec){
       if(s.id!==undefined && o.id!==undefined && s.id!==o.id) return;  // structure moved under us
       const row = SCENE_SCHEMA.find(r => r.list===list && r.match(o));
       if(!row || !row.state) return;
+      if(s.k!==undefined && s.k!==row.kind) return;                    // ...or changed kind under us
+      
       row.state.forEach(([, , set], k)=>set(o, s.v[k]));
       if(row.restore) row.restore(o);
     });
@@ -1253,8 +1267,12 @@ const sceneStrip = t =>
 function sceneBaselineText(){
   if(!saved) return exportScene();
   const live = snapshotState();
-  applyState(saved);
-  try { return exportScene(); }
+  // The swap goes INSIDE the try. Outside it, anything that threw between the swap
+  // and the export -- an export of a bench the swap had just made inconsistent, say
+  // -- left the borrowed baseline sitting on the live world, where the next
+  // saveState would adopt it as the scene. A restore that only runs when nothing
+  // goes wrong is not a restore.
+  try { applyState(saved); return exportScene(); }
   finally { applyState(live); }
 }
 
