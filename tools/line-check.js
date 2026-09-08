@@ -1,0 +1,278 @@
+// The LINE (constraints.js §06.2f) -- a straight massless bar whose frame is derived
+// from the vertices joined to it.
+//
+// Phase 2 of the vertex/line plan (VERTEX.md §X.4, §X.12). One object replaces four,
+// so the first thing to check is that it still does what each of them did:
+//
+//   1. the rows, and the three shapes they make. Two sliding joints are a drawn
+//      guide with NO rows; two held joints hold their distance (a rod); a rail with
+//      riders holds them on the line and nothing else (a slot).
+//   2. the four behaviours it absorbed, each against what it means rather than
+//      against the code it replaced: a pendulum swings at a fixed radius, a welded
+//      ground bar pins a body outright, a slider rides a rail and keeps its angle,
+//      and a disk meshing with a bar rolls without slip at its own live pitch radius.
+//   3. compliance: a two-joint soft line is a linear spring, its strain energy is in
+//      the ledger, and the station rows it replaces are gone.
+//   4. the origin and the extent, both derived: stations are measured from the first
+//      held joint in joint order, so adding a joint cannot reinterpret them, and a
+//      line is a finite BAR exactly when nothing on it slides.
+//   5. the heading cannot flip: a joint added beyond the far end leaves every weld
+//      on the bar holding what it held.
+//   6. freezing, restated: a welded ground bar grounds its far body and is compiled
+//      away, a strut between two of a vessel's planes locks its length, and deleting
+//      it thaws them again.
+//   7. the file and the tool: a line round-trips with its joints, and the tool's two
+//      modes build one.
+const fs=require('fs'), path=require('path'), vm=require('vm');
+const ROOT=path.join(__dirname,'..');
+const stubEl = () => new Proxy({}, { get:(t,k)=>
+  k==='getContext'       ? ()=>new Proxy({},{get:()=>()=>{}}) :
+  k==='classList'        ? {add(){},remove(){},toggle(){}} :
+  k==='querySelectorAll' ? ()=>[] :
+  k==='style' || k==='dataset' ? {} :
+  k in t ? t[k] : ()=>{},
+  set:(t,k,v)=>{ t[k]=v; return true; } });
+const ctx = vm.createContext({
+  document:{ getElementById:()=>stubEl(), createElement:()=>stubEl(),
+             querySelectorAll:()=>[], addEventListener(){} },
+  window:{addEventListener(){}, devicePixelRatio:1}, performance:{now:()=>0}, console,
+  Math, JSON, Number, String, Object, Array, Map, Set, Error,
+  requestAnimationFrame:()=>{}, setTimeout:()=>{},
+});
+ctx.globalThis = ctx;
+for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js','js/solver.js',
+                'js/physics.js','js/projection.js','js/loop.js','js/render.js','js/hud.js',
+                'js/tools.js','js/inspector.js','js/examples.js','js/scene.js','js/select.js','js/transport.js'])
+  vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
+const run = s => vm.runInContext(s, ctx);
+
+let pass=0, fail=0;
+const ok=(name,good,detail)=>{ good?pass++:fail++;
+  console.log((good?'  ok  ':'  FAIL'), name, good?'':('\n        '+detail)); };
+const near=(a,b,tol)=>Math.abs(a-b)<=tol;
+const J = expr => JSON.parse(run(`JSON.stringify(${expr})`));
+
+// A line through the given anchors. `o` per joint: {slide, weld}. Welds go on LAST,
+// once every joint exists -- a weld captures the line's own heading, and a line with
+// fewer than two joints has none yet.
+run(`var mkline = (specs)=>{
+  const L=makeLine(); constraints.push(L);
+  const vs=[];
+  for(const [ep,o] of specs){
+    const v=makeVertex(null); makeVertexOn(v,ep,{join:true}); constraints.push(v);
+    makeVertexOn(v,{id:L.id},{join:true, slide:!!o.slide});
+    vs.push([v,o]);
+  }
+  for(const [v,o] of vs){ if(!o.weld) continue;
+    for(const e of vertexOns(v)) setVertexWeld(v,e,true); }
+  refreshFrozen(); return L; };
+var theLine = () => constraints.find(isLine);`);
+
+console.log('\n1. the rows, and the three shapes they make');
+run(`(()=>{ clearScene(); sim.gravity=false;
+  const a=makeBody(0,0,0.2); bodies.push(a);
+  const b=makeBody(2,0,0.2); bodies.push(b);
+  mkline([[{id:a.id,off:[0,0]},{slide:true}],[{id:b.id,off:[0,0]},{slide:true}]]); })()`);
+ok('two sliding joints: no rows at all, a drawn guide', run('rowsFor(theLine()).length')===0,
+   'the two that place a line cannot also be held by it');
+run(`(()=>{ clearScene(); sim.gravity=false;
+  const a=makeBody(0,0,0.2); bodies.push(a);
+  const b=makeBody(2,0,0.2); bodies.push(b);
+  mkline([[{id:a.id,off:[0,0]},{slide:false}],[{id:b.id,off:[0,0]},{slide:false}]]); })()`);
+ok('two held joints: one row, the distance', run('rowsFor(theLine()).length')===1);
+run(`(()=>{ clearScene(); sim.gravity=false;
+  const b=makeBody(0,2,0.25); bodies.push(b);
+  mkline([[{id:null,off:[-3,2]},{slide:true}],[{id:null,off:[3,2]},{slide:true}],
+          [{id:b.id,off:[0,0]},{slide:true}]]); })()`);
+ok('a rail with a rider: one row, on the line', run('rowsFor(theLine()).length')===1);
+run(`makeVertexOn(constraints.filter(isVertex)[2], {id:theLine().id}, {join:true});`);
+// A station is a distance from ANOTHER held joint, so one held joint on a line holds
+// nothing -- it is the origin, and an origin has nothing to be measured against. The
+// same shape as one weld at a vertex holding nothing, and for the same reason: both
+// are relations, and a relation needs two parties.
+ok('one held joint on a rail holds nothing -- it IS the origin', run(`(()=>{
+  clearScene(); sim.gravity=false;
+  const b=makeBody(0,2,0.25); bodies.push(b);
+  mkline([[{id:null,off:[-3,2]},{slide:true}],[{id:null,off:[3,2]},{slide:true}],
+          [{id:b.id,off:[0,0]},{slide:false}]]);
+  return rowsFor(theLine()).length; })()`)===1);
+ok('...and a SECOND held joint is what pins it', run(`(()=>{
+  clearScene(); sim.gravity=false;
+  const b=makeBody(0,2,0.25); bodies.push(b);
+  mkline([[{id:null,off:[-3,2]},{slide:false}],[{id:null,off:[3,2]},{slide:true}],
+          [{id:b.id,off:[0,0]},{slide:false}]]);
+  const n=rowsFor(theLine()).length;
+  bodies[0].vx=1; setRunning(true); for(let i=0;i<120;i++) substep(sim.h);
+  return n===2 && Math.abs(bodies[0].x)<1e-9; })()`)===true,
+  'held against a background joint, the rider stops sliding');
+
+console.log('\n2. the four behaviours it absorbed');
+ok('a pendulum swings at a fixed radius', run(`(()=>{ clearScene(); sim.gravity=true;
+  const b=makeBody(2.6,4.4,0.38); bodies.push(b);
+  mkline([[{id:null,off:[0,4.4]},{slide:false}],[{id:b.id,off:[0,0]},{slide:false}]]);
+  setRunning(true); for(let i=0;i<240;i++) substep(sim.h);
+  const r=Math.hypot(bodies[0].x, bodies[0].y-4.4);
+  return Math.abs(r-2.6)<1e-4 && Math.abs(bodies[0].x-2.6)>0.5; })()`)===true);
+ok('a welded ground bar pins its far body outright', run(`(()=>{ clearScene(); sim.gravity=true;
+  const b=makeBody(1,1,0.3); bodies.push(b);
+  mkline([[{id:null,off:[0,1]},{slide:false,weld:true}],[{id:b.id,off:[0,0]},{slide:false,weld:true}]]);
+  setRunning(true); for(let i=0;i<240;i++) substep(sim.h);
+  return Math.abs(bodies[0].x-1)<1e-9 && Math.abs(bodies[0].y-1)<1e-9 && Math.abs(bodies[0].th)<1e-9; })()`)===true);
+ok('a slider rides a rail and keeps its angle', run(`(()=>{ clearScene(); sim.gravity=true;
+  const b=makeBody(0,1,0.3); bodies.push(b);
+  mkline([[{id:null,off:[-3,1]},{slide:true}],[{id:null,off:[3,1]},{slide:true}],
+          [{id:b.id,off:[0,0]},{slide:true,weld:true}]]);
+  bodies[0].vx=0.5; setRunning(true); for(let i=0;i<240;i++) substep(sim.h);
+  return Math.abs(bodies[0].y-1)<1e-9 && Math.abs(bodies[0].th)<1e-9 && bodies[0].x>0.5; })()`)===true);
+{
+  // Rolling: the two materials in contact have the same speed along the bar, so with
+  // the disk's centre pinned its spin is exactly the bar's own speed over the pitch
+  // radius -- signed by the frame, which is what the row actually says.
+  const r = run(`(()=>{ clearScene(); sim.gravity=false;
+    const cart=makeBody(0,0,0.3); bodies.push(cart); cart.vx=1;
+    const pin=makeBody(0,0.4,0.4); bodies.push(pin);
+    const L=mkline([[{id:cart.id,off:[-1,0]},{slide:false}],[{id:cart.id,off:[1,0]},{slide:false}]]);
+    L.mesh=[pin.id];
+    const v=makeVertex(null);
+    makeVertexOn(v,{id:null,off:[0,0.4]},{join:true});
+    makeVertexOn(v,{id:pin.id,off:[0,0]},{join:true});
+    constraints.push(v); refreshFrozen();
+    setRunning(true); for(let i=0;i<10;i++) substep(sim.h);
+    const f=lineFrame(L);
+    const rho=(bodies[1].x-f.wax)*f.nx + (bodies[1].y-f.way)*f.ny;
+    const along=bodies[0].vx*f.ux + bodies[0].vy*f.uy;
+    return JSON.stringify([bodies[1].w, along/rho, Math.abs(bodies[0].vx)]); })()`);
+  const [w, want, moved] = JSON.parse(r);
+  ok('a meshing disk rolls without slip at its live pitch radius',
+     near(w, want, 1e-9) && moved>0.1, `w=${w} vs ${want}`);
+}
+
+console.log('\n3. compliance');
+{
+  // The claim worth checking is not that it is springy but that it is THE spring:
+  // a two-joint compliant line has one stretch, no riders, and nothing else to hold.
+  const y = run(`(()=>{ clearScene(); sim.gravity=true;
+    const b=makeBody(0,1,0.3); bodies.push(b);
+    const L=mkline([[{id:null,off:[0,2]},{slide:false}],[{id:b.id,off:[0,0]},{slide:false}]]);
+    L.soft=1/50;
+    setRunning(true); for(let i=0;i<240;i++) substep(sim.h); return bodies[0].y; })()`);
+  ok('a compliant line oscillates about its rest length', y>0.5 && y<1.5, String(y));
+  ok('and it builds no station row -- the distance is a force now',
+     run('rowsFor(theLine()).length')===0);
+  ok('its strain energy is in the ledger', run(`(()=>{
+    const before=energy().SPE;
+    bodies[0].y -= 0.3;
+    return energy().SPE > before + 1e-6; })()`)===true,
+     'without this, §08.6 would read the store as a leak and "correct" it');
+  ok('so the total holds flat over two seconds', run(`(()=>{ clearScene(); sim.gravity=true;
+    const b=makeBody(0,1,0.3); bodies.push(b);
+    const L=mkline([[{id:null,off:[0,2]},{slide:false}],[{id:b.id,off:[0,0]},{slide:false}]]);
+    L.soft=1/50; setRunning(true);
+    const e0=energy().tot; for(let i=0;i<240;i++) substep(sim.h);
+    return Math.abs((energy().tot-e0)/e0) < 1e-9; })()`)===true);
+}
+
+console.log('\n4. the origin and the extent are derived');
+ok('stations are measured from the first HELD joint in joint order', run(`(()=>{
+  clearScene(); sim.gravity=false;
+  const a=makeBody(0,0,0.2); bodies.push(a);
+  const b=makeBody(2,0,0.2); bodies.push(b);
+  mkline([[{id:a.id,off:[0,0]},{slide:false}],[{id:b.id,off:[0,0]},{slide:false}]]);
+  const ss=constraints.filter(isVertex).map(v=>vertexOns(v).find(isLineOn).s);
+  return JSON.stringify(ss); })()`)==='[0,-2]');
+ok('a line is a BAR exactly when nothing on it slides', run(`(()=>{
+  const L=theLine(), v=constraints.filter(isVertex)[1];
+  const wasBar=lineIsBar(L);
+  setVertexSlide(v, vertexOns(v).find(isLineOn), true);
+  const nowRail=!lineIsBar(L);
+  setVertexSlide(v, vertexOns(v).find(isLineOn), false);
+  return wasBar && nowRail && lineIsBar(L); })()`)===true);
+
+console.log('\n5. the heading cannot flip under a new joint');
+ok('a joint added beyond the far end leaves the welds holding what they held', run(`(()=>{
+  clearScene(); sim.gravity=false;
+  const a=makeBody(0,0,0.2); bodies.push(a);
+  const b=makeBody(2,0,0.2); bodies.push(b);
+  const L=mkline([[{id:a.id,off:[0,0]},{slide:false,weld:true}],
+                  [{id:b.id,off:[0,0]},{slide:false,weld:true}]]);
+  const before=lineFrame(L).phi;
+  // A third body PAST the first joint, on the other side: the pair that places the
+  // line changes, and without the continuity anchor the heading would turn end for end.
+  const c=makeBody(-3,0,0.2); bodies.push(c);
+  const v=makeVertex(null); makeVertexOn(v,{id:c.id,off:[0,0]},{join:true}); constraints.push(v);
+  makeVertexOn(v,{id:L.id},{join:true, slide:true});
+  const after=lineFrame(L).phi;
+  return Math.abs(after-before) < 1e-9; })()`)===true);
+
+console.log('\n6. freezing, restated for the line');
+ok('a welded ground bar grounds its far body, and is compiled away', run(`(()=>{
+  clearScene(); sim.gravity=true;
+  const b=makeBody(1,1,0.3); bodies.push(b);
+  const L=mkline([[{id:null,off:[0,1]},{slide:false,weld:true}],[{id:b.id,off:[0,0]},{slide:false,weld:true}]]);
+  return bodies[0].static===true && L._compiled===true; })()`)===true);
+ok('...and deleting it thaws the body again', run(`(()=>{
+  constraints=constraints.filter(c=>!isLine(c)); refreshFrozen();
+  return bodies[0].static===false; })()`)===true);
+ok('a strut between two of a vessel\'s planes locks its length, not its pose', run(`(()=>{
+  clearScene(); sim.gravity=false;
+  const v=makeVessel(0,0,0.5,1.8); bodies.push(v);
+  mkline([[{id:v.id,off:[0,-0.5]},{slide:false}],[{id:v.id,off:[0,0.5]},{slide:false}]]);
+  return bodies[0].lenLock===true && bodies[0].static===false; })()`)===true);
+ok('an unwelded ground bar grounds nothing', run(`(()=>{
+  clearScene(); sim.gravity=true;
+  const b=makeBody(1,1,0.3); bodies.push(b);
+  mkline([[{id:null,off:[0,1]},{slide:false}],[{id:b.id,off:[0,0]},{slide:false}]]);
+  return bodies[0].static===false; })()`)===true);
+
+console.log('\n7. the file, and the tool');
+{
+  const FILE = [
+    'scene 5','sim gravity=on','cam x=0 y=0 scale=64',
+    'body 1 x=0 y=0 r=0.2','body 2 x=2 y=0 r=0.2','body 3 x=1 y=0 r=0.15',
+    'line 4 soft=0.02 posable',
+    'vertex A on=1/join on=4/join/fix/s=0',
+    'vertex B on=2/join on=4/join/fix/s=-2',
+    'vertex C on=3/join on=4/join',
+  ].join('\n')+'\n';
+  let err=null,t1=null,t2=null;
+  try { run(`importScene(${JSON.stringify(FILE)})`); t1=run('exportScene()');
+        run(`importScene(${JSON.stringify(t1)})`);   t2=run('exportScene()'); }
+  catch(e){ err=e; }
+  ok('a line scene loads and re-exports', !err, err&&(err.stack||String(err)));
+  if(!err){
+    ok('and round-trips byte-for-byte', t1===t2);
+    ok('the line came back with its compliance and its flag',
+       t1.split('\n').includes('line 4 soft=0.02 posable'), t1);
+  }
+}
+// The tool: NEW places a line through the first two vertices tapped, and every tap
+// after joins another. Nothing exists after ONE tap -- one point has no direction.
+run(`(()=>{ clearScene(); sim.gravity=false;
+  bodies.push(makeBody(0,0,0.2)); bodies.push(makeBody(2,0,0.2)); bodies.push(makeBody(1,1,0.2));
+  setTool('line'); setLineMode(false); cam.scale=64; })()`);
+run(`runToolClick(0,0)`);
+ok('one tap makes no line -- a point has no direction', run('constraints.filter(isLine).length')===0);
+run(`runToolClick(2,0)`);
+ok('the second tap places the line through both', run('constraints.filter(isLine).length')===1
+   && run('lineJoints(theLine()).length')===2);
+run(`runToolClick(1,1)`);
+ok('a third tap joins another vertex to the SAME line',
+   run('constraints.filter(isLine).length')===1 && run('lineJoints(theLine()).length')===3);
+ok('...and the quick solve brought it onto the line',
+   Math.abs(run('conMaxC(theLine())'))<1e-6, run('String(conMaxC(theLine()))'));
+ok('every joint the tool makes slides',
+   J('lineJoints(theLine()).map(K=>!!K.e.slide)').every(Boolean));
+run(`(()=>{ setLineMode(true); pending=null;
+  bodies.push(makeBody(3,3,0.2)); })()`);
+{
+  // Tap a point that is actually ON the line -- the quick solve moved the bodies to
+  // make them colinear, so where the third one started is not where it ended up.
+  const f=J('(()=>{ const f=lineFrame(theLine()); return [f.wax,f.way,f.wbx,f.wby]; })()');
+  run(`runToolClick(${(f[0]+f[2])/2}, ${(f[1]+f[3])/2})`);
+}
+run(`runToolClick(3,3)`);
+ok('EXTEND joins a further vertex to the line it started on',
+   run('constraints.filter(isLine).length')===1 && run('lineJoints(theLine()).length')===4);
+
+console.log(`\n${pass} ok, ${fail} failed\n`);
+process.exit(fail?1:0);

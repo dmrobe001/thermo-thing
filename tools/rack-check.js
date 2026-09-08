@@ -44,6 +44,18 @@ for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js',
                 'js/examples.js','js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
 const run = s => vm.runInContext(s, ctx);
+// A line through the given anchors, welds applied once every joint exists.
+run(`var bar = (specs)=>{
+  const L=makeLine(); constraints.push(L);
+  const vs=[];
+  for(const [ep,o] of specs){
+    const v=makeVertex(null); makeVertexOn(v,ep,{join:true}); constraints.push(v);
+    makeVertexOn(v,{id:L.id},{join:true, slide:!!o.slide}); vs.push([v,o]); }
+  for(const [v,o] of vs){ if(!o.weld) continue;
+    for(const e of vertexOns(v)) setVertexWeld(v,e,true); }
+  refreshFrozen(); return L; };
+// The rack is now a LINE with a disk meshing on it, so that is how to find one.
+var theRack = () => constraints.find(c=>isLine(c) && (c.mesh||[]).length);`);
 
 let pass=0, fail=0;
 const ok=(name,good,detail)=>{ good?pass++:fail++;
@@ -53,25 +65,29 @@ const near=(a,b,tol)=>Math.abs(a-b)<=tol;
 console.log('\n1. the rack rides its body\'s frame (not the world)');
 run(`loadExample('rack')`);
 // world heading of the rack, before and after turning the rack's body
-const head0 = run(`rackFrame(constraints.find(c=>c.type==='rack')).ang`);
+const head0 = run(`lineFrame(theRack()).phi`);
 run(`bodies[0].th = 0.5;`);
-const head1 = run(`rackFrame(constraints.find(c=>c.type==='rack')).ang`);
-ok('rack heading = the heading of its two pins, in the body frame',
-   near(head0,0,1e-12) && near(head1,0.5,1e-12),
-   `got ${head0} then ${head1}, expected 0 then 0.5`);
+const head1 = run(`lineFrame(theRack()).phi`);
+// The claim is that the heading is a fact about the BODY's frame, so turning the body
+// turns it by exactly as much. Its absolute value is the line's own convention --
+// which of the two placing joints it calls first -- and says nothing about the rack.
+ok('rack heading rides its body\'s frame exactly',
+   near(head1-head0, 0.5, 1e-12), `${head0} then ${head1}, a turn of ${head1-head0}`);
 run(`bodies[0].th = 0;`);
 
 console.log('\n2. the row is satisfied while running, at the right ratio');
 run(`loadExample('rack'); saveState(); projectPositions(20);`);
 // pitch radius is the pinion's perpendicular distance to the rack line
-const PITCH = `(()=>{const c=constraints.find(x=>x.type==='rack');
-                     return rackPitch(rackFrame(c), rackFirstPinion(c)).rho;})()`;
+const PITCH = `(()=>{const c=theRack();
+                     const f=lineFrame(c), B=bodies[bodyIndex(c.mesh[0])];
+                     return (B.x-f.wax)*f.nx + (B.y-f.way)*f.ny;})()`;
 const rho = run(PITCH);
 ok('pitch radius = 1.0 (signed -1: pinion below the rack)', near(Math.abs(rho),1.0,1e-9),
    `got ${rho}`);
 for(let i=0;i<120;i++) run('substep(sim.h)');
-const st = run(`(()=>{const c=constraints.find(x=>x.type==='rack');
-  const f=rackFrame(c); const g=rackPitch(f, rackFirstPinion(c)); const A=bodies[0], B=bodies[1];
+const st = run(`(()=>{const c=theRack();
+  const f=lineFrame(c); const B=bodies[bodyIndex(c.mesh[0])];
+  const rho=(B.x-f.wax)*f.nx + (B.y-f.way)*f.ny; const g={B, rho}; const A=bodies[0];
   // residual of the row itself: rack material speed along u minus the pinion's.
   // The rack is pinned at end a, and the cart's slot holds w = 0, so a's own
   // velocity is the cart's and there is no w x r term to add.
@@ -125,8 +141,8 @@ console.log('\n5. an off-centre rack line lets the body\'s SPIN drive the pinion
 run(`(()=>{ clearScene();
   const a=makeBody(0,0,0.5); bodies.push(a);
   const b=makeBody(0,-1,0.3); bodies.push(b);
-  const c=makeRackCon({id:a.id,off:[0,0.5]}, {id:a.id,off:[-0.5,0.5]}, false, false);
-  makeConPoint(c, {id:b.id, off:[0,0]}, {kind:'pinion'});
+  const c=bar([[{id:a.id,off:[0,0.5]},{slide:false}],[{id:a.id,off:[-0.5,0.5]},{slide:false}]]);
+  c.mesh=[b.id];
   constraints.push(c); refreshFrozen(); })()`);
 const spinBefore = run(`bodies[1].th`);
 run(`(()=>{ const q0=poseSnapshot(); bodies[0].th += 0.2; projectPositions(8,null,q0); })()`);
@@ -142,19 +158,19 @@ run(`(()=>{ clearScene();
   const base=makeBody(0,0,0.3); bodies.push(base);
   const arm =makeBody(2,0,0.2); bodies.push(arm);
   const pin =makeBody(0,-1,0.3); bodies.push(pin);
-  constraints.push(makeRodCon({id:null,off:[0,0]},{id:base.id,off:[0,0]},true,true));
-  const c=makeRackCon({id:base.id,off:[0,0]}, {id:arm.id,off:[0,0]}, false, false);
-  makeConPoint(c, {id:pin.id, off:[0,0]}, {kind:'pinion'});
+  bar([[{id:null,off:[0,0]},{slide:false,weld:true}],[{id:base.id,off:[0,0]},{slide:false,weld:true}]]);
+  const c=bar([[{id:base.id,off:[0,0]},{slide:false}],[{id:arm.id,off:[0,0]},{slide:false}]]);
+  c.mesh=[pin.id];
   constraints.push(c); refreshFrozen(); })()`);
-const aimBefore = run(`rackFrame(constraints[1]).ang`);
+const aimBefore = run(`lineFrame(constraints.filter(isLine)[1]).phi`);
 run(`bodies[1].y += 0.5;`);
-const aimAfter = run(`rackFrame(constraints[1]).ang`);
+const aimAfter = run(`lineFrame(constraints.filter(isLine)[1]).phi`);
 ok('moving the far pin aims the rack', Math.abs(aimAfter-aimBefore)>0.2,
    `heading ${aimBefore} -> ${aimAfter}`);
 ok('and the rack still passes through the near pin',
-   near(run(`rackFrame(constraints[1]).px`),0,1e-12) &&
-   near(run(`rackFrame(constraints[1]).py`),0,1e-12),
-   `origin moved to ${run(`rackFrame(constraints[1]).px`)},${run(`rackFrame(constraints[1]).py`)}`);
+   near(run(`lineFrame(constraints.filter(isLine)[1]).wax`),0,1e-12) &&
+   near(run(`lineFrame(constraints.filter(isLine)[1]).way`),0,1e-12),
+   `origin moved to ${run(`lineFrame(constraints.filter(isLine)[1]).wax`)},${run(`lineFrame(constraints.filter(isLine)[1]).way`)}`);
 
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

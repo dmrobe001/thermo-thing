@@ -204,7 +204,7 @@ ok('ticking weld on captures the live angle', run(`(()=>{ clearScene();
 
 console.log('\n6. the file');
 const FILE = [
-  'scene 4','sim gravity=off','cam x=0 y=0 scale=64',
+  'scene 5','sim gravity=off','cam x=0 y=0 scale=64',
   'body 1 x=0 y=0 r=0.3','body 2 x=1 y=0 r=0.3','body 3 x=2 y=0 r=0.3',
   'vertex A on=1@(0.3,0)/join/weld/restAng=0 on=2@(-0.7,0)/join/weld/restAng=0 on=3@(-1.7,0)',
   'vertex B on=bg(0,-1)/join on=1@(0,-0.3)/join',
@@ -230,7 +230,7 @@ const FILE = [
 // A scaled box spreads the bodies without resizing them, so a vertex's two body-frame
 // offsets stop naming one point -- and the re-read is what keeps the machine assembled.
 run(`importScene([
- 'scene 4','sim gravity=off','cam x=0 y=0 scale=64',
+ 'scene 5','sim gravity=off','cam x=0 y=0 scale=64',
  'body 1 x=0 y=0 r=0.3','body 2 x=1 y=0 r=0.3',
  'vertex A on=1@(0.3,0)/join on=2@(-0.7,0)/join'].join('\\n'));`);
 run(`selectGroup(new Set([1,2])); selGroup.s=2.5; groupApply(selGroup);`);

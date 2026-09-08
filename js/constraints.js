@@ -11,20 +11,20 @@
 //  a nonholonomic row (velocity-only, no position invariant -- excluded from the
 //  §09 position projection). The §08 solver scales C by beta/h (Baumgarte);
 //  the §09 projection uses C directly. Same rows serve both.
-//    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
-//           rod/slot constructors and endpoint-lock toggles built on them
+//    §06.1  bodyIndex, epWorld, epFrame -- an endpoint resolved to a frame
 //    §06.1b the LINE frame (lineFrameOf, frameAngleRow) -- a straight bar's own
 //           frame, derived from its two endpoints and owning no coordinates. The
 //           third frame kind beside a body's and the background's (VERTEX.md §X.5)
 //    §06.2  the remaining constraint makers (belt, cvt, knife, cable)
-//    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen) and the
+//    §06.2b derived freezing (lineGrounds, lineLocksLength, refreshFrozen) and the
 //           recaptures that follow a hand move (recaptureConAngles/recaptureConPose)
-//    §06.2c extra control points (conPoints, makeConPoint, conEndpoints) -- the
-//           third and further ends a pin/rod/slot/rack may carry
-//    §06.2d posable rods (withPosing, rodReleased, recapturePosable) -- the
-//           pose-time release that turns a rod into a rail while it is dragged
+//    §06.2c (retired with the rod, slot and rack -- a line's joints are vertices)
+//    §06.2d the pose-time release (withPosing, recapturePosable) -- what a
+//           `posable` LINE does while a body it touches is dragged
 //    §06.2e the VERTEX (makeVertex, makeVertexOn, vertexWorld, verticesOn) -- a
 //           named point and the bodies it touches, which is what a pin became
+//    §06.2f the LINE (makeLine, lineFrame, lineJoints) -- a straight bar whose
+//           frame is derived from its joints, which is what rod/slot/rack became
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -46,48 +46,6 @@ function epWorld(ep){
   if(ep.id==null) return [ep.off[0], ep.off[1], 0, 0];
   const b=bodies[bodyIndex(ep.id)];
   return worldPt(b, epLocal(b, ep.off));       // material offset on a vessel, §05.2c
-}
-// The two-endpoint geometry rod and slot both build their rows from: each
-// endpoint resolved (body or background), the segment A->B, its length, and
-// its perpendicular. phi is that segment's live world angle -- the reference
-// a weld/prismatic lock's rest angle is measured against.
-//
-// phi is unwrapped against con._phiRef (the previous call's phi, persisted on
-// the constraint -- same trick as cableFrame's spoolAngleRef) rather than used
-// as raw atan2(dy,dx). Raw atan2 has a branch cut at phi=±pi: a rod/slot that
-// swings slowly through pointing along -x has dy cross zero with dx<0, and
-// the *physical* angle change that step is tiny, but the raw atan2 value
-// itself jumps by a full 2pi. A welded/prismatic end's angle-lock row
-// (endpointAngleLockRow) measures C = thHere-phi-restAng, and thHere (a
-// body's th) is never wrapped -- so that 2pi jump in phi shows up whole in C,
-// and the solver's Baumgarte term (kb*C, physics.js §08.3) turns it into a
-// spurious multi-turn correction in a single step. Unwrapping phi here keeps
-// it continuous through that crossing, so C stays near zero throughout.
-// epA/epB are the endpoints resolved through epFrame (§06.1): every row built from
-// this frame projects through their velCols/angCols closures rather than assembling
-// columns by hand, so a vessel endpoint's length column comes along automatically
-// and the rod weld / slot prismatic locks need no vessel-specific algebra of their
-// own. The raw wax/rax/... fields remain for rendering and reactionOf (§09.3).
-function twoPointFrame(con){
-  const hasA=con.a.id!=null, hasB=con.b.id!=null;
-  const A = hasA ? bodies[bodyIndex(con.a.id)] : null;
-  const B = hasB ? bodies[bodyIndex(con.b.id)] : null;
-  const epA=epFrame(con.a), epB=epFrame(con.b);
-  const [wax,way,rax,ray] = hasA ? worldPt(A,epLocal(A,con.a.off)) : [con.a.off[0],con.a.off[1],0,0];
-  const [wbx,wby,rbx,rby] = hasB ? worldPt(B,epLocal(B,con.b.off)) : [con.b.off[0],con.b.off[1],0,0];
-  const ia = hasA?bodyIndex(con.a.id):-1, ib = hasB?bodyIndex(con.b.id):-1;
-  const dx=wax-wbx, dy=way-wby, L=Math.hypot(dx,dy)||1e-9;
-  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
-  const phiRaw=Math.atan2(dy,dx);
-  let phi=phiRaw;
-  if(con._phiRef!=null){
-    let da=phiRaw-con._phiRef;
-    while(da> Math.PI) da-=Math.PI*2;
-    while(da<-Math.PI) da+=Math.PI*2;
-    phi=con._phiRef+da;
-  }
-  con._phiRef=phi;
-  return {hasA,hasB,A,B,ia,ib,epA,epB,wax,way,rax,ray,wbx,wby,rbx,rby,ux,uy,nx,ny,L,phi};
 }
 // ---- §06.1b · the LINE frame (a frame with no coordinates of its own) ----
 // A rod, a slot and a rack are all a straight massless bar, and a bar has a FRAME:
@@ -144,95 +102,13 @@ function lineFrameOf(f){
 // end) and `there` is the line frame above -- so this is "pin this end's rotation to
 // the bar's heading", which is the ONE row that today appears under five names: a
 // rod's and a rack's weldA/weldB, a slot's prismaticA/prismaticB, and an extra
-// control point's lock (§06.2c). Written against two frames rather than against a
+// control point's lock. Written against two frames rather than against a
 // segment, it is also the row a vertex will build between any two frames meeting at
 // it (VERTEX.md §X.5), which is why it takes frames and not a constraint.
 function frameAngleRow(here, there, restAng){
   const cols = mergeCols([ scaleCols(there.angCols(), -1), here.angCols() ]);
   return { cols, C: here.th-there.th-restAng };
 }
-// The same row, reached from a constraint's twoPointFrame -- what the rod, slot and
-// rack branches of rowsFor call. `here` is epA or epB for the base pair, or an extra
-// control point's own frame.
-function pointAngleLockRow(f, here, restAng){
-  return frameAngleRow(here, lineFrameOf(f), restAng);
-}
-function endpointAngleLockRow(which, f, restAng){
-  return pointAngleLockRow(f, which==='A' ? f.epA : f.epB, restAng);
-}
-// Capture (or recapture) endpoint `which`'s rest angle against the live A->B
-// direction. Called whenever a per-endpoint lock (rod weld, slot prismatic)
-// turns on, so toggling never snaps geometry.
-//
-// phi is the RAW atan2, not twoPointFrame's unwrapped one, and that is deliberate:
-// a rest angle persists (it is in the scene file) while `_phiRef`, the unwrapping
-// anchor, is transient scratch that restoreState clears (§16.1). A capture taken
-// against an unwrapped phi would agree with the rows now and disagree by a whole
-// turn after the next Reset re-seeded phi from raw. Captured raw, it agrees with
-// both -- as long as the winding the rows have accumulated is cleared alongside it,
-// which is what recaptureConPose does (§06.2b).
-function captureRestAngle(con, which){
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  const phi=Math.atan2(way-wby,wax-wbx);
-  const ep = which==='A'?con.a:con.b;
-  const th = ep.id!=null ? bodies[bodyIndex(ep.id)].th : 0;
-  if(which==='A') con.restAngA=th-phi; else con.restAngB=th-phi;
-}
-
-// Build a rod constraint between two endpoints, deriving its rest length and
-// (for any welded end) its rest angle. `posable` is the one field here that says
-// nothing about the running physics: it marks the rod as one the player may pose
-// THROUGH, released to a bare rail for the duration of a drag (§06.2d).
-function makeRodCon(a,b,weldA,weldB,posable){
-  const [wax,way]=epWorld(a), [wbx,wby]=epWorld(b);
-  const con={type:'rod', a, b, len:Math.hypot(wax-wbx,way-wby), weldA:!!weldA, weldB:!!weldB,
-             posable:!!posable, pts:[], sel:false};
-  if(con.weldA) captureRestAngle(con,'A');
-  if(con.weldB) captureRestAngle(con,'B');
-  return con;
-}
-// Set (or clear) one end's weld flag, recapturing that end's rest angle
-// against the rod's *current* direction so toggling never snaps geometry.
-function setRodWeld(con,which,val){
-  const key = which==='A'?'weldA':'weldB'; con[key]=!!val;
-  if(con[key]) captureRestAngle(con,which);
-}
-function toggleRodWeld(con,which){ setRodWeld(con,which, !con[which==='A'?'weldA':'weldB']); }
-
-// Build a slot/rail constraint between two endpoints. Unlike a rod, a slot
-// with both ends "pin" is physically inert (§06.5) -- prismaticA/prismaticB
-// are what give it any rows at all, so their rest angles are always needed
-// once either is set.
-function makeSlotCon(a,b,prismaticA,prismaticB){
-  const con={type:'slot', a, b, prismaticA:!!prismaticA, prismaticB:!!prismaticB,
-             pts:[], sel:false};
-  if(con.prismaticA) captureRestAngle(con,'A');
-  if(con.prismaticB) captureRestAngle(con,'B');
-  return con;
-}
-// Set (or clear) one end's prismatic flag. If this toggle completes the
-// both-locked (rigid) state, also refresh the *other* end's rest angle --
-// it may have gone stale while only one side was locked -- so the lateral
-// position lock (added only once both are true, §06.5) starts exactly on
-// the rail with no snap.
-function setSlotLock(con,which,val){
-  const key = which==='A'?'prismaticA':'prismaticB'; con[key]=!!val;
-  if(con[key]) captureRestAngle(con,which);
-  if(con.prismaticA && con.prismaticB){ captureRestAngle(con,'A'); captureRestAngle(con,'B'); }
-}
-function toggleSlotLock(con,which){ setSlotLock(con,which, !con[which==='A'?'prismaticA':'prismaticB']); }
-// The slot's current rail angle, for rendering and for the lateral lock row:
-// tracked via whichever end is locked (they agree once both are), or -- with
-// neither locked, the cosmetic-only case -- just the live segment direction.
-function slotRailAngle(con){
-  if(con.prismaticB){ const B=con.b.id!=null?bodies[bodyIndex(con.b.id)]:null;
-    return (B?B.th:0)-con.restAngB; }
-  if(con.prismaticA){ const A=con.a.id!=null?bodies[bodyIndex(con.a.id)]:null;
-    return (A?A.th:0)-con.restAngA; }
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  return Math.atan2(way-wby,wax-wbx);
-}
-
 // ---- §06.2 · the remaining constraint makers ----
 // Belt, CVT, knife and cable were built as object literals at each of their
 // call sites until the scene file (§17) needed a third one. Every constraint kind
@@ -254,74 +130,6 @@ function makeBeltCon(aId,bId,sense){
 // The variable-ratio rolling contact carries no captured state at all -- its ratio
 // is read from the live geometry every step (§06.5).
 function makeCvtCon(aId,bId){ return {type:'cvt', a:{id:aId}, b:{id:bId}, sel:false}; }
-
-// A rack and pinion. The RACK is an infinite, massless toothed line named by TWO
-// endpoints, `a` and `b` -- ordinary {id, off} anchors like a rod's or a slot's,
-// either of which may ride a body or the fixed background. Between them they say
-// where the rack is and which way it points, and nothing else: there is no rest
-// length, so the pair is two pins, not a strut.
-//
-// The two ends are NOT symmetric, and the asymmetry is the physics rather than an
-// implementation detail. The rack is rigid, so `a` is the one material point of it
-// that is pinned -- the rack's own origin -- while `b` only AIMS it: the line passes
-// through b, but b may slide along the rack. Pinning both ends materially would make
-// the rack a rod between two bodies, which is a different object.
-//
-// Either end may additionally be WELDED (weldA/weldB), which locks that end's body
-// angle to the rack's own heading exactly as a rod's weld or a slot's prismatic lock
-// does -- the same endpointAngleLockRow, against the same phi. Both ends default to
-// unwelded (free pins). Put both ends on the SAME body and the rack rides that body's
-// frame completely, translating and turning with it, which is the arrangement the
-// rack had when its direction was a mandatory weld plus a body-frame angle.
-//
-// What meshes with the rack lives in `pts` (§06.2c): a 'pinion' point is a circular
-// body meshing with perfect traction wherever it sits, a plain point is a body
-// jointed to the rack at a fixed station along it. A rack carries as many of each as
-// it likes; a freshly built one is given its first pinion by the caller.
-function makeRackCon(a,b,weldA,weldB){
-  const con={type:'rack', a, b, weldA:!!weldA, weldB:!!weldB, pts:[], sel:false};
-  if(con.weldA) captureRestAngle(con,'A');
-  if(con.weldB) captureRestAngle(con,'B');
-  return con;
-}
-// Set (or clear) one rack end's weld flag, recapturing that end's rest angle against
-// the rack's current heading -- the rod/slot toggles' exact counterpart.
-function setRackWeld(con,which,val){
-  const key = which==='A'?'weldA':'weldB'; con[key]=!!val;
-  if(con[key]) captureRestAngle(con,which);
-}
-function toggleRackWeld(con,which){ setRackWeld(con,which, !con[which==='A'?'weldA':'weldB']); }
-// Rack geometry: the two-endpoint frame every line constraint shares (§06.1
-// twoPointFrame), so the rack's heading is read live off its two pins and its
-// welded ends measure against the same phi a rod's do. `px,py` is end a's world
-// point -- the rack's material origin -- kept under those names because the render
-// and hit-test paths draw the line through it.
-function rackFrame(con){
-  const f = twoPointFrame(con);
-  return Object.assign(f, {px:f.wax, py:f.way, ang:f.phi});
-}
-// One pinion's live pitch geometry: the disk, and rho, its SIGNED perpendicular
-// distance from the rack line, positive on the +n side. Signed, not clamped: the row
-// stays correct however the pinion crosses to the rack's far side. rho is a
-// coordinate rather than a constant, which is what makes the mesh row nonholonomic --
-// the same "ratio is a coordinate" move the CVT's contact makes.
-// `f` is the constraint's twoPointFrame -- the plain one rowsFor builds as well as
-// the rackFrame alias, so this reads wax/way (end a's world point) rather than the
-// px/py names only the render path uses.
-function rackPitch(f, pt){
-  if(!pt) return null;
-  const ib = pt.ep.id!=null ? bodyIndex(pt.ep.id) : -1;
-  const B = ib>=0 ? bodies[ib] : null;
-  if(!B) return null;
-  const rho = (B.x-f.wax)*f.nx + (B.y-f.way)*f.ny;
-  return {B, ib, rho};
-}
-// The rack's first pinion, or null -- what the inspector's pitch-radius readout and
-// the reaction arrow (§09.3) report on when a rack carries several.
-function rackFirstPinion(con){
-  for(const pt of conPoints(con)) if(pt.kind==='pinion') return pt;
-  return null;
-}
 
 // A knife edge forbids sideways motion of one body-local point. `dir` is the
 // heading in the body's OWN frame -- callers holding a world direction rotate it in
@@ -348,7 +156,7 @@ function makeCableCon(tether,spoolId){
 // corrupt the row if a caller ever produced two entries on the same body.
 // Scale every column of a row by k -- the companion to mergeCols, used wherever a
 // row is a linear combination of frames rather than a plain difference of two (the
-// bar-rotation term every extra control point's rows carry, §06.2c).
+// bar-rotation term a line's rows carry, §06.2f).
 function scaleCols(cols,k){ return cols.map(c=>[c[0], c[1]*k, c[2]*k, c[3]*k, (c[4]||0)*k]); }
 function mergeCols(colArrays){
   const m=new Map();
@@ -401,51 +209,38 @@ function epFrame(ep){
 // (and its now-redundant constraint compiled away, `_compiled` below) plus the
 // island split that makes a fixed body a wall between what it touches.
 //
-// TWO patterns are recognized, both structural -- they depend on what is attached,
-// never on the current configuration, so nothing freezes or thaws as a mechanism
-// swings through a pose. Other arrangements do pin a body (three pin-ended rods to
-// the ground, say); they are simply not optimized, and the solver handles them
-// exactly as it always has. Recognizing those in general means a rank computation on
-// the Jacobian every step, which would be both expensive and configuration-dependent
-// -- the very thing this avoids. See SCENE.md §S.8.
-
-// A double-welded rod pins its far end's frame completely: distance, direction and
-// orientation are all held. So it grounds a body whose other end is the background,
-// or a body already grounded -- applied to a fixed point, that is what "static"
-// means, and it is the only thing that makes it so.
-//
-// The exception is a vessel anchored anywhere but its MID-PLANE. A vessel's fourth
-// coordinate moves its own material: a point at material fraction f sits f*len from
-// the centre (§05.2c), so pinning a cap fixes the cap, not the centre -- the centre
-// still rides the length. Only f = 0, whose world position has no length dependence,
-// pins the body's pose. That is the difference between the gas spring (welded at its
-// cap, f = -1/2, and genuinely free to move as it breathes) and the heat pair's
-// working vessel (welded at its mid-wall, f = 0, pose fixed and length free).
-function rodGrounds(con){
-  if(con.type!=='rod' || !con.weldA || !con.weldB) return null;
-  if(rodReleased(con)) return null;      // released for the pose drag: grounds nothing (§06.2d)
-  // A rod carrying extra control points (§06.2c) still has rows of its own to solve
-  // once its base pair is compiled away, so it is not a candidate for compiling.
-  if(conPoints(con).length) return null;
-  const held = ep => { if(ep.id==null) return true;
-                       const b=bodies[bodyIndex(ep.id)]; return !!(b && b.static); };
-  const far = held(con.a) ? con.b : held(con.b) ? con.a : null;
+// The same two structural patterns, said in the line's vocabulary (VERTEX.md §X.9).
+// A LINE with exactly two joints, both held at a station and both welded, is the
+// welded rod that grounded its far end: the background (or an already-grounded body)
+// welded at one joint fixes the bar's heading, the station row fixes the distance,
+// and the weld at the other joint fixes that body's angle -- three coordinates, gone.
+// Still purely structural: it reads what is attached and never where anything is.
+function lineGrounds(line){
+  if(!isLine(line) || lineReleased(line)) return null;
+  const J=lineJoints(line);
+  if(J.length!==2) return null;
+  if(J.some(K => K.e.slide || !K.e.weld)) return null;
+  const w0=vertexWeldRef(J[0].v), w1=vertexWeldRef(J[1].v);
+  if(!w0 || !w1) return null;                    // a weld with nothing to hold
+  const held = e => { if(e.id==null) return true;
+                      const b=bodies[bodyIndex(e.id)]; return !!(b && b.static); };
+  const far = held(w0) ? w1 : held(w1) ? w0 : null;
   if(!far || far.id==null) return null;
-  const b = bodies[bodyIndex(far.id)]; if(!b) return null;
+  const b=bodies[bodyIndex(far.id)]; if(!b) return null;
   if(b.shape==='vessel' && far.off[1]!==0) return null;      // not the mid-plane
   return b;
 }
-// A rod with BOTH ends on the same vessel, at different material fractions, holds
-// the distance between two points that move only with the length -- so it holds the
-// length, and nothing else. Its pose columns cancel exactly (mergeCols sums them),
-// which is also why the same rod on a rigid body is degenerate and the tool refuses
-// it (§13.5). This is what a reservoir is: a vessel with a strut inside it.
-function rodLocksLength(con){
-  if(con.type!=='rod' || con.a.id==null || con.a.id!==con.b.id) return null;
-  if(rodReleased(con)) return null;      // as above -- a released strut holds no length either
-  if(conPoints(con).length) return null;                     // see rodGrounds above
-  const v=bodies[bodyIndex(con.a.id)];
-  if(!v || v.shape!=='vessel' || con.a.off[1]===con.b.off[1]) return null;
+// ...and a line whose two held joints ride two material planes of the SAME vessel
+// holds the distance between two points that move only with the length, which is the
+// length and nothing else. The strut inside a reservoir, unchanged in substance.
+function lineLocksLength(line){
+  if(!isLine(line) || lineReleased(line)) return null;
+  const J=lineJoints(line);
+  if(J.length!==2 || J.some(K=>K.e.slide)) return null;
+  const a=vertexPrimary(J[0].v), b=vertexPrimary(J[1].v);
+  if(!a || !b || a.id==null || a.id!==b.id) return null;
+  const v=bodies[bodyIndex(a.id)];
+  if(!v || v.shape!=='vessel' || a.off[1]===b.off[1]) return null;
   return v;
 }
 // Recompute every body's frozen flags and every constraint's `_compiled` mark.
@@ -456,8 +251,10 @@ function refreshFrozen(){
   for(let pass=0; pass<=bodies.length; pass++){
     let changed=false;
     for(const con of constraints){
-      const g=rodGrounds(con);    if(g && !g.static){ g.static=true; changed=true; }
-      const v=rodLocksLength(con); if(v && !v.lenLock){ v.lenLock=true; changed=true; }
+      const g=lineGrounds(con);
+      if(g && !g.static){ g.static=true; changed=true; }
+      const v=lineLocksLength(con);
+      if(v && !v.lenLock){ v.lenLock=true; changed=true; }
     }
     if(!changed) break;
   }
@@ -465,7 +262,8 @@ function refreshFrozen(){
   // would write lands on a coordinate that no longer moves. Left in, it would be a
   // row of zeros that only the Tikhonov term keeps solvable, reporting a reaction
   // read off the regularizer rather than off the mechanism. Compile it away instead.
-  for(const con of constraints) con._compiled = !!(rodGrounds(con) || rodLocksLength(con));
+  for(const con of constraints)
+    con._compiled = !!(lineGrounds(con) || lineLocksLength(con));
   for(const b of bodies) refreshInertia(b);   // the inverse masses follow the flags
 }
 // A body whose EVERY coordinate is frozen is a wall: nothing passes through it, so
@@ -479,13 +277,13 @@ const frozenSolid = b => b.static && (b.shape!=='vessel' || b.lenLock);
 // the new pose instead, exactly as creating the rod would have.
 function recaptureGrounding(b){
   for(const con of constraints){
-    if(rodGrounds(con)!==b && rodLocksLength(con)!==b) continue;
+    if(lineGrounds(con)!==b && lineLocksLength(con)!==b) continue;
     recaptureConPose(con);
   }
 }
 // Re-read every ANGLE a line joint holds off the live geometry -- each locked end's
 // rest angle (a rod's or a rack's weld, a slot's prismatic lock) and every extra
-// point's (§06.2c) -- plus the unwrapping anchor those angles are measured against.
+// joint's -- plus the unwrapping anchor those angles are measured against.
 // This is exactly what captureRestAngle does when a lock is switched on, so a joint
 // recaptured at a pose it already holds is unchanged.
 //
@@ -501,19 +299,10 @@ function recaptureGrounding(b){
 function recaptureConAngles(con){
   if(isVertex(con)){ recaptureVertex(con); return; }
   con._phiRef=undefined;
-  if(con.type==='rod' || con.type==='rack'){
-    if(con.weldA) captureRestAngle(con,'A');
-    if(con.weldB) captureRestAngle(con,'B');
-  }
-  if(con.type==='slot'){
-    if(con.prismaticA) captureRestAngle(con,'A');
-    if(con.prismaticB) captureRestAngle(con,'B');
-  }
-  for(const pt of conPoints(con)) if(pt.lock) pt.restAng=capturePointRestAngle(con, pt.ep);
 }
 // ...and everything else a line joint holds: the angles above plus the two things
 // that are LENGTHS along it -- a rod's rest length and every extra point's station.
-// Together that is exactly what makeRodCon and makeConPoint capture at creation, so
+// Together that is exactly what placing a line and its joints captures, so
 // a joint recaptured at a pose it already satisfies is unchanged, and one recaptured
 // after a hand move holds the new pose instead. Called from recaptureGrounding
 // above, once per pose-drag step from recapturePosable (§06.2d), and from a scaled
@@ -533,103 +322,16 @@ function recaptureConPose(con){
     if(P){ const [wx,wy]=epWorld(P); setVertexWorld(con, wx, wy); }
     return;
   }
-  if(con.type==='rod'){
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    con.len=Math.hypot(wax-wbx,way-wby);
+  // A line holds nothing of its own -- its stations and its welds' rest angles live
+  // on the joints -- so re-reading it is re-reading them.
+  if(isLine(con)){
+    con._phiRef=undefined;
+    for(const K of lineJoints(con)) recaptureVertex(K.v);
+    return;
   }
-  for(const pt of conPoints(con)) if(pt.s!==undefined) pt.s=capturePointStation(con, pt.ep);
 }
 
-// ---- §06.2c · extra control points (a constraint with more than two ends) ----
-// A rod, slot or rack is named by two endpoints, and those two are what the
-// constraint IS: a rod's pair fixes its length, a slot's pair is its rail, a rack's
-// pair is its line. Anything else attached to the same joint is an EXTRA CONTROL
-// POINT, kept in `con.pts` -- an ordinary {id, off} endpoint (a body or the fixed
-// background, exactly like a and b) plus what that attachment means:
-//
-//   rod    the point is fixed to the bar at station s  2 rows  (+1 welded)
-//   slot   the point rides the rail, free to slide     1 row   (+1 prismatic)
-//   rack   'point'  jointed to the rack at station s   2 rows  (+1 welded)
-//          'pinion' a disk meshing with the rack       1 row   (nonholonomic)
-//
-// `s` is the point's STATION: its signed distance from end a along the line, in the
-// direction a - b. It is CAPTURED at creation (SCENE.md §S.3) for the two kinds that
-// hold a fixed position along the line, and simply absent for the two that do not --
-// a slot's riders slide, and a pin's coincide.
-//
-// The lateral offset is not captured, because it is not a degree of freedom the
-// editor can produce: a point is always placed on the line itself (the placement
-// click is projected onto it, tools.js §13.5), so "off the line" is a state a scene
-// cannot describe rather than one it stores as zero.
-//
-// `lock` is the extra point's own rotation lock, the same one a and b carry under
-// their per-kind names (weldA/weldB on a rod or rack, prismaticA/prismaticB on a
-// slot): set, the point's body angle is held to the line's own heading through the
-// same pointAngleLockRow, against a rest angle captured when the lock goes on.
-const conPoints = con => con.pts || (con.pts=[]);
-// Which kinds take extra points at all, and whether their points hold a station.
-const CON_MULTI = ['rod','slot','rack'];
-const conTakesPoints = con => CON_MULTI.includes(con.type);
-const conPointHasStation = con => con.type==='rod' || con.type==='rack';
-// A rack's pinions have no rotation lock and no station: they mesh wherever they sit.
-const conPointLockable = (con,pt) => conTakesPoints(con) && pt.kind!=='pinion';
-
-// The station an extra point currently sits at, read off the live geometry -- the
-// capture makeConPoint does when the scene file does not name one.
-function capturePointStation(con, ep){
-  const f=twoPointFrame(con);
-  const [wx,wy]=epWorld(ep);
-  return (wx-f.wax)*f.ux + (wy-f.way)*f.uy;
-}
-// ...and its rest angle, against the line's own direction -- captureRestAngle's
-// counterpart for a point that is not one of the two named ends.
-function capturePointRestAngle(con, ep){
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  const phi=Math.atan2(way-wby,wax-wbx);            // raw -- see captureRestAngle
-  const th = ep.id!=null ? bodies[bodyIndex(ep.id)].th : 0;
-  return th-phi;
-}
-// THE constructor for an extra control point (SCENE.md §S.2): called by the tool
-// dispatch (§13.5) and the scene reader (§17.4) and nowhere else. `opts.s` and
-// `opts.restAng` are the file's captured values; omitted, both are read off the live
-// geometry, so a freshly placed point starts exactly where it was clicked.
-function makeConPoint(con, ep, opts){
-  const o = opts || {};
-  // Normalized to the full {id, off} endpoint shape every anchor in the engine has
-  // (geometry.js §05.2c), and copied rather than aliased: a pinion is named by a bare
-  // body id in the scene file and in the tool alike, but the handle and render paths
-  // resolve every point through epWorld, which needs the offset to exist.
-  const e = { id: ep.id, off: ep.off ? ep.off.slice() : [0,0] };
-  const pt = { ep:e, kind: o.kind==='pinion' ? 'pinion' : 'point', lock:false };
-  if(conPointLockable(con,pt)){
-    pt.lock = !!o.lock;
-    if(conPointHasStation(con)) pt.s = o.s!==undefined ? o.s : capturePointStation(con, e);
-    if(pt.lock) pt.restAng = o.restAng!==undefined ? o.restAng : capturePointRestAngle(con, e);
-  }
-  conPoints(con).push(pt);
-  return pt;
-}
-// Set (or clear) an extra point's rotation lock, recapturing its rest angle against
-// the line's current heading so toggling never snaps geometry (setRodWeld's twin).
-function setConPointLock(con, pt, val){
-  if(!conPointLockable(con,pt)) return;
-  pt.lock=!!val;
-  if(pt.lock) pt.restAng=capturePointRestAngle(con, pt.ep);
-}
-function toggleConPointLock(con, pt){ setConPointLock(con, pt, !pt.lock); }
-// The lock a NEWLY added point should get. If every point already on the constraint
-// agrees -- all free to rotate, or all locked -- the new one joins them; a constraint
-// that already mixes the two gets a locked point, the conservative reading, since a
-// lock can be tapped off but a missing one is invisible until the mechanism moves.
-function conNewPointLock(con){
-  const flags=[];
-  if(con.type==='rod'||con.type==='rack') flags.push(!!con.weldA, !!con.weldB);
-  else if(con.type==='slot') flags.push(!!con.prismaticA, !!con.prismaticB);
-  else return false;
-  for(const pt of conPoints(con)) if(pt.kind!=='pinion') flags.push(!!pt.lock);
-  return flags.every(v=>v===flags[0]) ? flags[0] : true;
-}
-// Every endpoint a constraint names, base pair and extra points alike. The one
+// Every endpoint a coupling names. The one
 // answer to "which bodies does this couple", read by the island pass (§08.0), the
 // delete paths (§13.5, §14.2) and the body-resize rescale (§13.3).
 function conEndpoints(con){
@@ -637,38 +339,47 @@ function conEndpoints(con){
   // A vertex names its bodies through its incidences, which ARE {id, off} endpoints
   // (§06.2e) -- so islands, deletion, resizing and the selection's membership rule
   // all read it through this one function like everything else.
-  if(isVertex(con)) return vertexOns(con);
+  // A line's bodies are the ones its joints are located by, plus the disks meshing
+  // with it. Returned as fresh refs carrying only an id: the OFFSETS belong to the
+  // vertices, which report them through this same function, and handing the same
+  // object back twice would let a body resize scale it twice (tools.js §13.3).
+  if(isLine(con)){
+    const out=[];
+    for(const K of lineJoints(con)) out.push({id:K.ep.idx>=0 ? bodies[K.ep.idx].id : null});
+    for(const id of (con.mesh||[])) out.push({id});
+    return out;
+  }
+  if(isVertex(con)) return vertexOns(con).filter(e => !isLineOn(e));
   if(con.a) eps.push(con.a);
   if(con.b) eps.push(con.b);
-  for(const pt of conPoints(con)) eps.push(pt.ep);
   return eps;
 }
-// The point on a line constraint's own line nearest a world point. Where a placement
-// click lands (tools.js §13.5) and where a dragged control point is held: a point is
-// always ON the line, never beside it, which is what lets §06.2c store no lateral
-// offset. Uses the live a-b segment, the same line the rows measure against -- for a
-// slot that is not quite the rail as DRAWN (which tracks a locked end's railAngle),
-// and the rows are the thing to agree with.
-function conLineProject(con, wx, wy){
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  const dx=wax-wbx, dy=way-wby, L2=dx*dx+dy*dy;
-  if(!(L2>0)) return [wax,way];
-  const t=((wx-wbx)*dx+(wy-wby)*dy)/L2;
-  return [wbx+t*dx, wby+t*dy];
-}
-// Deleting a body takes with it every constraint whose BASE pair names it -- the
-// constraint cannot exist without both its ends -- but only the individual extra
-// points that do, since the rest of the joint is still a joint without them.
+// Take a body (or a line -- one id space) out of everything that names it. A vertex
+// loses the incidence, and goes with it once nothing LOCATES it any more: a vertex
+// with no body or background incidence has no position and nothing to say. A line
+// goes once it is down to fewer than two joints, for the same reason -- with one
+// point it has no direction and is not a line.
 function dropBodyFromConstraints(id){
-  // A vertex loses the incidence naming the body, and goes with it once nothing is
-  // left for it to be a point ON -- a vertex with no incidence has no position and
-  // nothing to say. That is the same rule as a constraint losing an end, applied to
-  // an object whose ends are its whole content.
-  for(const c of constraints)
+  for(const c of constraints){
     if(isVertex(c)) c.on = vertexOns(c).filter(e => e.id!==id);
+    else if(isLine(c)) c.mesh = (c.mesh||[]).filter(m => m!==id);
+  }
   constraints = constraints.filter(c =>
-    isVertex(c) ? vertexOns(c).length>0
-                : (c.a.id!==id && !(c.b && c.b.id===id)));
+    isVertex(c) ? !!vertexPrimary(c) || vertexOns(c).some(e=>!isLineOn(e))
+    : isLine(c)  ? c.id!==id
+    : (c.a.id!==id && !(c.b && c.b.id===id)));
+  // Dropping vertices can leave a line short of the two joints it needs, and dropping
+  // that line can in turn strand a vertex whose only incidence was on it -- so both
+  // run to a fixed point rather than once each.
+  for(let pass=0; pass<constraints.length+1; pass++){
+    const dead = constraints.filter(c => isLine(c) && lineJoints(c).length<2).map(c=>c.id);
+    const orphan = constraints.filter(c => isVertex(c) && !vertexOns(c).some(e=>!isLineOn(e)));
+    if(!dead.length && !orphan.length) break;
+    for(const c of constraints)
+      if(isVertex(c)) c.on = vertexOns(c).filter(e => !dead.includes(e.id));
+    constraints = constraints.filter(c =>
+      !(isLine(c) && dead.includes(c.id)) && !orphan.includes(c));
+  }
   for(const c of constraints)
     if(c.pts && c.pts.length) c.pts = c.pts.filter(pt => pt.ep.id!==id);
 }
@@ -705,11 +416,17 @@ const isVertex = con => con && con.type==='vertex';
 // is the one that does not move; then a real body. (Phase 2 adds lines, which come
 // last: a line's own frame is derived from vertices, and this order is what keeps
 // that derivation acyclic -- VERTEX.md §X.3.)
+// A LINE is never a locator: its own frame is derived from the vertices on it, so a
+// vertex located by a line would be defined in terms of something defined in terms of
+// it (VERTEX.md §X.3, §X.5). A vertex whose only joined incidence is a line is
+// therefore not located at all -- it is a point on a rail with nothing saying where
+// along it, which is not a state the rows can do anything with.
 const incidenceRank = e => e.id==null ? 0 : 1;
+const isLineOn = e => e.kind==='line';
 function vertexPrimary(v){
   let best=null;
   for(const e of vertexOns(v)){
-    if(!e.join) continue;
+    if(!e.join || isLineOn(e)) continue;
     if(!best || incidenceRank(e) < incidenceRank(best)) best=e;
   }
   return best;
@@ -718,7 +435,7 @@ function vertexPrimary(v){
 // joined to nothing, a bare marker -- wherever its first incidence sits.
 function vertexWorld(v){
   const ons=vertexOns(v);
-  const e = vertexPrimary(v) || ons[0];
+  const e = vertexPrimary(v) || ons.find(x=>!isLineOn(x));
   if(!e) return [0,0];
   const [wx,wy]=epWorld(e);
   return [wx,wy];          // just the point: epWorld's trailing arm vector is a rod's business
@@ -727,8 +444,11 @@ function vertexWorld(v){
 // vertex with fewer than two welds holds no angle, and that is not a wart -- welding
 // is a relation between two frames, and one frame has nothing to relate to. The
 // inspector says so rather than pretending (§14.2).
+// Body incidences only: a welded LINE at this vertex is tied to this same reference,
+// but the row that does it is built by the line (which has already worked out its own
+// frame), not here. Either way the reference is one and the same.
 function vertexWeldRef(v){
-  for(const e of vertexOns(v)) if(e.join && e.weld) return e;
+  for(const e of vertexOns(v)) if(e.join && e.weld && !isLineOn(e)) return e;
   return null;
 }
 // An incidence's captured rest angle is its body's OWN angle at the moment the weld
@@ -752,43 +472,85 @@ function makeVertexOn(v, ep, opts){
   const id = ep.id==null ? null : ep.id;
   const ons = vertexOns(v);
   if(ons.some(e => e.id===id)) return null;         // one incidence per body
-  const e = { id, off: ep.off ? ep.off.slice() : [0,0],
-              join: o.join!==undefined ? !!o.join : true, weld:false };
-  if(e.join && o.weld){ e.weld=true;
-    e.restAng = o.restAng!==undefined ? o.restAng : incidenceAngle(e); }
+  const line = id!=null ? lineById(id) : null;
+  const e = line ? { id, kind:'line', slide: o.slide!==undefined ? !!o.slide : true,
+                     join: o.join!==undefined ? !!o.join : true, weld:false }
+                 : { id, off: ep.off ? ep.off.slice() : [0,0],
+                     join: o.join!==undefined ? !!o.join : true, weld:false };
   ons.push(e);
+  // Pushed BEFORE the captures: a station is read off the line's own live frame, and
+  // the frame is built from the joints, so this joint has to be one of them first.
+  if(line && e.join && !e.slide){
+    // The file's captured station, or -- for a freshly placed joint -- the one the
+    // live geometry shows, taken against the origin this joint may itself have just
+    // become (recaptureLineStations settles the rest of them either way).
+    if(o.s!==undefined) e.s = o.s;
+    else { e.s = captureLineStation(line, v); recaptureLineStations(line); }
+  }
+  if(e.join && o.weld){ e.weld=true;
+    e.restAng = o.restAng!==undefined ? o.restAng
+              : (line ? lineAngle(line) : incidenceAngle(e)); }
   return e;
 }
+// A line's own frame angle, for a weld captured against it -- the RAW segment angle,
+// never the unwrapped one, for the reason captureRestAngle gives: a rest angle
+// persists into the file while `_phiRef` is transient scratch that Reset clears, so a
+// capture taken against an unwrapped phi would disagree by a whole turn afterwards.
+function lineAngle(line){
+  const f=lineFrame(line);
+  return f ? Math.atan2(f.way-f.wby, f.wax-f.wbx) : 0;
+}
 // Turning `join` ON re-reads the offset from where the vertex actually is, so the
-// tick never snaps anything -- the discipline captureRestAngle and setConPointLock
-// already follow (§06.1, §06.2c). Turning it off takes the weld with it: welding is
+// tick never snaps anything -- the same discipline every capture in the engine
+// follows, so a toggle holds the pose it found. Turning it off takes the weld with it: welding is
 // something a JOINED body does, and a weld on a body the vertex is not held to would
 // tie an angle to a point that is not there.
 function setVertexJoin(v, e, val){
   if(!!val === !!e.join) return;
   if(val){
-    const [wx,wy]=vertexWorld(v);
-    e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
     e.join = true;
-  } else { e.join=false; e.weld=false; delete e.restAng; }
+    if(isLineOn(e)){ const line=lineById(e.id);
+      if(line){ if(!e.slide) e.s = captureLineStation(line, v); recaptureLineStations(line); } }
+    else {
+      const [wx,wy]=vertexWorld(v);
+      e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
+    }
+  } else { e.join=false; e.weld=false; delete e.restAng; delete e.s; }
 }
 function setVertexWeld(v, e, val){
   if(!e.join){ e.weld=false; delete e.restAng; return; }
   e.weld = !!val;
-  if(e.weld) e.restAng = incidenceAngle(e);
+  if(e.weld) e.restAng = isLineOn(e) ? lineAngle(lineById(e.id)) : incidenceAngle(e);
   else delete e.restAng;
+}
+// A joint that stops sliding captures the station it is at, so the tick never snaps
+// it along the bar; one that starts sliding has no station to hold.
+function setVertexSlide(v, e, val){
+  if(!isLineOn(e)) return;
+  e.slide = !!val;
+  if(e.slide) delete e.s;
+  else { const line=lineById(e.id); e.s = line ? captureLineStation(line, v) : 0; }
+  const line=lineById(e.id); if(line) recaptureLineStations(line);
 }
 // Re-read every weld's rest angle off the live pose -- recaptureConAngles' vertex
 // counterpart, called from the same places (a hand move, a scaled selection box).
 function recaptureVertex(v){
-  for(const e of vertexOns(v)) if(e.join && e.weld) e.restAng = incidenceAngle(e);
+  for(const e of vertexOns(v)){
+    if(!e.join) continue;
+    if(isLineOn(e)){
+      const line=lineById(e.id); if(!line) continue;
+      line._phiRef=undefined;                    // see recaptureConAngles
+      if(e.weld) e.restAng = lineAngle(line);
+      if(!e.slide) e.s = captureLineStation(line, v);
+    } else if(e.weld) e.restAng = incidenceAngle(e);
+  }
 }
 // Move the whole coincident set to a world point: every joined incidence re-reads its
 // own offset, so the bodies stay where they are and the vertex moves between them.
 // What the pivot handle drags (§13.3) and what the inspector's position field commits.
 function setVertexWorld(v, wx, wy){
   for(const e of vertexOns(v)){
-    if(!e.join) continue;
+    if(!e.join || isLineOn(e)) continue;         // a line holds no offset to re-read
     e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
   }
 }
@@ -810,58 +572,29 @@ function nextVertexLabel(){
   for(let n=0;;n++){ const s=labelFor(n); if(!taken.has(s)) return s; }
 }
 
-// ---- §06.2d · posable rods (the pose-time release) ----
-// A rod may be marked `posable`. It changes nothing about the running physics --
-// a posable rod is an ordinary rigid rod at every substep -- and everything about
-// what happens while the player POSES the machine: dragging a body around with the
-// sim paused (tools.js §13.6). A posable rod DIRECTLY JOINTED TO THE DRAGGED BODY
-// is RELEASED for the length of that drag, and holds only its own line:
+// ---- §06.2d · the pose-time release ----
+// While the player drags a body with the sim paused (tools.js §13.6), a LINE marked
+// `posable` and touching that body is RELEASED for the length of the gesture: every
+// joint slides and nothing is welded, so the bar holds only its own line and the
+// mechanism articulates around the hand. It is rigid again, at the geometry the drag
+// reached, the moment the drag step is over (§06.2f lineReleased, recapturePosable
+// below). A line one joint further away stays rigid, so the release reaches exactly
+// as far as the hand does.
 //
-//   * its distance row is gone, so the two ends may slide toward and away from each
-//     other -- the rod's length is what the drag is free to change;
-//   * its welds are gone, so every body it joins turns freely. That is the whole of
-//     "a rail with all joined bodies PINNED, not welded";
-//   * its extra control points (§06.2c) stop being rigid attachments at a station
-//     and become RIDERS, held on the line and free to slide along it -- the same one
-//     row a slot's riders get, which is the sense in which the bar becomes a rail.
+// Two pieces of state, because the release answers two questions on two timescales,
+// and a canvas frame drawn BETWEEN pointermoves is what exposes the difference:
 //
-// "Directly jointed" is conEndpoints (§06.2c) and nothing cleverer: the rod names
-// the dragged body as one of its ends or as one of its extra points. A posable rod
-// one joint further away stays a rigid rod, so the release reaches exactly as far as
-// the hand does -- grab a body and the members it hangs off go slack, and the rest of
-// the machine articulates around them as it always would. The alternative, releasing
-// every posable rod in the scene for the duration of any drag, is both a bigger edit
-// than the gesture asks for and one the player cannot see the extent of.
-//
-// A rod grounding a body, or locking a vessel's length, releases those too (see
-// rodGrounds/rodLocksLength above): a rod that holds nothing cannot be the thing
-// that froze a coordinate, and a posable ground strut would be useless if it still
-// pinned the body the player is trying to slide along it. That is the one place the
-// derived freezing of §06.2b depends on something beyond what is attached -- and what
-// it depends on is the gesture in progress, never the configuration, so nothing still
-// freezes or thaws as a mechanism swings through a pose (SCENE.md §S.8).
-//
-// Two pieces of state, because the release answers two questions on two different
-// timescales, and conflating them is what a canvas frame drawn BETWEEN pointermoves
-// exposes:
-//
-//   posingRoot  the body a pose GESTURE is dragging, held for the whole gesture --
-//               pointerdown to pointerup. This is what the rod IS to the player, and
-//               so it is what the canvas draws (render.js §11.5).
-//   posing      whether we are inside the row-building scope right now. This is what
-//               the rod HOLDS. Between two pointermoves it is zero and the rod is a
-//               rigid rod again, which is what makes the recapture meaningful and
+//   posingRoot  the body a pose GESTURE is dragging, held pointerdown to pointerup.
+//               This is what the line IS to the player, so it is what the canvas
+//               draws (render.js §11.5).
+//   posing      whether we are inside the row-building scope right now. Between two
+//               pointermoves it is zero and the line is rigid again, which is what
 //               keeps conMaxC, the violation highlight and saveState honest.
 //
 // Both live here rather than in the tool layer so that render.js -- which loads
 // BEFORE tools.js -- never has to reach forward for them. It did once, and a forward
 // reference that fails to resolve throws inside render(), which kills the rAF chain
 // in §10 outright: the page stops redrawing and never starts again.
-//
-// `posing` is a depth counter rather than a flag so that a nested projection (or a
-// caller that wraps another) cannot clear it early. `posingRoot` is set and cleared
-// by the tool layer wherever it sets and clears its own `drag` (§13.5/§13.7); a stale
-// one would only draw a rail nobody is riding, since the rows still need `posing`.
 let posing = 0, posingRoot = null;
 function beginPosing(rootId){ posingRoot = rootId==null ? null : rootId; }
 function endPosing(){ posingRoot = null; }
@@ -869,12 +602,6 @@ function withPosing(fn){ posing++; try { return fn(); } finally { posing--; } }
 // Whether a drag on body `rootId` would release this rod -- the predicate on its own,
 // with no reference to any of the state above, so a check can ask it about a gesture
 // that is not happening (tools/posable-check.js does).
-const rodPosableFor = (con, rootId) => con.type==='rod' && !!con.posable && rootId!=null
-  && conEndpoints(con).some(ep => ep.id===rootId);
-// Released by the gesture in progress (what the canvas draws) ...
-const rodPosing = con => rodPosableFor(con, posingRoot);
-// ... and released right now, in the rows being built (what the solver sees).
-const rodReleased = con => posing>0 && rodPosing(con);
 
 // Once the drag step has settled, a released rod re-reads what it holds from the
 // pose the player just produced (§06.2b recaptureConPose): the length, the welds'
@@ -890,8 +617,171 @@ const rodReleased = con => posing>0 && rodPosing(con);
 // one posable declares it to be.
 function recapturePosable(){
   for(const con of constraints)
-    if(rodPosing(con)) recaptureConPose(con);
+    if(linePosing(con)) recaptureConPose(con);
 }
+
+// ---- §06.2f · the line (a straight bar with a frame and no coordinates) ----
+// A LINE is a body: a straight, massless bar. Its frame is not stored -- it is
+// DERIVED from the vertices joined to it (§06.2e), which is what lets it be a body
+// without being a coordinate. So it lives in `constraints` beside the vertex, for the
+// same reason: that array is the list of things that produce ROWS, and `bodies` is
+// the list of things that produce COLUMNS. See VERTEX.md §X.4, §X.5.
+//
+//   { type:'line', id, label, soft, posable, mesh:[bodyId,...] }
+//
+// Its joints are the vertices whose incidence list names it. Every joined joint lies
+// ON the line -- that is what joining to a line means -- and the incidence's `slide`
+// says only whether it additionally holds a STATION, a material position along the
+// bar. Two things follow from the joints, and they are not the same thing:
+//
+//   PLACEMENT   where the line is and which way it points, from the two joints
+//               FURTHEST APART (sliding or not, since every joint is on the line).
+//               The longest available baseline, which is better conditioned than the
+//               rod's was -- a rod's frame was whichever two ends the tool placed
+//               first.
+//   ORIGIN      what stations are measured from: the first non-sliding joint in
+//               station order. It exists only when some joint does not slide, because
+//               a station is a distance from a MATERIAL point and an origin that slid
+//               would make every station meaningless. (This is the rack's asymmetry
+//               -- "a pins the rack, b only aims it" -- promoted to the general rule.)
+//
+// Every joint slides by DEFAULT, so a fresh two-joint line is placement and nothing
+// else: no rows, a drawn guide, exactly what a two-pin slot always was. A third joint
+// adds one on-line row -- a rail with a rider. Untick `slide` on TWO and the distance
+// between them is held -- a rod. Three objects, one branch-free rule.
+//
+// "on two" is not a slip. A station is a distance from the origin, so ONE held joint
+// holds nothing: it is the origin, and an origin has nothing to be measured against.
+// That is the same shape as one weld at a vertex holding nothing (§06.2e), and it has
+// the same reason -- both are relations, and a relation needs two parties. To pin a
+// rider in the world, hold one of the joints that places the line as well.
+const isLine = con => con && con.type==='line';
+const lineById = id => { for(const c of constraints) if(isLine(c) && c.id===id) return c; return null; };
+// THE constructor for a line (SCENE.md §S.2), called by the tool dispatch (§13.5) and
+// the scene reader (§17.4) and nowhere else. It takes an id from the same allocator
+// bodies use, because a line IS a body as far as anything naming one is concerned --
+// one namespace, so an incidence names a disk and a line the same way.
+function makeLine(){
+  const id = uid++;
+  return { type:'line', id, label:String(id), soft:0, posable:false, mesh:[], sel:false };
+}
+// The joints on a line, each with the frame of the vertex's own LOCATOR -- the body
+// or background incidence that says where the vertex is (§06.2e vertexPrimary). A
+// vertex with no locator is not on the line in any sense the rows can use: a line
+// holds points, and that vertex has none.
+function lineJoints(line){
+  const out=[];
+  for(const c of constraints){
+    if(!isVertex(c)) continue;
+    const e = vertexOns(c).find(x => x.kind==='line' && x.id===line.id && x.join);
+    if(!e) continue;
+    const P = vertexPrimary(c); if(!P) continue;
+    out.push({ v:c, e, ep:epFrame(P) });
+  }
+  return out;
+}
+// The line's live geometry: the extreme pair that places it, the origin that stations
+// are measured from, and the joints in station order. Shaped exactly like
+// twoPointFrame's return (§06.1) -- epA/epB, wax/way, u, n, L, phi -- so lineFrameOf
+// (§06.1b) and everything built on it work on a line unchanged.
+//
+// phi is unwrapped against line._phiRef for the reason twoPointFrame documents: a
+// weld row measures th - phi against a rest angle, and a raw atan2 jumps by a whole
+// turn as the bar swings through pointing along -x.
+function lineFrame(line){
+  const J = lineJoints(line);
+  if(J.length<2) return null;
+  // The two furthest apart. They are also the extremes in station order: a joint
+  // projecting beyond one of them would be further from the other, which is what
+  // "furthest apart" rules out. O(n^2) over a handful of joints.
+  let P=null, Q=null, best=-1;
+  for(let i=0;i<J.length;i++) for(let j=i+1;j<J.length;j++){
+    const d=(J[i].ep.wx-J[j].ep.wx)**2 + (J[i].ep.wy-J[j].ep.wy)**2;
+    if(d>best){ best=d; P=J[i]; Q=J[j]; }
+  }
+  if(!(best>1e-18)) return null;                 // every joint at one point: no direction
+  // WHICH of the pair is P fixes the line's heading, and a weld measures against it,
+  // so a flip is a half-turn error in every weld on the bar. Two things pin it down.
+  // With no memory -- a fresh load, or just after a Reset -- P is whichever of the
+  // two comes first in the line's own joint order, which is the order the vertices
+  // sit in `constraints`, which is the order the file wrote them: deterministic, and
+  // the same before and after a round trip. Within a session `_phiRef` then keeps it
+  // continuous, which is what stops a joint added BEYOND the old P (it can only ever
+  // enter the pair as Q, being later in the array) from turning the bar end for end.
+  if(line._phiRef!=null){
+    const raw=Math.atan2(P.ep.wy-Q.ep.wy, P.ep.wx-Q.ep.wx);
+    let d=raw-line._phiRef;
+    while(d> Math.PI) d-=Math.PI*2;
+    while(d<-Math.PI) d+=Math.PI*2;
+    if(Math.abs(d) > Math.PI/2){ const t=P; P=Q; Q=t; }
+  }
+  const dx=P.ep.wx-Q.ep.wx, dy=P.ep.wy-Q.ep.wy, L=Math.hypot(dx,dy)||1e-9;
+  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
+  const phiRaw=Math.atan2(dy,dx);
+  let phi=phiRaw;
+  if(line._phiRef!=null){
+    let da=phiRaw-line._phiRef;
+    while(da> Math.PI) da-=Math.PI*2;
+    while(da<-Math.PI) da+=Math.PI*2;
+    phi=line._phiRef+da;
+  }
+  line._phiRef=phi;
+  // Station order, measured from P along the same u twoPointFrame uses (which points
+  // from the second end to the first, so Q sits at -L).
+  for(const K of J) K.du = ux*(K.ep.wx-P.ep.wx) + uy*(K.ep.wy-P.ep.wy);
+  // The ORIGIN is the first held joint in JOINT order -- the order the vertices sit
+  // in `constraints`, which is the order the file wrote them -- and NOT the first in
+  // station order. Stations are stored relative to it, so an origin that moved when a
+  // joint was added or the bar swung would silently reinterpret every one of them;
+  // pinned to joint order it can only change when the joint set itself does, and
+  // that is an authoring action the captures are re-read for (recaptureLineStations).
+  const O = J.find(K => !K.e.slide) || null;
+  J.sort((a,b)=>b.du-a.du);                      // P first, Q last
+  return { J, P, Q, O, epA:P.ep, epB:Q.ep,
+           wax:P.ep.wx, way:P.ep.wy, wbx:Q.ep.wx, wby:Q.ep.wy,
+           ux, uy, nx, ny, L, phi };
+}
+// A line with any sliding joint is a RAIL and is drawn infinite; with every joint
+// held at a station it is a BAR, drawn between its extremes. Derived, not a field:
+// what a line is IS what its joints do, and there is nothing else to say.
+const lineIsBar = line => { const J=lineJoints(line); return J.length>=2 && J.every(K=>!K.e.slide); };
+// The station a joint currently sits at, measured from the line's origin -- what
+// makeVertexOn captures when a joint stops sliding, and what the segment distances
+// the inspector lists are differences of.
+function captureLineStation(line, v){
+  const f=lineFrame(line); if(!f || !f.O) return 0;
+  const K=f.J.find(x=>x.v===v); if(!K) return 0;
+  return K.du - f.O.du;
+}
+// The distances between consecutive NON-SLIDING joints, in station order: what the
+// inspector lists (VERTEX.md §X.4) and what the file writes. A line with fewer than
+// two of them has none.
+function lineSegments(line){
+  const f=lineFrame(line); if(!f) return [];
+  const held=f.J.filter(K=>!K.e.slide);
+  const out=[];
+  for(let i=1;i<held.length;i++)
+    out.push({ from:held[i-1], to:held[i], len:Math.abs((held[i].e.s||0)-(held[i-1].e.s||0)) });
+  return out;
+}
+// Re-read every station on a line, against whatever its origin is now. Called when
+// the joint set changes or a joint starts or stops sliding -- both of which can move
+// the origin, and a station means nothing except relative to the origin it was taken
+// from. Like every other capture toggle in the engine (a rod's weld, a point's lock),
+// it holds the pose it finds: a bar recaptured at a pose it already satisfies is
+// unchanged, and one recaptured after a hand edit holds the new pose instead.
+function recaptureLineStations(line){
+  const f=lineFrame(line); if(!f || !f.O) return;
+  for(const K of f.J) if(!K.e.slide) K.e.s = K.du - f.O.du;
+}
+// A posable line releases for a pose drag exactly as a posable rod did (§06.2d):
+// while the player drags a body it touches, every joint slides and nothing is welded,
+// so the bar is a bare rail for the length of the gesture and rigid again the moment
+// it ends, at the geometry the drag reached.
+const linePosableFor = (line, rootId) => isLine(line) && !!line.posable && rootId!=null
+  && conEndpoints(line).some(ep => ep.id===rootId);
+const linePosing = line => linePosableFor(line, posingRoot);
+const lineReleased = line => posing>0 && linePosing(line);
 
 // ---- §06.3 · cableFrame ----
 // Cable geometry based on a consistently-defined spool angle.
@@ -1052,47 +942,9 @@ function cableCurrentLength(cb, f){
   return cf.totalUsed;
 }
 
-// ---- §06.4 · (slotFrame retired -- slot is now a two-endpoint constraint,
-// built from the shared twoPointFrame/endpointAngleLockRow in §06.1, exactly
-// like rod. See rowsFor's 'slot' branch below.) ----
-
-// The rows one extra control point contributes to a LINE constraint (rod, slot, or
-// a rack's jointed point). `f` is the constraint's twoPointFrame; `station` says
-// whether the point also holds its place along the line (a rod's and a rack's do; a
-// slot's riders slide).
-//
-// Both rows say the same thing: the point does not move relative to the BAR'S OWN
-// MATERIAL POINT under it -- laterally always, and along the line too when it holds
-// a station. So both are the point's own velocity columns minus that material
-// point's, which is exactly what lineFrameOf's minusPoint* closures return (§06.1b);
-// the bar's rotation term the two rows carry is the frame's angCols, not arithmetic
-// this routine owns. `at` is the point's index in con.pts, carried on the rows so
-// the reaction readout (§09.3) can find a multiplier by name instead of counting.
-//
-//   lateral      C = n . (P_k - P_a)          -- on the line
-//   longitudinal C = u . (P_k - P_a) - s      -- at its station
-//
-// `unlocked` overrides the point's own rotation lock -- the pose-time release
-// (§06.2d) makes every rider a pin, whatever the lock the rod holds it by when it
-// is rigid again.
-function linePointRows(con, f, pt, station, unlocked, at){
-  const K=epFrame(pt.ep), LF=lineFrameOf(f);
-  const [du,dn]=LF.localOf(K.wx, K.wy);
-  const rows=[{
-    cols: mergeCols([ K.velCols(f.nx,f.ny), ...LF.minusPointAcross(du,dn) ]),
-    C: dn, role:'online', at }];
-  if(station) rows.push({
-    cols: mergeCols([ K.velCols(f.ux,f.uy), ...LF.minusPointAlong(du,dn) ]),
-    C: du-(pt.s||0), role:'station', at });
-  if(pt.lock && !unlocked){
-    const r=pointAngleLockRow(f, K, pt.restAng||0); r.role='weld'; r.at=at; rows.push(r);
-  }
-  return rows;
-}
-
 // ---- §06.5 · rowsFor (constraint -> rows dispatch) ----
 // One branch per con.type; to reach a specific joint's row math, search its tag,
-// e.g.  type==='rod'. Catalog (rows) -- cross-references spec §4:
+// e.g.  type==='line'. Catalog (rows) -- cross-references spec §4:
 //   vertex         2 per joined incidence past the primary (a shared point), plus
 //                      1 per welded incidence past the first (a shared frame angle)
 //   rod            1   distance held along the connecting line; +1 per welded
@@ -1112,11 +964,6 @@ function linePointRows(con, f, pt, station, unlocked, at){
 //   rack           0   a rack line named by two pins; +1 per welded pin (as rod's
 //                      weld); +1 per meshing pinion (tangential match at the
 //                      pinion's live pitch radius, NONHOLONOMIC)
-// Every one of rod, slot and rack may carry EXTRA CONTROL POINTS on top of the
-// above (§06.2c): +2 per point on a rod, +1 on a slot, +2 on a rack's
-// jointed point, and +1 more wherever that point is rotation-locked. Their rows are
-// always appended after the base pair's.
-//
 // EVERY ROW CARRIES A ROLE -- dist, weld, online, station, lateral, mesh, pin, belt,
 // cvt, knife -- and, where a kind has more than one row of a role, an `at` naming
 // which end ('A'/'B') or which control point (its index in con.pts). physics.js
@@ -1127,6 +974,10 @@ function linePointRows(con, f, pt, station, unlocked, at){
 // described -- so adding a row to a kind silently moved every readout after it.
 // A new row needs a role; tools/frame-check.js fails if you skip this.
 // (Cable rows are built inline in §08.2, not here, because they are unilateral.)
+// One endpoint frame's velocity columns along a direction, negated -- the station row
+// measures a joint's motion along the bar RELATIVE to the origin's, and every other
+// row of this shape gets its negation from lineFrameOf's minusPoint* closures.
+const O_NEG = (ep, dx, dy) => scaleCols(ep.velCols(dx,dy), -1);
 function rowsFor(con){
   // Each row carries the raw position error C (the value to drive to zero). The
   // velocity solver scales it by beta/h (Baumgarte); the position projection uses
@@ -1148,6 +999,72 @@ function rowsFor(con){
       { cols:ep.velCols(0,1), C: ep.wy-con.world[1], soft:true, role:'drag' }
     ];
   }
+  if(con.type==='line'){
+    // The row table of VERTEX.md §X.4, and every row in it is a statement about one
+    // joint relative to the bar:
+    //
+    //   P, Q -- the two that PLACE the line   none: they are the line
+    //   any other joint                       1 on-line row
+    //   each non-sliding joint except O       1 station row, its distance from O
+    //   each meshing disk                     1 rolling row (nonholonomic)
+    //   the line's own weld at a joint        1 angle row, where a body is welded too
+    //
+    // P's and Q's on-line rows would be tautologies -- the line is drawn THROUGH
+    // them -- which is the whole difference between a rod (both ends held, one
+    // distance row) and a two-pin slot (0 rows, a drawn guide), with no branch
+    // between the two.
+    const f=lineFrame(con);
+    if(!f) return [];
+    const LF=lineFrameOf(f);
+    const released=lineReleased(con);
+    const rows=[];
+    const locOf = K => LF.localOf(K.ep.wx, K.ep.wy);
+    for(const K of f.J){
+      if(K===f.P || K===f.Q) continue;
+      const [du,dn]=locOf(K);
+      rows.push({ cols: mergeCols([ K.ep.velCols(f.nx,f.ny), ...LF.minusPointAcross(du,dn) ]),
+                  C: dn, role:'online', at:K.v.label });
+    }
+    // Stations are measured from the ORIGIN, not from the placement pair: an origin
+    // has to be material, and P is only whichever joint happens to be furthest out.
+    // With a compliance the station rows are gone -- the distance is carried by a
+    // force instead (physics.js §08.1) -- and a released posable line holds nothing.
+    if(f.O && !released && !(con.soft>0)){
+      const [duO,dnO]=locOf(f.O);
+      for(const K of f.J){
+        if(K===f.O || K.e.slide) continue;
+        const [du,dn]=locOf(K);
+        rows.push({ cols: mergeCols([ K.ep.velCols(f.ux,f.uy), O_NEG(f.O.ep, f.ux, f.uy),
+                                      scaleCols(LF.angCols(), dn-dnO) ]),
+                    C: (du-duO) - (K.e.s||0), role:'station', at:K.v.label });
+      }
+    }
+    // A welded joint ties the LINE's frame angle to whatever else is welded at that
+    // vertex (§06.2e). The row is built here rather than on the vertex because the
+    // line has already worked its frame out; the reference is the same one the
+    // vertex's own weld rows use, so a body, another body and the line at one vertex
+    // cost two rows between them and not three.
+    if(!released) for(const K of f.J){
+      if(!K.e.weld) continue;
+      const W=vertexWeldRef(K.v); if(!W) continue;
+      const B=epFrame(W);
+      rows.push({ cols: mergeCols([ scaleCols(LF.angCols(),-1), B.angCols() ]),
+                  C: (B.th-(W.restAng||0)) - (f.phi-(K.e.restAng||0)),
+                  role:'weld', at:K.v.label });
+    }
+    // A meshing disk rolls on the line with perfect traction wherever it sits: the
+    // two materials in contact at the foot of the perpendicular have the same speed
+    // ALONG the bar. The rack's row, unchanged (§06.5), with the line's placement
+    // origin P in the rack's end-a role -- correct because the bar is rigid, so its
+    // material speed along u is the same at every point of it.
+    for(const id of (con.mesh||[])){
+      const ib=bodyIndex(id); const B=bodies[ib]; if(!B) continue;
+      const rho=(B.x-f.wax)*f.nx + (B.y-f.way)*f.ny;
+      rows.push({ cols: mergeCols([ f.epA.velCols(f.ux,f.uy), [[ib, -f.ux, -f.uy, -rho]] ]),
+                  C:0, nh:true, role:'mesh', at:id });
+    }
+    return rows;
+  }
   if(con.type==='vertex'){
     // A vertex is a coincidence with a name (§06.2e). Two rules, and they are the
     // whole of what pin, and every weld the line joints will carry, are:
@@ -1164,7 +1081,11 @@ function rowsFor(con){
     if(!P) return rows;                       // joined to nothing: a bare marker
     const F=epFrame(P);
     ons.forEach((e,at)=>{
-      if(!e.join || e===P) return;
+      // A LINE incidence is not a coincidence with a point -- it says the vertex lies
+      // ON the bar, which is one row or two depending on whether it slides, and the
+      // LINE builds it (§06.2f) because only the line knows which of its joints place
+      // it and which are held.
+      if(!e.join || e===P || isLineOn(e)) return;
       const K=epFrame(e);
       rows.push({ cols: mergeCols([K.velCols(1,0), F.velCols(-1,0)]), C:K.wx-F.wx, role:'pin', at });
       rows.push({ cols: mergeCols([K.velCols(0,1), F.velCols(0,-1)]), C:K.wy-F.wy, role:'pin', at });
@@ -1177,101 +1098,12 @@ function rowsFor(con){
     if(W){
       const R0=epFrame(W), c0=(R0.th-(W.restAng||0));
       ons.forEach((e,at)=>{
-        if(!e.join || !e.weld || e===W) return;
+        if(!e.join || !e.weld || e===W || isLineOn(e)) return;   // a line's weld: §06.2f
         const K=epFrame(e);
         rows.push({ cols: mergeCols([K.angCols(), scaleCols(R0.angCols(),-1)]),
                     C: (K.th-(e.restAng||0)) - c0, role:'weld', at });
       });
     }
-    return rows;
-  }
-  if(con.type==='rod'){
-    // Either end may be background-anchored (id===null, off holds the world
-    // point directly -- §06.1 epWorld).
-    const f=twoPointFrame(con);
-    if(rodReleased(con)){
-      // Pose-time release (§06.2d): no distance row and no weld rows -- the pair is
-      // free to slide apart and to turn -- and every extra point rides the line as a
-      // slot's rider does, station and lock dropped. The pair itself needs no
-      // point-on-line row: the line IS the segment between them, so such a row would
-      // be the same tautology the slot's base pair avoids.
-      const rows=[];
-      conPoints(con).forEach((pt,at)=>rows.push(...linePointRows(con, f, pt, false, true, at)));
-      return rows;
-    }
-    const {ux,uy,L}=f;
-    // d/dt|A-B| = u.(vA - vB): the two endpoints' velocity columns along the segment.
-    const distCols=mergeCols([f.epA.velCols(ux,uy), f.epB.velCols(-ux,-uy)]);
-    const rows=[{ cols:distCols, C:L-con.len, role:'dist' }];
-    // A welded end locks its body's angle (or, for a background end, the
-    // fixed world frame) to the rod's own direction phi -- see
-    // endpointAngleLockRow. phi is recomputed fresh each step (not
-    // unwrap-tracked like the cable's spoolAngle), so a welded end that
-    // spins through more than ~half a turn between steps can see its
-    // Baumgarte bias jump -- fine for the intended use (fixed/rigid
-    // attachments), not for a fast-spinning weld.
-    if(con.weldA) rows.push(Object.assign(endpointAngleLockRow('A', f, con.restAngA), {role:'weld', at:'A'}));
-    if(con.weldB) rows.push(Object.assign(endpointAngleLockRow('B', f, con.restAngB), {role:'weld', at:'B'}));
-    // Extra control points (§06.2c) ride the bar as rigid attachments: on the line,
-    // and at their own captured station along it. Two rows each -- see linePointRows
-    // -- plus the same angle lock a welded end gets, and appended AFTER the base
-    // rows so §09.3's row-order walk over the pair is untouched by them.
-    conPoints(con).forEach((pt,at)=>rows.push(...linePointRows(con, f, pt, true, false, at)));
-    return rows;
-  }
-  if(con.type==='slot'){
-    // A rail between two endpoints (either may be background-anchored, as
-    // for rod). Unlike rod there is no base row: two pins is purely a
-    // visual guide (0 rows). A locked ("prismatic") end adds the same
-    // angle-lock row as rod's weld, pinning that end's frame to the segment
-    // direction. Only once BOTH ends are locked do the two angle-locks pin
-    // down a shared rail direction worth adding a third row for -- the
-    // classic point-stays-on-rail lock (killing lateral drift), giving the
-    // rigid prismatic joint. A single locked end therefore constrains
-    // rotation only... except when that end is the background: a fixed
-    // point whose angle to the other end is held constant *is* a fixed
-    // positional rail (a ray from that point), with zero rotation lock on
-    // the other end -- this is how a slider gets confined to a line
-    // while still spinning freely (see makeSlotCon call sites, e.g. the
-    // crank/integrator examples). That single-ended case has one caveat:
-    // it locks phi = atan2(...) directly, which is singular if the live
-    // endpoint ever passes through the fixed one -- keep the fixed
-    // anchor well outside the slider's range of travel.
-    const f=twoPointFrame(con);
-    const rows=[];
-    if(con.prismaticA) rows.push(Object.assign(endpointAngleLockRow('A', f, con.restAngA), {role:'weld', at:'A'}));
-    if(con.prismaticB) rows.push(Object.assign(endpointAngleLockRow('B', f, con.restAngB), {role:'weld', at:'B'}));
-    if(con.prismaticA && con.prismaticB){
-      // Lateral lock: kill point A's drift off the rail, whose direction is
-      // tracked live via B's frame (theta_B - restAngB) rather than
-      // the raw A->B segment -- that segment is *always* perpendicular
-      // to its own normal, so using it here would make this row a
-      // tautology. Mirrors the old body-hosted slotFrame exactly (dDot is
-      // the rail normal's own rotation rate, theta_B's contribution to
-      // d/dt[n·D]).
-      const {hasB,ib,wax,way,wbx,wby,epA,epB}=f;
-      const railAngle=(hasB?f.B.th:0)-con.restAngB;
-      const rdx=Math.cos(railAngle), rdy=Math.sin(railAngle);
-      const rnx=-rdy, rny=rdx;
-      const Dx=wax-wbx, Dy=way-wby;
-      // d/dt(n_rail . D) = n_rail.(vA - vB) + (dn_rail/dt).D, and dn/dt = -w_B*d_rail,
-      // so B's own angular column picks up -(d_rail . D). Same row as before, now
-      // routed through the endpoint closures so a vessel end carries its len column.
-      const dDot=rdx*Dx+rdy*Dy;
-      const cols=mergeCols([
-        epA.velCols(rnx,rny), epB.velCols(-rnx,-rny),
-        hasB?[[ib,0,0,-dDot,0]]:[]
-      ]);
-      rows.push({ cols, C: rnx*Dx+rny*Dy, role:'lateral' });
-    }
-    // Extra control points (§06.2c) are RIDERS on the rail, not definitions of it:
-    // each gets the point-on-line row unconditionally (that is what riding means)
-    // and slides freely along, so unlike a rod's points it holds no station. The
-    // lateral direction here is the live a->b segment's normal rather than a locked
-    // end's railAngle -- the tautology that forced the base pair's row to use
-    // railAngle does not arise, because a rider is a third point, not one of the two
-    // the segment is drawn between.
-    conPoints(con).forEach((pt,at)=>rows.push(...linePointRows(con, f, pt, false, false, at)));
     return rows;
   }
   if(con.type==='belt'){
@@ -1301,74 +1133,7 @@ function rowsFor(con){
     const rA=A.r, armB=d-rA;
     return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true, role:'cvt' }];
   }
-  if(con.type==='rack'){
-    // The rack line, its two pins, and everything meshed with or jointed to it.
-    const f=twoPointFrame(con);
-    const rows=[];
-    // A welded pin locks its body's angle to the rack's heading -- the same row a
-    // rod's weld and a slot's prismatic lock build, against the same phi. With both
-    // pins on one body the row is identically zero (the body already fixes phi), so
-    // the arrangement costs nothing beyond a multiplier the regularizer zeroes.
-    if(con.weldA) rows.push(Object.assign(endpointAngleLockRow('A', f, con.restAngA), {role:'weld', at:'A'}));
-    if(con.weldB) rows.push(Object.assign(endpointAngleLockRow('B', f, con.restAngB), {role:'weld', at:'B'}));
-    conPoints(con).forEach((pt,at)=>{
-      if(pt.kind!=='pinion'){
-        // A jointed point is fixed to the rack exactly as a rod's extra point is
-        // fixed to its bar: on the line, at its captured station (§06.2c).
-        rows.push(...linePointRows(con, f, pt, true, false, at));
-        return;
-      }
-      // Rolling contact between the rack and this pinion at Q, the foot of the
-      // perpendicular from the pinion's centre to the rack line: the two materials
-      // in contact there must have the same velocity ALONG the rack.
-      //
-      // Rack side. The rack is rigid and pinned at end a, so its material velocity
-      // along u is the SAME at every point of the line -- two points of a rigid body
-      // a distance d apart along u differ by w x (d*u), which is perpendicular to u.
-      // So end a's own velCols along u is the rack's tangential speed at the contact,
-      // whatever the contact's station, and end b contributes nothing: it aims the
-      // rack without locating it. A's angular column comes out of the same closure
-      // every other endpoint row uses (it works out to -(r.n): a body's spin tells on
-      // the rack only when the pin sits off the rack's own line through its centre).
-      // Pinion side. Its material velocity at Q along u is vB.u + wB*rho, rho the
-      // signed pitch radius -- the same derivation as the CVT's contact row, just
-      // against a straight rack instead of a second rim.
-      // rho is a live coordinate (it changes as either body moves, and as the rack
-      // swings), so this row is NONHOLONOMIC exactly as the CVT's is.
-      const g=rackPitch(f, pt); if(!g) return;
-      const cols=mergeCols([ f.epA.velCols(f.ux,f.uy), [[g.ib, -f.ux, -f.uy, -g.rho]] ]);
-      rows.push({ cols, C:0, nh:true, role:'mesh', at });
-    });
-    return rows;
-  }
   return [];
-}
-
-// ---- §06.6 · spring / rotSpring frames ----
-// Build a linear spring between two endpoints (same {id,off} shape as rod --
-// either end may be background-anchored). Unlike a rod there is no weld: a
-// spring only ever pulls/pushes along its own line, so twoPointFrame's phi
-// (used by endpointAngleLockRow) is simply unused here. Rest length defaults
-// to the current length, so a freshly-placed spring starts at equilibrium.
-const SPRING_DEFAULT_K = 30;
-function makeSpringCon(a,b){
-  const [wax,way]=epWorld(a), [wbx,wby]=epWorld(b);
-  return { type:'spring', a, b, restLen:Math.hypot(wax-wbx,way-wby), k:SPRING_DEFAULT_K, sel:false };
-}
-// World position of the draggable rest-length control point (constraints.js
-// §06.6 / render.js §11.5): the midpoint of the live spring, offset
-// perpendicular by a small screen-space gap (so the rest-length line reads as
-// a separate parallel indicator, not an overlay on the spring itself), then
-// out along the spring's own direction by half the rest length -- i.e. one
-// end of the rest-length line, whose other end mirrors it through the centre.
-const SPRING_LINE_OFFSET_PX = 14;
-function springRestHandlePos(con){
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  const dx=wbx-wax, dy=wby-way, L=Math.hypot(dx,dy)||1e-9;
-  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
-  const off=SPRING_LINE_OFFSET_PX/cam.scale;
-  const cx=(wax+wbx)/2+nx*off, cy=(way+wby)/2+ny*off;
-  return [cx+ux*con.restLen/2, cy+uy*con.restLen/2];
 }
 
 // Build a rotational (torsional) spring between two bodies -- 'a' and 'b' are

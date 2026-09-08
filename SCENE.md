@@ -278,31 +278,46 @@ Grammar notes:
 - Line order does not matter: the reader builds bodies in a first pass. The exporter
   still writes them first, because a file a person reads should introduce a thing
   before mentioning it.
-- `scene 4` must be the first non-comment line. An unknown version is refused.
+- `scene 5` must be the first non-comment line. An unknown version is refused.
   Version 2 dropped `static` and `lenlock` (§S.8); version 3 added `pt` and, with
   it, rewrote the rack -- `rack <pin> -- <pin> pt=<pinion>/pinion` where a version 2
   file wrote `rack <anchor> -- <pinion> angle=...`. That one had to move the version
   number rather than just extend the ledger, because the old two-token form still
   parses under the new reading and would silently mean something else.
-  Version 4 added the `vertex` line and retired `pin` (`VERTEX.md` §X.10):
+  Version 4 added the `vertex` line and retired `pin`; version 5 added the `line` and
+  retired `rod`, `slot`, `rack` and `spring` (`VERTEX.md` §X.10):
 
   ```
-  vertex A on=1@(0.3,0)/join/weld/restAng=0 on=2@(-0.7,0)/join/weld/restAng=0
-  vertex B on=bg(0,2.6)/join on=1/join
+  line 6
+  line 7 soft=0.02 posable mesh=5
+  vertex A on=bg(0,4.4)/join on=6/join/fix/s=0
+  vertex B on=1/join on=6/join/fix/s=-2.6 on=7/join
   ```
 
-  A vertex is a named point and the list of bodies it touches, one `on=` per body --
-  the second repeatable key, on the same pattern as `pt=`. A pin is what it looks
+  A **vertex** is a named point and the list of bodies it touches, one `on=` per body
+  -- the second repeatable key, on the same pattern as `pt=`. A pin is what it looks
   like with two joined incidences and nothing welded, so the pin was absorbed rather
-  than translated, and the version had to move because the kind is gone: naming one
-  is now a load error rather than a silent omission. Two things the pin could not
-  say came with it -- a point pinned to the background with its rotation left free,
-  and a body merely MARKED at a vertex rather than held there.
+  than translated. Two things it could not say came with it: a point pinned to the
+  background with its rotation left free, and a body merely MARKED at a vertex rather
+  than held there.
 
-  A vertex carries a LABEL where a body carries an id: `A`, `B`, ... `Z`, `AA`, a
-  name rather than a number, unique across one namespace with the body ids, and
-  editable. It is what the canvas draws beside the point. Bodies keep their numeric
-  ids as their labels until the version that gives them their own.
+  A **line** is a straight massless bar whose joints are the vertices naming it. A rod
+  is one whose joints are all held (`fix`), a rail one with a slider on it, a rack one
+  carrying a `mesh`, and a spring one with a compliance (`soft`, in m/N). It carries
+  an id like a body, because a body is what it is as far as anything naming one is
+  concerned: `on=7` says "line 7" or "body 7", and the reader tells them apart by what
+  the id actually names. What the line HOLDS is nothing -- its frame, its extent, its
+  origin and its joints' stations are all read off the joints themselves.
+
+  Every joint SLIDES by default, so `fix` is the word the format writes, and it comes
+  with the station it captured. That default is what makes a fresh line a drawn guide
+  asking the solver for nothing, and it is why the three shapes need no branch.
+
+  Vertices carry a LABEL where a body carries an id: `A`, `B`, ... `Z`, `AA` -- a name
+  rather than a number, unique across one namespace with the body and line ids, and
+  editable. It is what the canvas draws beside the point. Bodies and lines carry a
+  `label` too, written only when it is not simply their id.
+
 - **Any unrecognized key or kind is an error**, reported with its line, and nothing
   is touched until the whole file has parsed -- so a bad file leaves the current
   bench exactly as it was. This is the enforcement surface; see §S.2.

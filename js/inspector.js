@@ -74,26 +74,22 @@ function wireNumIns(){
   }
 }
 // ---- §14.1 · selection state ----
-let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null, selInteraction=null;
+let selBody=null, selConstraint=null, selCable=null, selRotSpring=null, selInteraction=null;
 // `selGroup` (select.js §18.1) is the seventh: a MANY-body selection with a box
 // around it. It is cleared here with the rest -- one selection at a time is the
 // invariant every select* below keeps, and a group is a selection like any other.
 function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); cables.forEach(c=>c.sel=false);
-  springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false); interactions.forEach(i=>i.sel=false);
-  selBody=null; selConstraint=null; selCable=null; selSpring=null; selRotSpring=null; selInteraction=null;
+  rotSprings.forEach(s=>s.sel=false); interactions.forEach(i=>i.sel=false);
+  selBody=null; selConstraint=null; selCable=null; selRotSpring=null; selInteraction=null;
   selGroup=null; groupDrag=null;
   renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
-function selectSpring(i){ clearSelection(); springs[i].sel=true; selSpring=springs[i]; renderInspector(); }
 function selectRotSpring(i){ clearSelection(); rotSprings[i].sel=true; selRotSpring=rotSprings[i]; renderInspector(); }
 function selectInteraction(i){ clearSelection(); interactions[i].sel=true; selInteraction=interactions[i]; renderInspector(); }
 function pickCable(wx,wy){
   for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
-  return -1; }
-function pickSpring(wx,wy){
-  for(let i=springs.length-1;i>=0;i--){ if(springHit(springs[i],wx,wy)) return i; }
   return -1; }
 function pickRotSpring(wx,wy){
   for(let i=rotSprings.length-1;i>=0;i--){ if(rotSpringHit(rotSprings[i],wx,wy)) return i; }
@@ -192,7 +188,6 @@ function renderVesselInspector(v){
   wireNumIns();
   document.getElementById('v_del').onclick=()=>{ const id=v.id;
     dropBodyFromConstraints(id);
-    springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
     rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
     cables=cables.filter(c=>c.spool.id!==id && c.tether.id!==id);
     dropInteractionsOn(id);
@@ -202,43 +197,17 @@ function renderVesselInspector(v){
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, cable, spring, rotational
 // spring, or the empty bench.
-// ---- the extra control points a joint carries (constraints.js §06.2c) ----
-// One row per point: what it is bound to, its rotation lock as a checkbox (the same
-// flag a tap on its canvas handle toggles), and a button to take it off again. Only
-// the EXTRA points are listed -- the base pair has its own named checkboxes above,
-// because on a rod or a slot those two are the constraint rather than passengers on
-// it. A joint carrying none shows no card at all.
-function conPointsCard(c){
-  if(!conTakesPoints(c)) return '';
-  const pts=conPoints(c);
-  if(!pts.length) return '';
-  const lockWord = c.type==='slot' ? 'prismatic' : 'welded';
-  const rows=pts.map((pt,k)=>{
-    const where = pt.ep.id==null ? 'background' : ('body '+pt.ep.id);
-    const what = pt.kind==='pinion' ? 'pinion'
-               : conPointHasStation(c) ? `station ${pt.s.toFixed(3)}` : 'rides the rail';
-    const lock = conPointLockable(c,pt)
-      ? `<label class="chk"><input type="checkbox" data-ptlock="${k}" ${pt.lock?'checked':''}> ${lockWord}</label>` : '';
-    return `<div class="field"><span class="lab">${where}</span><span class="val">${what}</span></div>
-            ${lock}<button class="del" data-ptdel="${k}">Remove this point</button>`;
-  }).join('');
-  return `<div class="card"><div class="cardhead">extra control points</div>${rows}</div>`;
-}
-function bindConPointsCard(c){
-  for(const el of document.querySelectorAll('[data-ptlock]')){
-    const k=Number(el.dataset.ptlock);
-    el.onchange=ev=>{ const pt=conPoints(c)[k]; if(pt) setConPointLock(c, pt, ev.target.checked);
-      renderInspector(); saveState(); };
-  }
-  for(const el of document.querySelectorAll('[data-ptdel]')){
-    const k=Number(el.dataset.ptdel);
-    el.onclick=()=>{ c.pts.splice(k,1); renderInspector(); saveState(); };
-  }
-}
 // ---- the two lists a vertex and a body show of each other (constraints.js §06.2e) ----
 // One relation, read from either side: a vertex lists the bodies it touches, a body
 // lists the vertices on it. VERTEX.md §X.11.
-const bodyName = id => id==null ? 'the background' : `body ${id}`;
+// What to call a body in a list: its label, and a line says so, because "line 7" and
+// "body 7" are two very different things to be attached to.
+function bodyName(id){
+  if(id==null) return 'the background';
+  const L=lineById(id); if(L) return `line ${L.label}`;
+  const b=bodies[bodyIndex(id)];
+  return b ? `body ${b.label!==undefined?b.label:b.id}` : `body ${id}`;
+}
 // A vertex's own panel: its label, where it is, and one row per incidence -- the
 // body, where the vertex sits in that body's frame, and the two ticks.
 function vertexInspectorHTML(v){
@@ -247,11 +216,17 @@ function vertexInspectorHTML(v){
   const P=vertexPrimary(v);
   const welds=ons.filter(e=>e.join&&e.weld).length;
   const rows=ons.map((e,k)=>{
-    const off = e.id==null ? `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)}) world`
-              : `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)})${bodies[bodyIndex(e.id)] && bodies[bodyIndex(e.id)].shape==='vessel' ? ' material' : ''}`;
-    return `<div class="field"><span class="lab">${bodyName(e.id)}${e===P?' &middot; primary':''}</span><span class="val">${off}</span></div>
+    // A LINE entry says where along the bar the vertex sits, and carries the one tick
+    // the others do not: whether it may travel (constraints.js §06.2f).
+    const where = isLineOn(e)
+      ? (e.join ? (e.slide ? 'slides along it' : `station ${(e.s||0).toFixed(3)}`) : 'not held')
+      : e.id==null ? `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)}) world`
+      : `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)})${bodies[bodyIndex(e.id)] && bodies[bodyIndex(e.id)].shape==='vessel' ? ' material' : ''}`;
+    const slide = isLineOn(e)
+      ? `<label class="chk"><input type="checkbox" data-vslide="${k}" ${e.slide?'checked':''} ${e.join?'':'disabled'}> slide</label>` : '';
+    return `<div class="field"><span class="lab">${bodyName(e.id)}${e===P?' &middot; primary':''}</span><span class="val">${where}</span></div>
       <label class="chk"><input type="checkbox" data-vjoin="${k}" ${e.join?'checked':''}> joined</label>
-      <label class="chk"><input type="checkbox" data-vweld="${k}" ${e.weld?'checked':''} ${e.join?'':'disabled'}> welded</label>
+      ${slide}<label class="chk"><input type="checkbox" data-vweld="${k}" ${e.weld?'checked':''} ${e.join?'':'disabled'}> welded</label>
       <button class="del" data-vdel="${k}">Remove ${bodyName(e.id)}</button>`;
   }).join('');
   const hasBg = ons.some(e=>e.id==null);
@@ -294,6 +269,10 @@ function wireVertexCard(v){
   for(const e2 of document.querySelectorAll('[data-vjoin]')){
     const k=Number(e2.dataset.vjoin);
     e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexJoin(v,e,ev.target.checked);
+      renderInspector(); saveState(); }; }
+  for(const e2 of document.querySelectorAll('[data-vslide]')){
+    const k=Number(e2.dataset.vslide);
+    e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexSlide(v,e,ev.target.checked);
       renderInspector(); saveState(); }; }
   for(const e2 of document.querySelectorAll('[data-vweld]')){
     const k=Number(e2.dataset.vweld);
@@ -338,7 +317,10 @@ function renderInspector(){
   if(selBody){
     const b=selBody; const isRect=b.shape==='rect';
     p.innerHTML=`
-      <h3>Body ${b.id}</h3><p class="sub">${isRect?'rigid rectangle':'rigid disk'}</p>
+      <h3>Body ${b.label!==undefined?b.label:b.id}</h3><p class="sub">${isRect?'rigid rectangle':'rigid disk'}</p>
+      <div class="card"><div class="cardhead">label</div>
+        <div class="field"><span class="lab">name</span><input class="num" id="f_label" type="text" value="${b.label!==undefined?b.label:b.id}"></div>
+      </div>
       <div class="card"><div class="cardhead">properties</div>
         ${isRect
           ? `${numRow('width', 'f_rw', (b.hw*2).toFixed(3), {step:0.05, min:0.16})}
@@ -360,6 +342,12 @@ function renderInspector(){
       ${bodyVerticesCard(b)}
       <button class="del" id="f_del">Delete body</button>`;
     bindBodyVerticesCard();
+    document.getElementById('f_label').onchange=ev=>{
+      const want=String(ev.target.value).trim();
+      const taken=bodies.some(x=>x!==b && String(x.label)===want)
+               || constraints.some(x=>x.label===want);
+      if(/^[A-Za-z_][A-Za-z0-9_]*$|^[1-9][0-9]*$/.test(want) && !taken) b.label=want;
+      renderInspector(); saveState(); };
     if(isRect){
       const commitSize=()=>{ const w=numVal('f_rw',x=>x>0.16), h=numVal('f_rh',x=>x>0.16);
         if(!isFinite(w) || !isFinite(h)) return;
@@ -396,18 +384,83 @@ function renderInspector(){
     document.getElementById('f_w').onchange=commitVel;
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
       dropBodyFromConstraints(id);
-      springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       dropInteractionsOn(id);
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
+  } else if(selConstraint && isLine(selConstraint)){
+    // ---- the LINE panel (constraints.js §06.2f) ----
+    // Its joints in station order, the distance between each consecutive pair that is
+    // HELD, and the one number it owns: the compliance.
+    const c=selConstraint;
+    const f=lineFrame(c);
+    const J=f?f.J:[];
+    const bar=lineIsBar(c);
+    const jointRows = J.map(K=>{
+      const held=!K.e.slide;
+      return `<div class="field"><span class="lab"><a href="#" data-jsel="${constraints.indexOf(K.v)}">${K.v.label}</a></span>
+        <span class="val">${held?`station ${(K.e.s||0).toFixed(3)}`:'slides'}${K.e.weld?' &middot; welded':''}</span></div>`;
+    }).join('');
+    // One row per stretch between consecutive held joints -- editable, and editing one
+    // shifts the stations after it, which is what changing a bar's length means.
+    const segs = lineSegments(c);
+    const segRows = segs.map((sg,k)=>
+      numRow(`${sg.from.v.label}&ndash;${sg.to.v.label}`, `L_seg${k}`, sg.len.toFixed(3), {step:0.05, min:0.001})).join('');
+    p.innerHTML=`
+      <h3>Line ${c.label}</h3><p class="sub">${bar?'a bar &mdash; every joint held':'a rail &mdash; something slides on it'}</p>
+      <div class="card"><div class="cardhead">label</div>
+        <div class="field"><span class="lab">name</span><input class="num" id="L_label" type="text" value="${c.label}"></div>
+      </div>
+      <div class="card"><div class="cardhead">reaction</div>
+        <div class="field force"><span class="lab">|force|</span><span class="val" id="f_rf">--</span></div>
+        <div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>
+      </div>
+      <div class="card"><div class="cardhead">joints, in order along the line</div>
+        ${jointRows || '<p class="muted">none</p>'}
+        <p class="muted" style="margin:8px 0 0">Every joint lies on the line. A joint that <em>slides</em> may travel along it; one that is held keeps its station, and the distances below are what that comes to. Tick <b>slide</b> on a vertex&rsquo;s own panel to change which.</p>
+        ${J.filter(K=>!K.e.slide).length===1 ? '<p class="muted" style="margin:8px 0 0">Only one joint here is held, so nothing is: a station is a distance from another held joint, and the first one is what the rest are measured from. Hold a second joint &mdash; one of the ones placing the line, if you want this one pinned in the world &mdash; and the distance between them becomes real.</p>' : ''}
+      </div>
+      ${segs.length?`<div class="card"><div class="cardhead">held distances</div>${segRows}</div>`:''}
+      <div class="card"><div class="cardhead">elasticity</div>
+        ${numRow('compliance 1/k', 'L_soft', String(c.soft), {step:0.001, min:0})}
+        <label class="chk"><input type="checkbox" id="L_posable" ${c.posable?'checked':''}> posable</label>
+        <p class="muted" style="margin:8px 0 0">Zero &mdash; the default &mdash; makes the held distances a <em>constraint</em>, solved exactly. Above zero each held stretch becomes a spring of stiffness 1/soft instead, and the line still holds everything on it in line. <b>Posable</b> changes nothing about the running line: while you drag a body it touches, with the sim paused, it is released to a bare rail and is rigid again at whatever pose the drag leaves.</p>
+      </div>
+      ${c.mesh&&c.mesh.length?`<div class="card"><div class="cardhead">meshing disks</div>${
+        c.mesh.map(id=>`<div class="field"><span class="lab">body ${id}</span><span class="val">rolls on the line</span></div>`).join('')}
+        <p class="muted" style="margin:8px 0 0">Rolling contact with perfect traction wherever the disk sits, at a pitch radius that is its own live distance from the line. Nonholonomic.</p></div>`:''}
+      <button class="del" id="f_del">Delete line</button>`;
+    for(const el of document.querySelectorAll('[data-jsel]'))
+      el.onclick=ev=>{ ev.preventDefault(); selectConstraint(Number(el.dataset.jsel)); };
+    document.getElementById('L_label').onchange=ev=>{
+      const want=String(ev.target.value).trim();
+      const taken=constraints.some(x=>x!==c && x.label===want) || bodies.some(b2=>String(b2.label)===want);
+      if(/^[A-Za-z_][A-Za-z0-9_]*$|^[1-9][0-9]*$/.test(want) && !taken) c.label=want;
+      renderInspector(); saveState(); };
+    document.getElementById('L_soft').onchange=()=>{ const v=numVal('L_soft',x=>x>=0);
+      if(!isFinite(v)) return; c.soft=v; renderInspector(); saveState(); };
+    document.getElementById('L_posable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
+    segs.forEach((sg,k)=>{
+      document.getElementById(`L_seg${k}`).onchange=()=>{
+        const v=numVal(`L_seg${k}`,x=>x>0.001); if(!isFinite(v)) return;
+        // Editing one stretch shifts every station past it, so the rest of the bar
+        // keeps the distances it had -- the stations are relative, and only this one
+        // gap was asked to change.
+        const held=lineFrame(c).J.filter(K=>!K.e.slide);
+        const at=held.indexOf(sg.to);
+        const sign=Math.sign((sg.to.e.s||0)-(sg.from.e.s||0)) || 1;
+        const delta=sign*v - ((sg.to.e.s||0)-(sg.from.e.s||0));
+        for(let i=at;i<held.length;i++) held[i].e.s=(held[i].e.s||0)+delta;
+        projectPositions(8); renderInspector(); saveState(); };
+    });
+    document.getElementById('f_del').onclick=()=>{
+      const id=c.id;
+      constraints=constraints.filter(x=>x!==c);
+      dropBodyFromConstraints(id);            // takes the joints' incidences with it
+      clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
-    const isRod=c.type==='rod', isSlot=c.type==='slot';
-    const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
-                : ({rod:'Rigid rod',
-                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',rack:'Rack and pinion'})[c.type];
-    const isBelt=c.type==='belt', isCvt=c.type==='cvt', isRack=c.type==='rack';
-    const showTorque = ((isRod||isRack) && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
+    const title = ({belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
+    const isBelt=c.type==='belt', isCvt=c.type==='cvt';
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
@@ -415,32 +468,17 @@ function renderInspector(){
         ${numRow('wrap rB', 'f_rB', c.rB.toFixed(3), {step:0.02, min:0.02})}
         <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
-    if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>
-        <label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> pin A welded${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> pin B welded${c.b.id==null?' (background)':''}</label>`;
-    if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_posable" ${c.posable?'checked':''}> posable</label>`;
-    if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
-               : isRack ? 'Nonholonomic: an infinite, massless rack line named by its two pins \u2014 pin A locates it, pin B aims it, and drag either to move the rack. Put both on one body and the rack rides that body\u2019s frame. A welded pin also locks its body\u2019s rotation to the rack\u2019s heading; tap a pin on the canvas to toggle it. Each pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
-               : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. <b>Posable</b> changes nothing about the running rod: it says that while you drag a body this rod is jointed to, with the sim paused, it is released to a bare rail \u2014 length free, welds off, everything it joins pinned and free to slide along it \u2014 and is rigid again at whatever length and angles the pose leaves it at. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
-               : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
     p.innerHTML=`
       <h3>${title}</h3><p class="sub">${c.type} constraint</p>
       <div class="card"><div class="cardhead">reaction</div>
         <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">--</span></div>
-        ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>':''}
-        ${isRod?`${numRow('length', 'f_len', c.len.toFixed(3), {step:0.05, min:0.01})}`:''}
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
       </div>
-      ${conPointsCard(c)}
       <button class="del" id="f_del">Delete constraint</button>`;
-    bindConPointsCard(c);
     if(isBelt){
       // recapturing restPhase against the *current* body angles after a wrap-radius
       // edit is the same trick the crossed-belt toggle already uses just below --
@@ -454,26 +492,6 @@ function renderInspector(){
         recapturePhase(); renderInspector(); saveState(); };
       document.getElementById('f_rA').onchange=commitWrap;
       document.getElementById('f_rB').onchange=commitWrap;
-    }
-    if(isRack){
-      document.getElementById('f_weldA').onchange=ev=>{ setRackWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_weldB').onchange=ev=>{ setRackWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
-    }
-    if(isRod){
-      // Nothing to capture: `posable` says what the rod does while it is DRAGGED
-      // (constraints.js §06.2d), not what it holds, so unlike a weld the toggle has
-      // no rest angle to re-read and can never snap the geometry.
-      document.getElementById('f_posable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
-      document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_len').onchange=()=>{ const v=numVal('f_len',x=>x>0.01);
-        if(!isFinite(v)) return;
-        c.len=v; projectPositions(8);
-        renderInspector(); saveState(); };
-    }
-    if(isSlot){
-      document.getElementById('f_lockA').onchange=ev=>{ setSlotLock(c,'A',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_lockB').onchange=ev=>{ setSlotLock(c,'B',ev.target.checked); renderInspector(); saveState(); };
     }
     document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
   } else if(selInteraction){
@@ -521,27 +539,6 @@ function renderInspector(){
       cb.Ltot=v;
       renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
-  } else if(selSpring){
-    const sp=selSpring;
-    p.innerHTML=`
-      <h3>Linear spring</h3><p class="sub">force element · F = k(restLen-L)</p>
-      <div class="card"><div class="cardhead">state</div>
-        <div class="field force"><span class="lab">|force|</span><span class="val" id="sp_F">--</span></div>
-        <div class="field"><span class="lab">length</span><span class="val" id="sp_L">--</span></div>
-        ${numRow('rest length', 'sp_rest', sp.restLen.toFixed(3), {step:0.05, min:0.05})}
-        ${numRow('spring constant k', 'sp_k', sp.k.toFixed(2), {step:0.5, min:0})}
-        <p class="muted" style="margin:8px 0 0">Hookean force element, not a rigid constraint -- it stores and releases energy rather than being solved exactly. Drag the dashed control point (visible while selected) to set rest length, or type it here.</p>
-      </div>
-      <button class="del" id="sp_del">Delete spring</button>`;
-    document.getElementById('sp_rest').onchange=()=>{ const v=numVal('sp_rest',x=>x>0.05);
-      if(!isFinite(v)) return;
-      sp.restLen=v;
-      renderInspector(); saveState(); };
-    document.getElementById('sp_k').onchange=()=>{ const v=numVal('sp_k',x=>x>=0);
-      if(!isFinite(v)) return;
-      sp.k=v;
-      renderInspector(); saveState(); };
-    document.getElementById('sp_del').onclick=()=>{ springs=springs.filter(x=>x!==sp); clearSelection(); saveState(); };
   } else if(selRotSpring){
     const rs=selRotSpring;
     p.innerHTML=`
@@ -650,9 +647,7 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); }
-    if(c.type==='rack'){ const er=document.getElementById('f_pitchR');
-      if(er){ const pt=rackFirstPinion(c); const g=pt?rackPitch(rackFrame(c),pt):null;
-        er.textContent = g ? Math.abs(g.rho).toFixed(3) : '--'; } } }
+  }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);
@@ -660,13 +655,6 @@ function updateInspectorLive(){
       document.getElementById('cb_Lcur').textContent=cableCurrentLength(cb,f).toFixed(3);
       document.getElementById('cb_L').textContent=(f?f.paidLength:(cb._Lallow!=null?cb._Lallow:0)).toFixed(3);
       document.getElementById('cb_W').textContent=(f?f.windAngle/(2*Math.PI):0).toFixed(2); } }
-  if(selSpring){ const sp=selSpring;
-    const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
-    const L=Math.hypot(wax-wbx,way-wby);
-    const eF=document.getElementById('sp_F');
-    if(eF){ eF.textContent=Math.abs(sp.k*(sp.restLen-L)).toFixed(3);
-      document.getElementById('sp_L').textContent=L.toFixed(3);
-      setLive('sp_rest',sp.restLen.toFixed(3)); setLive('sp_k',sp.k.toFixed(2)); } }
   if(selInteraction){ const it=selInteraction;
     const ea=document.getElementById('i_area');
     if(ea){

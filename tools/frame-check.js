@@ -54,6 +54,12 @@ const ok=(name,good,detail)=>{ good?pass++:fail++;
 // ---- shared helpers, defined once inside the context -------------------------
 // A column set dotted with the world's live velocities: what the row says the
 // quantity's rate of change is. The fourth entry is a vessel's length rate.
+// A bar through the given anchors: one vertex each, all joints held.
+run(`var bar = (eps)=>{
+  const L=makeLine(); constraints.push(L);
+  for(const ep of eps){ const v=makeVertex(null); makeVertexOn(v,ep,{join:true});
+    constraints.push(v); makeVertexOn(v,{id:L.id},{join:true, slide:false}); }
+  refreshFrozen(); return L; };`);
 run(`var dotCols = cols => { let s=0;
   for(const [i,cx,cy,cw,cl] of cols){ const b=bodies[i];
     s += cx*b.vx + cy*b.vy + cw*b.w + (cl||0)*(b.vlen||0); }
@@ -71,29 +77,28 @@ const ANG = [
   ['two free bodies', `
     const a=makeBody(0,0,0.2); a.vx=0.13; a.vy=-0.07; a.w=0.9; bodies.push(a);
     const b=makeBody(2.1,0.4,0.2); b.vx=-0.05; b.vy=0.21; b.w=-0.4; bodies.push(b);
-    constraints.push(makeRodCon({id:a.id,off:[0.05,-0.03]},{id:b.id,off:[-0.02,0.06]},false,false));`],
-  ['one end on the background', `
+    bar([{id:a.id,off:[0.05,-0.03]},{id:b.id,off:[-0.02,0.06]}]);`],
+  ['one joint on the background', `
     const b=makeBody(1.7,-0.6,0.25); b.vx=0.22; b.vy=0.31; b.w=1.2; bodies.push(b);
-    constraints.push(makeRodCon({id:null,off:[0,0]},{id:b.id,off:[0.04,0.01]},false,false));`],
-  ['a vessel endpoint (the length column)', `
+    bar([{id:null,off:[0,0]},{id:b.id,off:[0.04,0.01]}]);`],
+  ['a vessel joint (the length column)', `
     const v=makeVessel(0,0,0.5,1.4); v.vx=0.09; v.vy=0.02; v.w=0.55; v.vlen=0.37; bodies.push(v);
     const b=makeBody(2.3,0.5,0.2); b.vx=-0.11; b.vy=0.04; b.w=0.3; bodies.push(b);
-    constraints.push(makeRodCon({id:v.id,off:[0.1,0.4]},{id:b.id,off:[0,0]},false,false));`],
+    bar([{id:v.id,off:[0.1,0.4]},{id:b.id,off:[0,0]}]);`],
 ];
 for(const [what, build] of ANG){
   run(`(()=>{ clearScene(); ${build} refreshFrozen(); })()`);
   // twoPointFrame unwraps phi against con._phiRef, so read both ends through it and
   // the difference is the real turn rather than an atan2 branch jump.
   const rate = Number(run(`(()=>{
-    const con=constraints[0];
-    const f=twoPointFrame(con);
+    const f=lineFrame(constraints.find(isLine));
     return dotCols(lineFrameOf(f).angCols());
   })()`));
   const fd = Number(run(`(()=>{
-    const con=constraints[0], dt=1e-6;
-    const p0=twoPointFrame(con).phi;
+    const L=constraints.find(isLine), dt=1e-6;
+    const p0=lineFrame(L).phi;
     glide(dt);
-    const p1=twoPointFrame(con).phi;
+    const p1=lineFrame(L).phi;
     glide(-dt);
     return (p1-p0)/dt;
   })()`));
@@ -110,10 +115,9 @@ for(const [s,t] of [[0,0],[0.7,0],[-1.3,0],[0.9,0.4],[-0.5,-0.25]]){
   run(`(()=>{ clearScene();
     const a=makeBody(0,0,0.2); a.vx=0.13; a.vy=-0.07; a.w=0.9; bodies.push(a);
     const b=makeBody(2.1,0.4,0.2); b.vx=-0.05; b.vy=0.21; b.w=-0.4; bodies.push(b);
-    constraints.push(makeRodCon({id:a.id,off:[0.05,-0.03]},{id:b.id,off:[-0.02,0.06]},false,false));
-    refreshFrozen(); })()`);
+    bar([{id:a.id,off:[0.05,-0.03]},{id:b.id,off:[-0.02,0.06]}]); })()`);
   const got = JSON.parse(run(`(()=>{
-    const f=twoPointFrame(constraints[0]), LF=lineFrameOf(f);
+    const f=lineFrame(constraints.find(isLine)), LF=lineFrameOf(f);
     // minusPoint* are negated and returned as term LISTS -- merge and flip to read
     // the material point's own velocity along each probe direction.
     const vAlong  = -dotCols(mergeCols(LF.minusPointAlong(${s},${t})));
@@ -121,8 +125,8 @@ for(const [s,t] of [[0,0],[0.7,0],[-1.3,0],[0.9,0.4],[-0.5,-0.25]]){
     return JSON.stringify([vAlong, vAcross]);
   })()`));
   const fd = JSON.parse(run(`(()=>{
-    const con=constraints[0], dt=1e-6;
-    const at = () => { const f=twoPointFrame(con);
+    const L=constraints.find(isLine), dt=1e-6;
+    const at = () => { const f=lineFrame(L);
       return [f.wax + ${s}*f.ux + ${t}*f.nx, f.way + ${s}*f.uy + ${t}*f.ny, f.ux, f.uy, f.nx, f.ny]; };
     const p0=at(); glide(dt); const p1=at(); glide(-dt);
     const vx=(p1[0]-p0[0])/dt, vy=(p1[1]-p0[1])/dt;
@@ -136,7 +140,7 @@ for(const [s,t] of [[0,0],[0.7,0],[-1.3,0],[0.9,0.4],[-0.5,-0.25]]){
 
 console.log('\n3. every row carries a role, and only roles §09.3 knows');
 // One bench per kind, each carrying every optional row that kind can build.
-const KINDS = `scene 4
+const KINDS = `scene 5
 sim gravity=on
 cam x=0 y=0 scale=64
 body 1 x=0 y=0 r=0.2
@@ -145,16 +149,19 @@ body 3 x=1 y=0.03 r=0.15
 body 4 x=2 y=0.07 r=0.15
 body 5 x=1.5 y=0.5 r=0.4
 vessel 6 x=6 y=0 bore=0.5 len=1.2 P=101325 T=293.15
-rod 1 -- 2 len=3.0016662 weld=both restAngA=0.2 restAngB=-0.3 pt=3/s=2/lock/restAng=0.1 pt=4/s=1
-slot 1 -- 2 lock=both restAngA=0.1 restAngB=0.1 pt=3/lock/restAng=0.05 pt=4
-rack 1 -- 2 weld=both restAngA=0.1 restAngB=0.2 pt=5/pinion pt=4/s=1
-vertex A on=1@(0.5,0)/join on=2@(-2.5,0)/join on=3@(-0.5,0)/join/weld/restAng=0
+line 7 mesh=5
+line 8 soft=0.05
+vertex A on=1/join/weld/restAng=0 on=7/join/fix/s=0/weld/restAng=0
+vertex B on=2/join on=7/join/fix/s=-3.0016662
+vertex C on=3/join on=7/join
+vertex D on=4/join on=7/join/fix/s=-2.0009999 on=8/join/fix/s=0
+vertex E on=6@(0,0.5)/join on=8/join/fix/s=-4.0705037
 belt 1 -- 2 rA=0.2 rB=0.2 restPhase=0
 cvt 1 -- 2
 knife 3 dir=(1,0)
 `;
 {
-  const KNOWN = ['dist','weld','online','station','lateral','mesh','pin','belt','cvt','knife','drag'];
+  const KNOWN = ['weld','online','station','mesh','pin','belt','cvt','knife','drag'];
   run(`importScene(${JSON.stringify(KINDS)}); setRunning(true); substep(sim.h);`);
   const seen = JSON.parse(run(`JSON.stringify(constraints.map(c=>[c.type, rowsFor(c).map(r=>r.role||null)]))`));
   const untagged = seen.filter(([,rs])=>rs.some(r=>r===null)).map(([t])=>t);
@@ -188,16 +195,14 @@ console.log('\n4. the reaction readout finds a real multiplier');
   // point's, which is a distinction the old row-order counting made by construction
   // and a role lookup has to be told.
   const tau = JSON.parse(run(`(()=>{
-    clearScene();
+    clearScene(); sim.gravity=true;
     const a=makeBody(0,0,0.2); bodies.push(a);
     const b=makeBody(2,0,0.2); bodies.push(b);
-    const c=makeBody(1,0,0.15); bodies.push(c);
-    const rod=makeRodCon({id:a.id,off:[0,0]},{id:b.id,off:[0,0]},false,false);  // NEITHER end welded
-    makeConPoint(rod, {id:c.id, off:[0,0]}, {lock:true});                       // but the point IS
-    constraints.push(rod); refreshFrozen(); setRunning(true); substep(sim.h);
-    return JSON.stringify(reactionOf(constraints[0]).tau===undefined);
+    bar([{id:a.id,off:[0,0]},{id:b.id,off:[0,0]}]);   // nothing welded anywhere
+    setRunning(true); substep(sim.h);
+    return JSON.stringify(reactionOf(constraints.find(isLine)).tau===undefined);
   })()`));
-  ok('a rod with no welded end reports no torque, though its point is locked', tau===true, String(tau));
+  ok('a bar with nothing welded on it reports no torque', tau===true, String(tau));
 }
 
 console.log(`\n${pass} ok, ${fail} failed\n`);

@@ -27,21 +27,24 @@ Nothing in a scene is fixed by a checkbox. A body is held still by a rod welded 
 Points where things meet are **vertices**, and they are objects in their own right.
 Pick the vertex tool (3) and tap a body to plant one; tap the same spot again and the
 body underneath joins it, which is how a hinge is made. Select a vertex and the panel
-lists every body it touches, with where it sits in that body's frame and two ticks --
+lists every body it touches, with where it sits in that body's frame and its ticks --
 **joined**, meaning the body is held to the point, and **welded**, meaning its angle
 is held to the vertex's frame as well, so everything welded there turns as one piece.
 Select a body and you get the same relation from the other side: every vertex on it.
-Vertices carry editable labels (A, B, C ...) drawn beside them. Joining one to the
-background is a ground pin -- the point held, the rotation free. See `VERTEX.md`.
+Joining a vertex to the background is a ground pin -- the point held, the rotation free.
 
-Bodies can be selected in bulk: pick the **lasso** (l), draw a loop around the part of
-the bench you want, and a box appears around everything caught. Drag inside it to move
-the selection, a corner to scale it, the stem above it to turn it -- every selected body
-turns by the box's own change in angle, and the couplings between them come along and
-are re-read where the transform changed their geometry. A selection can be copied
-(Ctrl/Cmd-C), placed again (Ctrl/Cmd-V), or kept in the **widget stash** as a named part
-to drop into any later bench. A widget is just a scene fragment, so a scene string
-pasted into the stash card becomes a part too. See `SCENE.md` §S.9.
+Rods, rails, racks and springs are all one object: a **line**. Pick the line tool (4)
+and tap vertices in turn; the first two place the line and every tap after joins
+another vertex to it, bringing it onto the line if it is not there already. Every
+joint starts out **sliding**, so a fresh line is a drawn guide that asks the solver
+for nothing -- untick *slide* on two joints and the distance between them is held, and
+that is a rod. A line with a slider on it is a rail, drawn across the viewport; one
+with nothing sliding is a bar, drawn between its ends. Give it a **compliance** and
+the held distances become springs instead of constraints. The panel lists its joints
+in order along it, and the distance between each consecutive held pair.
+
+Vertices, bodies and lines all carry editable **labels**, drawn beside them -- letters
+for vertices, numbers for bodies and lines. See `VERTEX.md`.
 
 Numbers can be typed as arithmetic, in the inspector fields and in a scene file
 alike: `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`, `b3.x+b3.r` -- the constants, the usual
@@ -56,7 +59,7 @@ Any bench can be written out as a **scene file** -- a plain-text listing of ever
 
 **Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or
 Alt-drag -- pan · Ctrl/Cmd-C, Ctrl/Cmd-V -- copy and place a selection · Delete --
-remove it · keys 1-9, b/f/g/h/k/l/t/v/c/q -- select tools (3 is the vertex tool).
+remove it · keys 1-9, b/f/g/h/k/l/v/c/q -- select tools (3 places vertices, 4 draws lines).
 
 ## Project layout
 
@@ -69,6 +72,6 @@ DEVELOPMENT.md          physics engine and constraint library design
 CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
 VESSEL.md               design note for the gas vessel (slots alongside DEVELOPMENT.md)
 SCENE.md                design note for the scene file format and the constructible set
-VERTEX.md               design note for the vertex/line scene model (vertices built; lines planned)
+VERTEX.md               design note for the vertex/line scene model
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```

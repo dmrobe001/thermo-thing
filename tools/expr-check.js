@@ -103,7 +103,7 @@ for(const src of ['globalThis', 'this', 'bodies', 'sim', 'constructor', 'toStrin
   ok(`${src} reaches nothing`, /unknown (name|function)|unexpected|is a function/.test(String(val(src))), `got ${val(src)}`);
 
 console.log('\n2. a file reads its own names');
-const S = `scene 4
+const S = `scene 5
 
 sim gravity=off bg.P=2*101325 bg.T=250+50
 cam x=0 y=2 scale=64
@@ -115,10 +115,16 @@ rect 3 x=b4.x+1 y=0.5 width=2*pi height=0.1*2
 vessel 4 x=-1 y=1 bore=0.4 P=bg.P T=bg.T gasMass=0.02
 vessel 5 x=1 y=1 bore=b4.bore len=b4.len*2 T=b4.T P=b4.P
 
+# lines
+line 6 soft=1/(5*2)
+
+# vertices
+vertex A on=bg(b1.x,b1.y+3)/join on=6/join/fix/s=0
+vertex B on=1@(b1.r/2,0)/join on=6/join/fix/s=0-hypot(3,0)
+vertex C on=2/join on=6/join/fix/s=0-1/2
+
 # constraints
-rod bg(b1.x,b1.y+3) -- 1 len=hypot(3,0) pt=2/s=1/2
 knife 2 dir=(cos(pi/3),sin(pi/3))
-spring 1@(b1.r/2,0) -- 2 restLen=2*b1.r k=5*2
 `;
 ok('the file loads', load(S)===null, load(S));
 const B = i => run(`JSON.stringify(bodies[${i}])`) && JSON.parse(run(`JSON.stringify(bodies[${i}])`));
@@ -134,12 +140,17 @@ ok('width = 2*pi', near(b3.hw*2, 2*Math.PI));
 ok('the ambient is the file\'s own (bg.P=2*101325)', near(run('sim.bg.P'), 202650) && near(run('sim.bg.T'), 300));
 ok('a vessel filled from bg.P/bg.T and a gas mass', near(run(`gasP(bodies[3])`), 202650) && near(run(`gasT(bodies[3])`), 300));
 ok('...whose implied len is what the other vessel doubled', near(b5.len, b4.len*2));
-ok('an endpoint offset is an expression', near(run('constraints[0].a.off[0]'), 0) && near(run('constraints[0].a.off[1]'), 5));
-ok('a rod length is hypot(3,0)', near(run('constraints[0].len'), 3));
-ok('a point station survives the slash (s=1/2)', near(run('conPoints(constraints[0])[0].s'), 0.5));
-ok('a vec2 is two expressions', near(run('constraints[1].dir[0]'), Math.cos(Math.PI/3)));
-ok('a spring anchor and its rest length', near(run('springs[0].a.off[0]'), b1.r/2) && near(run('springs[0].restLen'), 2*b1.r));
-ok('and its k', near(run('springs[0].k'), 10));
+const ONS = lbl => `(()=>{const v=constraints.find(c=>isVertex(c)&&c.label==='${lbl}');
+                          return JSON.stringify(vertexOns(v));})()`;
+{
+  const A=JSON.parse(run(ONS('A'))), B=JSON.parse(run(ONS('B'))), C=JSON.parse(run(ONS('C')));
+  ok('an incidence offset is an expression', near(A[0].off[0], 0) && near(A[0].off[1], 5));
+  ok('a station is one too (0-hypot(3,0))', near(B[1].s, -3));
+  ok('a station survives the slash (0-1/2)', near(C[1].s, -0.5));
+  ok('a body-frame offset on an incidence', near(B[0].off[0], b1.r/2));
+}
+ok('a vec2 is two expressions', near(run(`constraints.find(c=>c.type==='knife').dir[0]`), Math.cos(Math.PI/3)));
+ok('a line\'s compliance is an expression (1/(5*2))', near(run('constraints.find(isLine).soft'), 0.1));
 
 console.log('\n3. an expression is not stored');
 const out = run('exportScene()');
@@ -168,7 +179,7 @@ for(const [text, want] of [
   ['sim bg.P=b1.r\nbody 1 x=0 y=0 r=0.5',              'unknown name "b1.r"'],
   ['body 1 x=0 y=0 r=0.5 mass=b1.zz',                  'has no property "zz"'],
 ]){
-  const msg = load('scene 4\n'+text);
+  const msg = load('scene 5\n'+text);
   ok(`refused: ${want}`, msg!==null && msg.includes(want), `got ${msg}`);
 }
 ok('every refusal left the bench standing', run('exportScene()')===before);

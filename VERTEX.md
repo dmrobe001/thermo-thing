@@ -9,8 +9,8 @@ untouched. What changes is **the scene, and the pass that turns a scene into row
 This note uses `§X.n` for its own sections (`V` is the vessel note's) and the
 codebase's own `§NN` tokens for code, per `AGENT.md`.
 
-> **Status:** phase 0 (the frame seam) and phase 1 (the vertex) are built; the line
-> and the strand are not. `§X.12` phases it and says where each phase stands.
+> **Status:** phases 0-2 are built -- the frame seam, the vertex, and the line. The
+> strand is not. `§X.12` phases it and says where each phase stands.
 
 ---
 
@@ -430,7 +430,7 @@ stations, segments and rest angles from the pose the drag left (§06.2d
 
 ---
 
-## X.10 The scene format, version 5
+## X.10 The scene format, versions 4 and 5
 
 Version 4 landed the first half of this with phase 1: the `vertex` line, the `on=`
 incidence token, labels, and the retirement of `pin`. What follows is the second
@@ -623,14 +623,49 @@ Two corrections to what this phase was planned to be, both made while building i
 Body labels moved with it. Giving bodies their own would change every reference in
 the format, and that is a version bump the line is going to force anyway.
 
-**Phase 2 -- lines.** The `line` body, the derived frame, the row table of `§X.4`,
-compliance, the line tool with its two modes, the line panel, body labels, the
-conversion of rod/slot/rack/spring endpoints to vertex references, format version 5,
-the converter, the regenerated examples, and the retirement of rod, slot, rack and
-spring. `refreshFrozen` restated per `§X.9`. New validator `tools/line-check.js`;
-`tools/multipoint-check.js`, `tools/posable-check.js`, `tools/rack-check.js` and
-`tools/select-check.js` all ported. This is the large phase, and it is the one that
-pays.
+**Phase 2 -- lines. `[done]`** The `line` (§06.2f) is a straight massless bar with a
+frame and no coordinates: it lives in `constraints` beside the vertex, because that
+array is the list of things that produce ROWS and `bodies` is the list of things that
+produce COLUMNS. Its joints are the vertices naming it, and it holds only a
+compliance, a `posable` flag and its meshing disks -- its frame, its extent, its
+origin and its stations are all derived. Rod, slot, rack and the linear spring are
+retired into it, along with the whole extra-control-point machinery of §06.2c, which
+was what a joint needed before its joints were objects. `refreshFrozen` is restated
+per `§X.9`, `posable` moved from the rod to the line, and format version 5 is the
+`line` line plus `on=`'s line-joint options.
+
+Body and line **labels** landed with it after all, and the endpoint conversion did
+not: rod/slot/rack/spring are gone, so there are no `{id, off}` endpoints left to
+convert -- a line's joints ARE vertices. Labels are editable names drawn beside the
+thing; the file still references bodies and lines by their numeric id and writes a
+`label` only when it differs. Making the label the file's reference is a further step
+and is not taken here.
+
+The migration was verified against the engine it replaces, which is the strongest
+evidence available: every bundled example was rebuilt through the line/vertex
+constructors and run beside the old world for three seconds of real substeps. **All
+fourteen are bit-identical.** Two things had to be got right for that, and both are
+recorded in §06.2f: the station ORIGIN is the first held joint in joint order rather
+than in station order (or adding a joint silently reinterprets every station), and the
+placement pair's orientation is anchored so a joint added beyond the far end cannot
+turn the bar end for end and half-turn every weld on it.
+
+New validator `tools/line-check.js`; `tools/multipoint-check.js` retired with its
+subject; `frame-check`, `posable-check`, `rack-check`, `select-check`, `expr-check`
+and `scene-roundtrip` all ported.
+
+Two things this phase settled that the plan had not:
+
+- **One held joint on a line holds nothing.** A station is a distance from the origin,
+  so a lone held joint IS the origin and has nothing to be measured against. That is
+  the same shape as one weld at a vertex holding nothing, and it has the same reason:
+  both are relations, and a relation needs two parties. To pin a rider in the world,
+  hold one of the joints that places the line as well. The panel says so.
+- **A compliant line's stations are a length the ELEMENT owns**, so a selection box
+  scales them rather than re-reading them, and an authored pre-stretch survives -- the
+  rule `SCENE.md` §S.9 states for a spring's rest length, applied to what replaced it.
+  A rigid line's stations are captured geometry and are re-read like everything else.
+
 
 **Phase 3 -- strands.** Rebuild `03c163b` on vertices: a `strand` body, wheels and
 eyelets as nodes, tied and untied, compliance, tension-only. Belt, cable and

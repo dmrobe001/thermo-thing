@@ -76,7 +76,7 @@ function snapshot(){
       sim:Object.fromEntries(Object.entries(SIM_FIELDS).map(([n,fd])=>[n,fmtVal(fd,fd.get(sim))])),
       cam:Object.fromEntries(Object.entries(CAM_FIELDS).map(([n,fd])=>[n,fmtVal(fd,fd.get(cam))])),
       bodies:grab('bodies',bodies), constraints:grab('constraints',constraints),
-      cables:grab('cables',cables), springs:grab('springs',springs),
+      cables:grab('cables',cables),
       rotSprings:grab('rotSprings',rotSprings), interactions:grab('interactions',interactions),
     },null,1);
   })()`);
@@ -121,20 +121,31 @@ for(const ex of EXAMPLES){
 console.log('\n3. the file really carries the scene (spot checks on what it says)');
 const has=(ex,re,what)=>ok(`${ex.padEnd(12)}${what}`, re.test(texts[ex]||''),
   `not found in:\n${(texts[ex]||'').split('\n').map(l=>'        '+l).join('\n')}`);
-has('heatpair', /^rod bg\(0,2\.15\) -- 1 .*weld=both/m, 'the plate is held by a ground weld, not a flag');
-has('heatpair', /^rod 2@\(0,-0\.5\) -- 2@\(0,0\.5\) len=1\.8$/m, 'the reservoir is a vessel with a strut in it');
+has('heatpair', /^vertex \w+ on=bg\(0,2\.15\)\/join\/weld\S* on=\d+\/join\/fix\/s=0\/weld/m,
+                'the plate is held by a ground weld, not a flag');
+has('heatpair', /^vertex \w+ on=2@\(0,-0\.5\)\/join on=\d+\/join\/fix/m,
+                'the reservoir is a vessel with a strut between two of its own planes');
 has('heatpair', /^heat body=\d+ vessel=\d+ k=2000$/m,'both heat interactions, with k');
-has('heatpair', /^rod bg\(1\.15,1\.75\) -- \d+ len=\S+ weld=both/m, 'the anchoring rod, welded both ends');
-has('pendulum', /^rod bg\(0,4\.4\) -- \d+ len=2\.6$/m,'an unwelded background rod (weld omitted = none)');
+has('heatpair', /^vertex \w+ on=bg\(1\.15,1\.75\)\/join\/weld/m, 'the anchoring bar, welded to ground');
+has('pendulum', /^vertex \w+ on=bg\(0,4\.4\)\/join on=\d+\/join\/fix\/s=0$/m,
+                'a bar hinged at the background (no weld written = none)');
+has('pendulum', /^line \d+$/m,                       'and the line itself holds nothing but its id');
 has('flowpair', /^vessel \d+ .* P=243180 /m,         'the reservoir is at 2.4 atm');
 has('spinvessel',/^sim gravity=off/m,                'gravity is off');
 has('spinvessel',/^vessel \d+ .* w=9$/m,              'the initial spin');
-has('crank',    /^slot \d+ -- bg\([^)]*\) lock=B/m,  'the one-end-prismatic rail');
-has('rack',     /^rack \d+@\([^)]*\) -- \d+ pt=\d+\/pinion$/m,
-                'the rack: two pins naming the line, the pinion as a control point');
+// The rail is a line whose HEADING is welded to the world at a background vertex,
+// with the piston sliding on it -- the faithful reading of the one-end-prismatic slot
+// it replaced. (Two background vertices would fix the heading without the weld and
+// without the far-off anchor; that is a different scene, so the migration did not
+// silently make it.)
+has('crank',    /^vertex \w+ on=bg\(-8\.3,2\.4\)\/join\/weld\S* on=\d+\/join\/weld/m,
+                'the rail, its heading welded to the world');
+has('crank',    /^vertex \w+ on=2\/join on=\d+\/join\/fix\/s=\S+ on=\d+\/join$/m,
+                'and the piston, held to the connecting bar and sliding on the rail');
+has('rack',     /^line \d+ mesh=\d+$/m,              'the rack: a line with a disk meshing on it');
 has('skate',    /^knife \d+@\(0\.42,0\) dir=\(1,0\)$/m,'the knife heading');
 has('cable',    /^cable \d+ -- \d+ Ltot=\S+ localAngle=\S+$/m,'the cable, with its captured length');
-has('cable',    /^rod bg\(0,5\.1\) -- 1 .*weld=both/m,  'the spool is grounded by a rod');
+has('cable',    /^vertex \w+ on=bg\(0,5\.1\)\/join\/weld/m, 'the spool is grounded by a welded bar');
 
 // Nothing anywhere may still carry the removed flags: they are derived now, and a
 // file that set one would be freezing a coordinate by assertion again.
@@ -169,12 +180,19 @@ for(const [ex, what, pred] of cases){
 // Transitivity, and the constraint that does the freezing being compiled away.
 run(`(()=>{ clearScene();
   const a=makeBody(0,1,0.3); bodies.push(a); const c=makeBody(1,1,0.3); bodies.push(c);
-  constraints.push(makeRodCon({id:null,off:[0,0]},{id:a.id,off:[0,0]},true,true));
-  constraints.push(makeRodCon({id:a.id,off:[0,0]},{id:c.id,off:[0,0]},true,true));
+  const weldedBar = (epA, epB) => {
+    const L=makeLine(); constraints.push(L);
+    const vs=[epA,epB].map(ep=>{ const v=makeVertex(null); makeVertexOn(v,ep,{join:true});
+      constraints.push(v); makeVertexOn(v,{id:L.id},{join:true, slide:false}); return v; });
+    for(const v of vs) for(const e of vertexOns(v)) setVertexWeld(v,e,true);
+    return L; };
+  weldedBar({id:null,off:[0,0]}, {id:a.id,off:[0,0]});
+  weldedBar({id:a.id,off:[0,0]}, {id:c.id,off:[0,0]});
   refreshFrozen(); })()`);
 ok('grounding is transitive through a double weld', frozen()==='[[1,true,false],[2,true,false]]', frozen());
-ok('both grounding rods are compiled away', run('JSON.stringify(constraints.map(c=>!!c._compiled))')==='[true,true]');
-// ...and that deleting the rod thaws the body again, which is the whole point of
+ok('both grounding lines are compiled away',
+   run(`JSON.stringify(constraints.filter(isLine).map(c=>!!c._compiled))`)==='[true,true]');
+// ...and that deleting the line thaws the body again, which is the whole point of
 // freezing being derived rather than stored.
 run('constraints.length=0; refreshFrozen()');
 ok('deleting the rods thaws both bodies', frozen()==='[[1,false,false],[2,false,false]]', frozen());
@@ -183,35 +201,35 @@ console.log('\n5. the reader accepts nothing the editor cannot build');
 run(`loadExample('pendulum')`);
 const before = run('exportScene()');
 const rejects = [
-  ['an unknown kind',            'scene 4\nrocket 1 x=0 y=0'],
-  ['an unknown field',           'scene 4\nbody 1 x=0 y=0 r=1 charge=3'],
-  ['a coordinate frozen by fiat','scene 4\nbody 1 x=0 y=0 r=1 xLocked'],
-  ['a dangling body reference',  'scene 4\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
-  ['a future version',           'scene 5\nbody 1 x=0 y=0 r=1'],
+  ['an unknown kind',            'scene 5\nrocket 1 x=0 y=0'],
+  ['an unknown field',           'scene 5\nbody 1 x=0 y=0 r=1 charge=3'],
+  ['a coordinate frozen by fiat','scene 5\nbody 1 x=0 y=0 r=1 xLocked'],
+  ['a dangling body reference',  'scene 5\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
+  ['a future version',           'scene 6\nbody 1 x=0 y=0 r=1'],
   ['a version 1 file',           'scene 1\nbody 1 x=0 y=0 r=1'],
-  ['a missing separator',        'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
-  ['a duplicate id',             'scene 4\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
-  ['an authored static flag',    'scene 4\nbody 1 x=0 y=0 r=1 static'],
-  ['an authored length lock',    'scene 4\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
-  ['a prototype key',            'scene 4\nbody 1 x=0 y=0 r=1 constructor=1'],
-  ['a retired kind',             'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\npin 1 -- 2'],
-  ['a vertex with no incidence',  'scene 4\nbody 1 x=0 y=0 r=1\nvertex A'],
-  ['two incidences on one body',  'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=1@(0.5,0)/join'],
-  ['a weld with nothing joined',  'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/weld/restAng=0'],
-  ['a weld with no rest angle',   'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/weld'],
-  ['a rest angle with no weld',   'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/restAng=0'],
-  ['an unknown incidence option', 'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/slide'],
-  ['a duplicate label',           'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join\nvertex A on=bg(0,1)/join'],
-  ['a label that is a number',    'scene 4\nbody 1 x=0 y=0 r=1\nvertex 7 on=1/join'],
+  ['a missing separator',        'scene 5\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
+  ['a duplicate id',             'scene 5\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
+  ['an authored static flag',    'scene 5\nbody 1 x=0 y=0 r=1 static'],
+  ['an authored length lock',    'scene 5\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
+  ['a prototype key',            'scene 5\nbody 1 x=0 y=0 r=1 constructor=1'],
+  ['a retired kind',             'scene 5\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 -- 2 len=2'],
+  ['a vertex with no incidence',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A'],
+  ['two incidences on one body',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=1@(0.5,0)/join'],
+  ['a weld with nothing joined',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/weld/restAng=0'],
+  ['a weld with no rest angle',   'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/weld'],
+  ['a rest angle with no weld',   'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/restAng=0'],
+  ['an unknown incidence option', 'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/slide'],
+  ['a duplicate label',           'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join\nvertex A on=bg(0,1)/join'],
+  ['a label that is a number',    'scene 5\nbody 1 x=0 y=0 r=1\nvertex 7 on=1/join'],
   // The extra-control-point grammar (constraints.js §06.2c) is validated per kind,
   // the same way a line's own keys are: what a point may say depends on what it is
   // attached to, and anything else is a load error rather than a field ignored.
-  ['a pinion on a slot',         'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/pinion'],
-  ['a station on a slot point',  'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/s=0.5'],
-  ['a rod point with no station','scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nrod 1 -- 2 len=2 pt=3'],
-  ['a locked point with no rest angle',
-                                 'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/lock'],
-  ['a dangling point reference', 'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nslot 1 -- 2 pt=9'],
+  ['fix on a body incidence',    'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/fix/s=0'],
+  ['a station with no fix',      'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/join/s=0'],
+  ['a fix with no station',      'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/join/fix'],
+  ['a dangling line reference',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=9/join'],
+  ['a dangling mesh reference',  'scene 5\nbody 1 x=0 y=0 r=1\nline 2 mesh=9'],
+  ['an id used twice',           'scene 5\nbody 1 x=0 y=0 r=1\nline 1'],
 ];
 for(const [what, text] of rejects){
   let msg=null;
@@ -297,45 +315,43 @@ function firstDiff(a,b){
   return 'lengths differ';
 }
 
-console.log('\n8. a joint with extra control points round-trips');
-// The `pt` key is the format's one repeatable field, and each token carries a whole
-// point (constraints.js §06.2c). This is the check that all four kinds that take
-// them write what they hold and read back the same thing -- including the captured
-// station and rest angle, which the reader must NOT recompute.
+console.log('\n8. a line carrying several joints round-trips');
+// A bar with a rider, a rail with a slider, a shared vertex on two lines, and a
+// meshing disk -- everything a line can hold, in one file, twice through the reader.
 const MULTI = [
-  'scene 4',
-  'sim gravity=off',
+  'scene 5',
+  'sim gravity=on',
+  'cam x=0 y=0 scale=64',
   'body 1 x=0 y=0 r=0.2',
   'body 2 x=2 y=0 r=0.2',
   'body 3 x=1 y=0 r=0.2',
   'body 4 x=3 y=0 r=0.2',
   'body 5 x=1 y=-1 r=0.4',
-  'rod 1 -- 2 len=2 pt=3/s=-1',
-  'slot 1 -- 2 pt=4/lock/restAng=0',
-  'vertex A on=1@(0.1,0)/join on=2@(-1.9,0)/join on=3@(-0.9,0)/join',
-  'rack 1 -- 2 weld=A restAngA=0 pt=5/pinion pt=4/s=-3',
+  'line 6',
+  'line 7 soft=0.02',
+  'line 8 posable mesh=5',
+  'vertex A on=1@(0.1,0)/join on=6/join/fix/s=0 on=8/join/fix/s=0',
+  'vertex B on=2@(-1.9,0)/join on=6/join/fix/s=-1.9',
+  'vertex C on=3@(-0.9,0)/join on=6/join on=7/join/fix/s=0',
+  'vertex D on=4@(-2.9,0)/join/weld/restAng=0 on=7/join/fix/s=-1.9/weld/restAng=0 on=8/join',
 ].join('\n')+'\n';
 {
   let err=null, t1=null, t2=null;
   try { run(`importScene(${JSON.stringify(MULTI)})`); t1=run('exportScene()');
         run(`importScene(${JSON.stringify(t1)})`);   t2=run('exportScene()'); }
   catch(e){ err=e; }
-  ok('a multi-point scene loads and re-exports', !err, err&&(err.stack||String(err)));
+  ok('a multi-joint scene loads and re-exports', !err, err&&(err.stack||String(err)));
   if(!err){
     ok('and round-trips byte-for-byte', t1===t2, firstDiff(t1,t2));
-    const shape = run(`JSON.stringify(constraints.map(c=>[c.type, conPoints(c).map(
-      pt=>[pt.ep.id, pt.kind, pt.s===undefined?null:pt.s, pt.lock])]))`);
-    ok('every point came back with its kind, station and lock',
-       // The vertex leads because the export writes vertices in their own section
-      // first (§17.3 SCENE_SECTIONS), and this is the SECOND import -- of that text.
-      // It carries no control points of its own: its incidences are its content.
-      shape==='[["vertex",[]],["rod",[[3,"point",-1,false]]],["slot",[[4,"point",null,true]]],'
-             +'["rack",[[5,"pinion",null,false],[4,"point",-3,false]]]]',
+    const shape = run(`JSON.stringify(constraints.filter(isVertex).map(v=>[v.label,
+      vertexOns(v).filter(isLineOn).map(e=>[e.id, !!e.slide, e.s===undefined?null:e.s, !!e.weld])]))`);
+    ok('every joint came back with its line, its slide and its station',
+       shape==='[["A",[[6,false,0,false],[8,false,0,false]]],["B",[[6,false,-1.9,false]]],'
+             +'["C",[[6,true,null,false],[7,false,0,false]]],["D",[[7,false,-1.9,true],[8,true,null,false]]]]',
        shape);
-    for(const line of ['rod 1 -- 2 len=2 pt=3/s=-1',
-                       'slot 1 -- 2 pt=4/lock/restAng=0',
-                       'vertex A on=1@(0.1,0)/join on=2@(-1.9,0)/join on=3@(-0.9,0)/join',
-                       'rack 1 -- 2 weld=A restAngA=0 pt=5/pinion pt=4/s=-3'])
+    for(const line of ['line 7 soft=0.02',
+                       'line 8 posable mesh=5',
+                       'vertex C on=3@(-0.9,0)/join on=6/join on=7/join/fix/s=0'])
       ok(`the file writes back  ${line}`, t1.split('\n').includes(line),
          `not found in:\n${t1.split('\n').map(l=>'        '+l).join('\n')}`);
   }

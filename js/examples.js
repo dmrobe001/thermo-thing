@@ -15,24 +15,30 @@
 // ============================================================================
 const SCENES = {
 
-pendulum: `scene 4
+pendulum: `scene 5
 # A disk on a rigid rod, swinging from a fixed point. The rod's background end is
 # a plain pin, not the tool's welded default -- tap the end to free it, or untick
 # "end A welded" in the inspector.
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
 # bodies
 body 1 x=2.6 y=4.4 r=0.38
 
-# constraints
-rod bg(0,4.4) -- 1 len=2.6
+# lines
+line 2
+
+# vertices
+vertex A on=bg(0,4.4)/join on=2/join/fix/s=0
+vertex B on=1/join on=2/join/fix/s=-2.6
 `,
 
-double: `scene 4
+double: `scene 5
 # Two links, both pinned at both ends. The classic chaotic pair, and the case the
 # Baumgarte gain (§04.3) was tuned against: drift is largest at the extremes of a
 # swing, which is where a low gain bleeds energy visibly.
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
@@ -40,15 +46,21 @@ cam x=0 y=2.6 scale=64
 body 1 x=1.8 y=4.6 r=0.32
 body 2 x=3.6 y=4.6 r=0.32
 
-# constraints
-rod bg(0,4.6) -- 1 len=1.8
-rod 1 -- 2 len=1.8
+# lines
+line 3
+line 4
+
+# vertices
+vertex A on=bg(0,4.6)/join on=3/join/fix/s=0
+vertex B on=1/join on=3/join/fix/s=-1.8 on=4/join/fix/s=0
+vertex C on=2/join on=4/join/fix/s=-1.8
 `,
 
-fourbar: `scene 4
+fourbar: `scene 5
 # Two grounded cranks joined by a coupler -- the fourth bar is the ground itself,
 # the fixed distance between the two background anchors. Nothing states that
 # distance: it is implied by where the two anchors are.
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
@@ -56,13 +68,19 @@ cam x=0 y=2.6 scale=64
 body 1 x=-1.2 y=2.8 r=0.3
 body 2 x=1.3 y=2.9 r=0.3
 
-# constraints
-rod bg(-1.6,1.2) -- 1 len=1.64924225025
-rod 1 -- 2 len=2.50199920064
-rod bg(1.6,1.2) -- 2 len=1.72626765016
+# lines
+line 3
+line 4
+line 5
+
+# vertices
+vertex A on=bg(-1.6,1.2)/join on=3/join/fix/s=0
+vertex B on=1/join on=3/join/fix/s=-1.64924225025 on=4/join/fix/s=0
+vertex C on=2/join on=4/join/fix/s=-2.50199920064 on=5/join/fix/s=0
+vertex D on=bg(1.6,1.2)/join on=5/join/fix/s=-1.72626765016
 `,
 
-crank: `scene 4
+crank: `scene 5
 # Slider-crank: a crank pin, a connecting rod, and a piston confined to a
 # horizontal line.
 #
@@ -70,6 +88,7 @@ crank: `scene 4
 # locked end pins the segment's angle phi = atan2(...) directly (§06.5), which is
 # singular if the piston ever passes through the anchor -- so the anchor sits ten
 # metres out, well outside its travel.
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
@@ -77,16 +96,23 @@ cam x=0 y=2.6 scale=64
 body 1 x=-1 y=2.4 r=0.24
 body 2 x=1.7 y=2.4 r=0.34
 
-# constraints
-rod bg(-1.6,2.4) -- 1 len=0.6
-rod 1 -- 2 len=2.7
-slot 2 -- bg(-8.3,2.4) lock=B restAngB=0
+# lines
+line 3
+line 4
+line 5
+
+# vertices
+vertex A on=bg(-1.6,2.4)/join on=3/join/fix/s=0
+vertex B on=1/join on=3/join/fix/s=-0.6 on=4/join/fix/s=0
+vertex C on=2/join on=4/join/fix/s=-2.7 on=5/join
+vertex D on=bg(-8.3,2.4)/join/weld/restAng=0 on=5/join/weld/restAng=0
 `,
 
-skate: `scene 4
+skate: `scene 5
 # A knife-edge wheel in zero gravity: the contact point cannot move sideways, but
 # slides freely along its heading and pivots freely about it. Nonholonomic -- the
 # constraint is on velocity and has no position form to integrate.
+
 sim gravity=off
 cam x=0 y=2.6 scale=64
 
@@ -97,7 +123,7 @@ body 1 x=0 y=2.6 r=0.45
 knife 1@(0.42,0) dir=(1,0)
 `,
 
-integrator: `scene 4
+integrator: `scene 5
 # A wheel-on-disk integrator: the follower rolls on the big disk's face, so the
 # ratio is its distance from the centre. Slide it in or out and the ratio changes
 # continuously -- a CVT with no gear teeth anywhere.
@@ -108,6 +134,7 @@ integrator: `scene 4
 # That is what a ground pin is, built from a rod.
 #
 # The follower rides the same single-locked-background rail the crank uses.
+
 sim gravity=off
 cam x=0 y=2.6 scale=64
 
@@ -115,13 +142,21 @@ cam x=0 y=2.6 scale=64
 body 1 x=0 y=2.6 r=0.95
 body 2 x=1.17 y=2.6 r=0.22
 
+# lines
+line 3
+line 4
+
+# vertices
+vertex A on=bg(-0.5,2.6)/join/weld/restAng=0 on=3/join/fix/s=0/weld/restAng=3.14159265359
+vertex B on=1/join on=3/join/fix/s=-0.5
+vertex C on=2/join on=4/join
+vertex D on=bg(-10,2.6)/join/weld/restAng=0 on=4/join/weld/restAng=0
+
 # constraints
-rod bg(-0.5,2.6) -- 1 len=0.5 weld=A restAngA=-3.14159265359
-slot 2 -- bg(-10,2.6) lock=B restAngB=0
 cvt 1 -- 2
 `,
 
-rack: `scene 4
+rack: `scene 5
 # A rack and pinion. The RACK -- an infinite, massless toothed line -- is named by
 # TWO pins, and here both of them ride the cart: one at its centre and one on its
 # own local +x. Two pins on one body make the rack part of that body, so it turns
@@ -146,6 +181,7 @@ rack: `scene 4
 # The cart starts moving and nothing damps it, so the pair simply runs: the only
 # transient is the first step, where the rack takes up the cart's head start and
 # spins the pinion up to match.
+
 sim gravity=off
 cam x=-1 y=2 scale=64
 
@@ -153,17 +189,25 @@ cam x=-1 y=2 scale=64
 body 1 x=-1 y=2.6 r=0.3 vx=1.4
 body 2 x=-1 y=1.6 r=0.4
 
-# constraints
-slot 1 -- bg(-10,2.6) lock=both restAngA=0 restAngB=0
-rod bg(-1.5,1.6) -- 2 len=0.5 weld=A restAngA=-3.14159265359
-rack 1@(0.5,0) -- 1 pt=2/pinion
+# lines
+line 3
+line 4
+line 5 mesh=2
+
+# vertices
+vertex A on=1/join/weld/restAng=0 on=3/join/weld/restAng=0 on=5/join/fix/s=0
+vertex B on=bg(-10,2.6)/join/weld/restAng=0 on=3/join/weld/restAng=0
+vertex C on=bg(-1.5,1.6)/join/weld/restAng=0 on=4/join/fix/s=0/weld/restAng=3.14159265359
+vertex D on=2/join on=4/join/fix/s=-0.5
+vertex E on=1@(0.5,0)/join on=5/join/fix/s=-0.5
 `,
 
-cable: `scene 4
+cable: `scene 5
 # A mass hanging from a cable wound on a fixed spool. Tension only: the cable goes
 # slack rather than pushing, and the wrap point tracks around the rim as it winds.
 # Ltot is the free span at creation -- a captured field, which is why it is written
 # out rather than re-derived from the pose (SCENE.md §S.3).
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
@@ -171,16 +215,18 @@ cam x=0 y=2.6 scale=64
 body 1 x=0 y=4.6 r=0.4
 body 2 x=0.9 y=4.4 r=0.32
 
-# constraints
-# What holds the spool is this rod, welded at both ends to a fixed point. That is
-# the whole of what "static" means -- there is no flag.
-rod bg(0,5.1) -- 1 len=0.5 weld=both restAngA=-1.57079632679 restAngB=-1.57079632679
+# lines
+line 3
+
+# vertices
+vertex A on=bg(0,5.1)/join/weld/restAng=0 on=3/join/fix/s=0/weld/restAng=1.57079632679
+vertex B on=1/join/weld/restAng=0 on=3/join/fix/s=-0.5/weld/restAng=1.57079632679
 
 # cables
 cable 2 -- 1 Ltot=0.830662386292 localAngle=-0.218668945874
 `,
 
-gasspring: `scene 4
+gasspring: `scene 5
 # A vessel standing on the ground: its lower cap -- the material plane f = -1/2 --
 # is welded to a fixed world point, which pins that cap and locks the vessel's
 # rotation, leaving the length as the only free coordinate.
@@ -191,17 +237,22 @@ gasspring: `scene 4
 # any extension, so gravity acquires a generalized force on len that it does not
 # have for a free vessel. The adiabat is not imposed either -- an isolated gas
 # simply never changes its adiabat invariant.
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
 # bodies
 vessel 1 x=0 y=1.1 bore=0.5 len=1.2 P=101325 T=293.15
 
-# constraints
-rod bg(0,0.15) -- 1@(0,-0.5) len=0.35 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+# lines
+line 2
+
+# vertices
+vertex A on=bg(0,0.15)/join/weld/restAng=0 on=2/join/fix/s=0/weld/restAng=-1.57079632679
+vertex B on=1@(0,-0.5)/join/weld/restAng=0 on=2/join/fix/s=-0.35/weld/restAng=-1.57079632679
 `,
 
-hinge: `scene 4
+hinge: `scene 5
 # What a VERTEX is (VERTEX.md §X.2): a named point, and the list of bodies it
 # touches. Every body at it is JOINED -- held to the point -- and may also be
 # WELDED, which holds its angle to the vertex's frame as well.
@@ -220,6 +271,7 @@ hinge: `scene 4
 # Spin it up and the pair turns about A forever. Untick either weld at B and the
 # counterweight hangs instead, swinging on the rim as a hinge -- which is the whole
 # difference between joined and welded, in one tick.
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
@@ -232,12 +284,13 @@ vertex A on=bg(0,2.6)/join on=1/join
 vertex B on=1@(0.7,0)/join/weld/restAng=0 on=2@(-0.25,0)/join/weld/restAng=0
 `,
 
-spinvessel: `scene 4
+spinvessel: `scene 5
 # A free vessel with nothing attached, spinning in zero gravity. I(len) grows as it
 # stretches, so the spin slows and the centrifugal generalized force (physics.js
 # §08.1) trades against the gas -- the vessel breathes. Angular momentum and total
 # energy both hold flat while it does, which is the point: the same constant mu
 # governs the length inertia and the len^2 term in I.
+
 sim gravity=off
 cam x=0 y=2.6 scale=64
 
@@ -245,7 +298,7 @@ cam x=0 y=2.6 scale=64
 vessel 1 x=0 y=2.6 bore=0.4 len=1 P=101325 T=293.15 w=9
 `,
 
-heatpair: `scene 4
+heatpair: `scene 5
 # A hot reservoir warming a working vessel through a fixed plate. Nothing here is a
 # "heat exchanger" primitive: the plate is an ordinary rectangle, pinned by an
 # ordinary rod welded to the ground, and what
@@ -267,6 +320,7 @@ heatpair: `scene 4
 # (its gas-spring period is a fraction of a second, the thermal time constant a few
 # seconds) instead of ringing. Total energy holds flat throughout: with the geometry
 # frozen during the pass the two dU are equal and opposite exactly.
+
 sim gravity=off
 cam x=0 y=2.6 scale=64
 
@@ -275,25 +329,25 @@ rect 1 x=0 y=2.6 width=2.5 height=0.24
 vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=276513.730172 T=800
 vessel 3 x=1.15 y=2.6 bore=0.9 len=0.9 P=101325 T=293.15
 
-# constraints
-# The plate is held by a rod welded at both ends to fixed ground -- that, and
-# nothing else, is what makes it static.
-rod bg(0,2.15) -- 1 len=0.45 weld=both restAngA=1.57079632679 restAngB=1.57079632679
-# The reservoir's strut: a rod from its lower cap to its upper one. Both ends ride
-# the same body, so what it holds is the distance between two material planes --
-# the length. That is the whole of what a reservoir is.
-rod 2@(0,-0.5) -- 2@(0,0.5) len=1.8
-# The working vessel's anchor is welded to its MID-WALL, f = 0. That material plane
-# does not move with the length, so this pins the pose and leaves the length free.
-# Welded to a cap instead -- as the gas spring is -- it would pin neither.
-rod bg(1.15,1.75) -- 3 len=0.85 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+# lines
+line 6
+line 7
+line 8
+
+# vertices
+vertex A on=bg(0,2.15)/join/weld/restAng=0 on=6/join/fix/s=0/weld/restAng=-1.57079632679
+vertex B on=1/join/weld/restAng=0 on=6/join/fix/s=-0.45/weld/restAng=-1.57079632679
+vertex C on=2@(0,-0.5)/join on=7/join/fix/s=0
+vertex D on=2@(0,0.5)/join on=7/join/fix/s=-1.8
+vertex E on=bg(1.15,1.75)/join/weld/restAng=0 on=8/join/fix/s=0/weld/restAng=-1.57079632679
+vertex F on=3/join/weld/restAng=0 on=8/join/fix/s=-0.85/weld/restAng=-1.57079632679
 
 # interactions
 heat body=1 vessel=2 k=2000
 heat body=1 vessel=3 k=2000
 `,
 
-flowpair: `scene 4
+flowpair: `scene 5
 # The mass-transfer counterpart, in the same layout: a pressurized strutted
 # reservoir feeding a free vessel through a port body, with a pair of FLOW
 # interactions on it. Gas crosses until the pressures match, carrying its source's
@@ -306,6 +360,7 @@ flowpair: `scene 4
 # anchor, with no actuator primitive anywhere.
 #
 # The reservoir's 243180 Pa is 2.4 atmospheres, at ambient temperature.
+
 sim gravity=off
 cam x=0 y=2.6 scale=64
 
@@ -314,10 +369,18 @@ rect 1 x=0 y=2.6 width=2.5 height=0.24
 vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=243180 T=293.15
 vessel 3 x=1.15 y=2.6 bore=0.9 len=0.9 P=101325 T=293.15
 
-# constraints
-rod bg(0,2.15) -- 1 len=0.45 weld=both restAngA=1.57079632679 restAngB=1.57079632679
-rod 2@(0,-0.5) -- 2@(0,0.5) len=1.8
-rod bg(1.15,1.75) -- 3 len=0.85 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+# lines
+line 6
+line 7
+line 8
+
+# vertices
+vertex A on=bg(0,2.15)/join/weld/restAng=0 on=6/join/fix/s=0/weld/restAng=-1.57079632679
+vertex B on=1/join/weld/restAng=0 on=6/join/fix/s=-0.45/weld/restAng=-1.57079632679
+vertex C on=2@(0,-0.5)/join on=7/join/fix/s=0
+vertex D on=2@(0,0.5)/join on=7/join/fix/s=-1.8
+vertex E on=bg(1.15,1.75)/join/weld/restAng=0 on=8/join/fix/s=0/weld/restAng=-1.57079632679
+vertex F on=3/join/weld/restAng=0 on=8/join/fix/s=-0.85/weld/restAng=-1.57079632679
 
 # interactions
 flow body=1 vessel=2 k=0.00003
@@ -326,7 +389,8 @@ flow body=1 vessel=3 k=0.00003
 
 // An empty bench is not a special case in the loader -- it is a scene with nothing
 // in it, which is exactly what "clear" means.
-clear: `scene 4
+clear: `scene 5
+
 sim gravity=on
 cam x=0 y=2.6 scale=64
 `,

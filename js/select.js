@@ -47,7 +47,6 @@ function groupMembers(ids){
     bodies:       bodies.filter(b => ids.has(b.id)),
     constraints:  constraints.filter(c => all(conEndpoints(c))),
     cables:       cables.filter(c => all([c.tether, c.spool])),
-    springs:      springs.filter(s => all([s.a, s.b])),
     rotSprings:   rotSprings.filter(s => all([s.a, s.b])),
     interactions: interactions.filter(i => all([i.body, i.vessel])),
   };
@@ -61,9 +60,8 @@ function groupMembers(ids){
 function groupAnchors(m){
   const out=[];
   const take = ep => { if(ep && ep.id==null && ep.off) out.push(ep); };
-  for(const c of m.constraints){ take(c.a); take(c.b); for(const pt of conPoints(c)) take(pt.ep); }
+  for(const c of m.constraints) for(const ep of conEndpoints(c)) take(ep);
   for(const c of m.cables) take(c.tether);
-  for(const s of m.springs){ take(s.a); take(s.b); }
   return out;
 }
 // A body's axis-aligned extent -- its outline, not its centre, so the box wraps what
@@ -116,13 +114,19 @@ function makeGroup(idList){
     // reference is the fixed world's theta = 0, so a turn of the box turns it.
     rotSprings: m.rotSprings.filter(rs => rs.a.id==null || rs.b.id==null)
       .map(rs => ({ rs, restAngle:rs.restAngle, sign: rs.a.id==null ? -1 : 1 })),
-    springs: m.springs.map(sp => ({ sp, restLen:sp.restLen })),
     cables: m.cables.map(cb => ({ cb, Ltot:cb.Ltot })),
+    // A COMPLIANT line's held stations are its rest lengths -- a length the ELEMENT
+    // owns, the way a spring's rest length and a cable's paid-out length are -- so a
+    // scale multiplies them rather than re-reading them off the spread-out pose, and
+    // an authored pre-stretch survives. A RIGID line's stations are captured geometry
+    // and are re-read like everything else (groupRecapture below).
+    softLines: m.constraints.filter(c => isLine(c) && c.soft>0).map(c => ({ c,
+      stations: lineJoints(c).map(K => ({ e:K.e, s:K.e.s })) })),
   };
   return g;
 }
 const groupCount = g => g.m.bodies.length;
-const groupCouplings = g => g.m.constraints.length + g.m.cables.length + g.m.springs.length
+const groupCouplings = g => g.m.constraints.length + g.m.cables.length
                           + g.m.rotSprings.length + g.m.interactions.length;
 
 // Select a set of bodies as a group, marking every member so the canvas highlights
@@ -133,7 +137,7 @@ function selectGroup(idList){
   if(!g) { renderInspector(); return null; }
   selGroup = g;
   for(const b of g.m.bodies) b.sel=true;
-  for(const list of ['constraints','cables','springs','rotSprings','interactions'])
+  for(const list of ['constraints','cables','rotSprings','interactions'])
     for(const o of g.m[list]) o.sel=true;
   renderInspector();
   return g;
@@ -207,7 +211,6 @@ function groupApply(g){
 function groupRecapture(g){
   for(const r of g.base.belts) r.c.restPhase = r.restPhase + r.rate*g.ang;
   for(const r of g.base.rotSprings) r.rs.restAngle = r.restAngle + r.sign*g.ang;
-  for(const r of g.base.springs) r.sp.restLen = r.restLen * g.s;
   for(const r of g.base.cables) r.cb.Ltot = r.Ltot * g.s;
   // Once the box has been scaled at ALL, the joints' lengths and stations are read
   // off the geometry from then on, including on the way back. That is what makes the
@@ -218,8 +221,12 @@ function groupRecapture(g){
   if(g.s!==1) g.scaled=true;
   if(g.ang===0 && !g.scaled) return;
   for(const c of g.m.constraints){
-    if(g.scaled) recaptureConPose(c); else recaptureConAngles(c);
+    if(g.scaled && isLine(c) && c.soft>0) recaptureConAngles(c);   // its stations scale, below
+    else if(g.scaled) recaptureConPose(c);
+    else recaptureConAngles(c);
   }
+  for(const r of g.base.softLines)
+    for(const st of r.stations) if(st.s!==undefined) st.e.s = st.s * g.s;
 }
 
 // ---- the box's handles ----
@@ -310,7 +317,6 @@ function deleteGroup(){
   const g=selGroup; if(!g) return;
   const ids=g.ids;
   for(const id of ids){ dropBodyFromConstraints(id); dropInteractionsOn(id); }
-  springs     = springs.filter(s => !ids.has(s.a.id) && !(s.b && ids.has(s.b.id)));
   rotSprings  = rotSprings.filter(s => !ids.has(s.a.id) && !ids.has(s.b.id));
   cables      = cables.filter(c => !ids.has(c.spool.id) && !ids.has(c.tether.id));
   bodies      = bodies.filter(b => !ids.has(b.id));
@@ -451,7 +457,6 @@ function groupInspectorHTML(g){
   line(g.m.bodies.length,'bodies');
   line(g.m.constraints.length,'constraints');
   line(g.m.cables.length,'cables');
-  line(g.m.springs.length,'springs');
   line(g.m.rotSprings.length,'rotational springs');
   line(g.m.interactions.length,'interactions');
   return `
