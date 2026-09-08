@@ -301,9 +301,20 @@ Grammar notes:
   background with its rotation left free, and a body merely MARKED at a vertex rather
   than held there.
 
-  A **line** is a straight massless bar whose joints are the vertices naming it. A rod
-  is one whose joints are all held (`fix`), a rail one with a slider on it, a rack one
-  carrying a `mesh`, and a spring one with a compliance (`soft`, in m/N). It carries
+  It also carries its own place, `at=(x,y)`, and that key follows §S.3's rule to the
+  letter: it is written exactly when nothing else in the file says where the point is,
+  and omitted -- as derived geometry -- the moment something does. So a vertex a body
+  or the background locates writes no `at` at all, and a vertex left standing on its
+  own after the bodies around it were deleted writes the one thing there is left to
+  say about it. `vertex A` alone is legal: a named point at the origin, with no
+  relations. That is not an edge case to tolerate, it is the model -- a vertex is an
+  object of the same standing as a disk or a line, so **no deletion cascades** and
+  nothing's existence is conditional on anything else's (`VERTEX.md` §X.15).
+
+  A **line** is a straight massless bar whose joints are the vertices naming it -- a
+  bar with all its joints held (`fix`), a rail with a slider on it, a rack with a
+  `mesh`, a spring with a compliance (`soft`, in m/N), and one object rather than
+  four. It carries
   an id like a body, because a body is what it is as far as anything naming one is
   concerned: `on=7` says "line 7" or "body 7", and the reader tells them apart by what
   the id actually names. What the line HOLDS is nothing -- its frame, its extent, its

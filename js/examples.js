@@ -16,9 +16,10 @@
 const SCENES = {
 
 pendulum: `scene 5
-# A disk on a rigid rod, swinging from a fixed point. The rod's background end is
-# a plain pin, not the tool's welded default -- tap the end to free it, or untick
-# "end A welded" in the inspector.
+# A disk swinging from a fixed point on a rigid bar. The bar is a LINE (VERTEX.md
+# §X.4) with both its joints HELD, which is what makes it a bar rather than a rail;
+# nothing is welded, so it hinges at both ends. Untick "slide" on a joint in the line
+# panel to hold it, tick it to let it travel -- the same object either way.
 
 sim gravity=on
 cam x=0 y=2.6 scale=64
@@ -81,13 +82,16 @@ vertex D on=bg(1.6,1.2)/join on=5/join/fix/s=-1.72626765016
 `,
 
 crank: `scene 5
-# Slider-crank: a crank pin, a connecting rod, and a piston confined to a
-# horizontal line.
+# Slider-crank: a crank, a connecting rod, and a piston confined to a horizontal
+# line. Three lines and four vertices, and the difference between the three is which
+# of their joints slide: the crank and the rod hold both, the rail holds neither.
 #
-# The rail is a slot with ONLY its background end prismatic (lock=B). A single
-# locked end pins the segment's angle phi = atan2(...) directly (§06.5), which is
-# singular if the piston ever passes through the anchor -- so the anchor sits ten
-# metres out, well outside its travel.
+# The rail (line 5) is placed by a single background vertex D, welded there, which
+# pins its heading to the world frame through an atan2 that is singular if the piston
+# ever passes through the anchor -- so the anchor sits ten metres out, well outside
+# its travel. That is the old rod/slot arrangement carried across verbatim by the
+# migration. It no longer has to be built that way: two background vertices on the
+# rail fix its heading outright with no atan2 anywhere, and no weld (VERTEX.md §X.10).
 
 sim gravity=on
 cam x=0 y=2.6 scale=64
@@ -128,12 +132,14 @@ integrator: `scene 5
 # ratio is its distance from the centre. Slide it in or out and the ratio changes
 # continuously -- a CVT with no gear teeth anywhere.
 #
-# The big disk is held by a short rod welded at its BACKGROUND end only. The weld
-# fixes the rod's direction, so its free far end -- which sits exactly at the
-# disk's centre -- is itself fixed in space, and the disk spins freely about it.
-# That is what a ground pin is, built from a rod.
+# The big disk is held by a short LINE welded at its background joint only: the weld
+# fixes the bar's heading, so its far joint -- which sits exactly at the disk's
+# centre -- is fixed in space, and the disk spins freely about it. That is the ground
+# pin as the old rod built one. A vertex joined straight to the background is the
+# direct way to say it now (see the hinge example); this scene keeps the built form
+# because the migration reproduces the old world field for field.
 #
-# The follower rides the same single-locked-background rail the crank uses.
+# The follower rides the same singly-welded background rail the crank uses.
 
 sim gravity=off
 cam x=0 y=2.6 scale=64
@@ -157,15 +163,16 @@ cvt 1 -- 2
 `,
 
 rack: `scene 5
-# A rack and pinion. The RACK -- an infinite, massless toothed line -- is named by
-# TWO pins, and here both of them ride the cart: one at its centre and one on its
-# own local +x. Two pins on one body make the rack part of that body, so it turns
-# with the cart, and what keeps this rack horizontal is not the world frame but the
-# slot, whose two prismatic ends lock the cart's orientation as well as confining
-# it to the rail. Tilt that rail and the rack tilts with it.
+# A rack and pinion, which is not a kind of its own any more: it is a LINE carrying a
+# meshing disk (VERTEX.md §X.4). The rack is placed by TWO vertices that both ride
+# the cart -- one at its centre and one on its own local +x -- and two joints on one
+# body make the line part of that body, so it turns with the cart. What keeps this
+# rack horizontal is not the world frame but the rail below it, whose welded joints
+# lock the cart's orientation as well as confining it. Tilt that rail and the rack
+# tilts with it.
 #
-# Neither pin is welded (weld omitted = none): with both on the same body there is
-# nothing left for a weld to hold, since the body already fixes the heading.
+# Neither of the rack's joints is welded: with both on the same body there is nothing
+# left for a weld to hold, since the body already fixes the heading.
 #
 # The pinion meshes with the rack wherever it sits -- perfect traction, no
 # tangency required. Its PITCH RADIUS is its own perpendicular distance from the
@@ -174,9 +181,9 @@ rack: `scene 5
 # is. Slide the pinion nearer the rack and the ratio changes -- which is what
 # makes this row nonholonomic, exactly as the wheel integrator's contact is.
 #
-# The pinion is held exactly as that integrator's disk is: a short rod to a fixed
-# background point, welded only at that end, pins its centre and leaves it free
-# to spin (see the integrator example's own comment).
+# The pinion is held exactly as that integrator's disk is: a short line to a fixed
+# background point, welded only at that joint, pins its centre and leaves it free to
+# spin (see the integrator example's own comment).
 #
 # The cart starts moving and nothing damps it, so the pair simply runs: the only
 # transient is the first step, where the rack takes up the cart's head start and

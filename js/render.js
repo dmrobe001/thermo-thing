@@ -406,7 +406,10 @@ function drawConstraint(con){
   // IS is what its joints do (VERTEX.md §X.4).
   if(con.type==='vertex'){ drawVertex(con,col); return; }
   if(con.type==='line'){
-    const f=lineFrame(con); if(!f) return;
+    // linePlacement, not lineFrame: a line whose joints no longer have bodies under
+    // them still has a place, and an object that stops being DRAWN when a neighbour
+    // is deleted is only a slower way of deleting it (constraints.js §06.2f).
+    const f=linePlacement(con); if(!f) return;
     const released=linePosing(con);
     const bar=lineIsBar(con) && !released;
     ctx.strokeStyle=col; ctx.lineWidth=bar?3:1.5;

@@ -13,8 +13,13 @@
 //   3. the primary: the background speaks for a vertex's position before any body
 //      does, so a ground pin holds the BODY to the world point and not the other way
 //      round.
-//   4. the invariants: one incidence per body, a weld only on a joined body, a
-//      vertex with nothing left to be a point on goes when its last body does.
+//   4. the invariants: one incidence per body, a weld only on a joined body, and --
+//      the one that matters most -- that NOTHING OWNS ANYTHING. A vertex outlives
+//      every body it ever touched, at the place it was standing; deleting a body
+//      takes neither the vertex at its centre nor the line between two of them; a
+//      line whose joints have lost their bodies is still drawn and still pickable;
+//      and deleting a line leaves its vertices with no dangling incidence behind
+//      (VERTEX.md §X.15).
 //   5. the captures never snap: ticking join or weld on holds the pose it found.
 //   6. the file: it round-trips byte-for-byte, its incidences come back with their
 //      flags and rest angles, and a scaled selection box leaves it assembled.
@@ -179,17 +184,53 @@ ok('unjoining drops the weld with it', run(`(()=>{ clearScene();
   setVertexWeld(v,e,true);
   setVertexJoin(v,e,false);
   return e.weld===false && e.restAng===undefined; })()`)===true);
-ok('a vertex goes when its last body does', run(`(()=>{ clearScene();
+// A vertex is an object, not a body's property, so no body's departure takes it --
+// and it does not move when the thing that was locating it goes, because its own
+// place is read off the live geometry first (constraints.js §06.2e captureVertexAt).
+ok('a vertex OUTLIVES the last body it touched, where it stood', run(`(()=>{ clearScene();
   const a=makeBody(0,0,0.3); bodies.push(a);
   const b=makeBody(1,0,0.3); bodies.push(b);
-  const v=makeVertex(null);
+  const v=makeVertex(null,[0,0]);
   makeVertexOn(v,{id:a.id,off:[0,0]},{join:true});
   makeVertexOn(v,{id:b.id,off:[-1,0]},{join:true});
   constraints.push(v);
   dropBodyFromConstraints(a.id);
   const after1 = constraints.length;                    // one body left: still a vertex
   dropBodyFromConstraints(b.id);
-  return after1===1 && constraints.length===0; })()`)===true);
+  const w=vertexWorld(v);
+  return after1===1 && constraints.length===1 && constraints[0]===v
+      && Math.abs(w[0])<1e-12 && Math.abs(w[1])<1e-12
+      && vertexOns(v).length===0; })()`)===true);
+// The bench the report was made on: two circles, a vertex at each centre, a line
+// between them. Deleting one circle used to take the vertex at its centre AND the
+// line with it -- the ownership this model exists to be rid of.
+ok('deleting a body takes NEITHER the vertex nor the line', run(`(()=>{ clearScene();
+  const a=makeBody(-1,0,0.3); bodies.push(a);
+  const b=makeBody( 1,0,0.3); bodies.push(b);
+  const A=makeVertex(null,[-1,0]); makeVertexOn(A,{id:a.id,off:[0,0]},{join:true}); constraints.push(A);
+  const B=makeVertex(null,[ 1,0]); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
+  const L=makeLine(); constraints.push(L); joinVertexToLine(L,A); joinVertexToLine(L,B);
+  dropBodyFromConstraints(a.id); bodies=bodies.filter(x=>x!==a);
+  const w=vertexWorld(A);
+  return constraints.length===3 && constraints.includes(A) && constraints.includes(L)
+      && Math.abs(w[0]+1)<1e-12 && Math.abs(w[1])<1e-12; })()`)===true);
+// ...and the line is still THERE to look at and to click on. An object that stops
+// being drawn when a neighbour is deleted is only a slower way of deleting it.
+ok('...and the line still has a placement, so it is drawn and pickable', run(`(()=>{
+  const L=constraints.find(isLine);
+  const f=linePlacement(L);
+  return !!f && !lineFrame(L) && constraintHit(L,0,0)
+      && Math.abs(Math.hypot(f.wax-f.wbx, f.way-f.wby)-2)<1e-9; })()`)===true);
+// The relation is what went, and only the relation: deleting the LINE leaves both
+// vertices standing, with the incidences that named it gone rather than dangling --
+// a dangling `on=` is a scene file the reader will not take back.
+ok('deleting a line leaves its vertices, and no dangling incidence', run(`(()=>{
+  const L=constraints.find(isLine);
+  deleteConstraint(L);
+  const vs=constraints.filter(isVertex);
+  return constraints.length===2 && vs.length===2
+      && vs.every(v=>!vertexOns(v).some(e=>e.id===L.id))
+      && (importScene(exportScene()), true); })()`)===true);
 
 console.log('\n5. the captures never snap');
 ok('ticking join on re-reads the offset', run(`(()=>{ clearScene();

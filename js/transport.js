@@ -113,7 +113,7 @@ window.addEventListener('keydown',e=>{
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
       dropInteractionsOn(id);
       bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}
-      else if(selConstraint){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); }
+      else if(selConstraint){ deleteConstraint(selConstraint); clearSelection(); saveState(); }
       else if(selRotSpring){ rotSprings=rotSprings.filter(s=>s!==selRotSpring); clearSelection(); saveState(); }
       else if(selInteraction){ interactions=interactions.filter(x=>x!==selInteraction); clearSelection(); saveState(); } }
   else { const t=TOOLS.find(t=>t.key===e.key); if(t) setTool(t.id); }

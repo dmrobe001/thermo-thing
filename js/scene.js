@@ -189,16 +189,28 @@ const SCENE_SCHEMA = [
             ['gas',  v=>[v.gas.kap, v.gas.mass], (v,a)=>{v.gas.kap=a[0]; v.gas.mass=a[1];}] ],
     restore:v=>{ v._vlen0=v.vlen; refreshVessel(v); } },
 
+  // A VERTEX (constraints.js §06.2e). `at` is its own place, and it is written only
+  // when nothing else in the file says where the vertex is -- SCENE.md §S.3's rule
+  // exactly: what the geometry implies is derived and stays out, what it does not is
+  // authored and goes in. A vertex a body or the background locates therefore writes
+  // no `at` at all and reads the same as it always did; a vertex standing on its own
+  // -- every body it once touched now deleted -- writes the one thing left to say
+  // about it. `when` also fires for a FRAGMENT whose locator fell outside the
+  // selection, so a copied part carries its own places rather than landing at the
+  // origin.
   { kind:'vertex', list:'constraints', label:true, match:c=>c.type==='vertex',
-    fields:{ on:{t:'ons', always:true, get:c=>vertexOns(c),
-                 set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
+    fields:{
+      at:{t:'vec2', always:true, when:v=>{ const e=vertexLocator(v); return !e || !inScope(e.id); },
+          get:c=>vertexWorld(c), set:(c,p)=>{ c.at=[p[0],p[1]]; }},
+      on:{t:'ons', always:true, get:c=>vertexOns(c),
+          set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
     build:()=>makeVertex(null),
-    // Checked in evalScene, before the bench is touched: a vertex with no incidence
-    // has no position and nothing to say, and two incidences on one body would be
-    // the vertex claiming to be in two material places at once.
+    // Checked in evalScene, before the bench is touched: two incidences on one body
+    // would be the vertex claiming to be in two material places at once. A vertex
+    // with NO incidence is legal -- it is a named point with a place and no
+    // relations, which is what a vertex is before anything is said about it.
     validate:(it)=>{
       const ons = it.f.on || [];
-      if(!ons.length) return 'a vertex needs at least one on= incidence';
       const seen=new Set();
       for(const e of ons){
         const k = e.id==null ? 'bg' : e.id;

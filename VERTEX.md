@@ -55,14 +55,38 @@ The fix is one object: **the vertex**.
 
 ## X.2 The vertex
 
-> A **vertex** is a named point. It carries a label, and a list of the bodies it
-> touches -- its **incidences**. It has no coordinates of its own.
+> A **vertex** is a named point. It carries a label, its own place in the world, and
+> a list of the bodies it touches -- its **incidences**.
 
-That last clause is the whole reason the physics is untouched. A vertex is not a
-particle: it has no mass, contributes no columns, and is never solved for. It is a
-*name for a coincidence*, and it compiles to the coincidence rows the `pin` already
-built. What it buys is that the coincidence is now a thing you can select, label,
-list, drag, and hang a body list off.
+A vertex is not a particle: it has no mass, contributes no columns, and is never
+solved for -- which is the whole reason the physics is untouched. It is a *name for a
+coincidence*, and it compiles to the coincidence rows the `pin` already built. What it
+buys is that the coincidence is now a thing you can select, label, list, drag, and
+hang a body list off.
+
+**Its own place is what makes it an object rather than a body's property.** Where an
+incidence locates the vertex, that relation says where it is and its own place is
+re-read from it; where nothing does, its own place is all there is and the vertex
+simply sits there, holding nothing and held by nothing. So a vertex has a position
+under every arrangement, including none, and it **outlives every body it ever
+touched**.
+
+> This note originally said a vertex "has no coordinates of its own", and phase 1 was
+> built that way: a vertex borrowed its position from a body and was deleted when the
+> last body it could borrow from went. That is the body-owns-the-point model this
+> whole design exists to be rid of, arriving through the back door -- and it showed:
+> deleting one disk took the vertex at its centre *and* the line between two of them,
+> because each was resting its existence on the last. The clause is retracted. A
+> position is not a privilege bodies grant; it is what being a point in a plane means.
+
+**Nothing's existence is conditional on anything else's.** A disk, a vertex and a line
+are three objects of equal standing. A constraint between them is a statement *about*
+them and never a claim on them, so deleting one object removes the relations that
+named it and nothing more. An object thereby left under-determined -- a vertex nothing
+holds, a line without two placed joints -- is in a *state*, not on its way out: it
+keeps its identity, its label and its place, it stays drawn and selectable, and it
+simply has no rows until something is said about it again. `§X.15` is the rule and
+what it costs.
 
 > **As built (`js/constraints.js` §06.2e).** It lives in the `constraints` array,
 > with `type:'vertex'`, because that array is the list of couplings and a vertex is
@@ -129,10 +153,19 @@ measures against an `atan2` -- there is no branch cut to unwrap.
 
 **Where a vertex is.** Its **primary** incidence gives its world position, and the
 primary is chosen in a fixed order: the background if it is joined there, else the
-first joined real body (disk, rect, vessel), else the first joined line, else the
-first incidence at all. Background first because the background does not move; real
+first joined real body (disk, rect, vessel), else an incidence that merely *marks* a
+spot on a body (a feature point travels with the body it is a feature of), else --
+when nothing at all locates it -- its own place, `at`. Background first because the background does not move; real
 bodies before lines because a line's own frame is derived from vertices, and the
-order is what keeps that derivation acyclic (`§X.5`).
+order is what keeps that derivation acyclic (`§X.5`). A line is never a locator at
+all, for that reason -- but a vertex whose only joint is a line is *not* thereby
+unplaced, because `at` is under it. It is a point on a rail with nothing saying where
+along it, which the rows can do nothing with and the canvas can draw perfectly well.
+
+`at` is **captured**, not authored: read off the live geometry at the moment a
+relation that was locating the vertex goes away, so letting go never moves it, and
+written to the file only when nothing else in the file says where the point is
+(`§X.10`).
 
 The background is in the list only when it is actually a body the vertex touches --
 that is, when the vertex is joined to it, or when it is all the vertex has. An
@@ -176,8 +209,8 @@ along the bar. So:
   two joints furthest apart, `P` and `Q`, sliding or not. The longest available
   baseline, which is better conditioned than today's rod, whose frame is whichever
   two ends the tool happened to place first. (Below a tolerance apart, the next
-  furthest pair; a line with fewer than two joints has no direction and no
-  existence.)
+  furthest pair; a line with fewer than two joints has no direction, and no rows,
+  which is not the same as no existence -- `§X.15`.)
 - the line's **material origin** `O` -- the first non-sliding joint in station
   order -- exists only when some joint does not slide, and is what stations are
   measured from. A station is a distance from a material point, so an origin that
@@ -437,9 +470,17 @@ incidence token, labels, and the retirement of `pin`. What follows is the second
 half, which is version 5.
 
 ```
-vertex <label> on=<incidence> on=<incidence> ...     [version 4, built]
+vertex <label> [at=(<num>,<num>)] on=<incidence> ...  [version 4, built]
 line   <label> [soft=<num>] [posable] [seg=<num> ...] [mesh=<body> ...]
 ```
+
+`at=` is the vertex's own place, and it follows §S.3's rule exactly: it is written
+when nothing else in the file says where the point is, and omitted -- as derived
+geometry -- the moment something does. So every vertex in a scene with bodies under
+all of them writes no `at` at all and reads exactly as it always did; a vertex left
+standing on its own writes the one thing there is left to say about it. `vertex A` on
+its own is legal and is a named point at the origin with no relations, which is what a
+vertex is before anything has been said about it.
 
 The grammar is untouched -- one object per line, `#` comments, `key=value`, every
 number an expression, the repeatable-key mechanism `pt=` established and `on=` now
@@ -628,7 +669,9 @@ background with its rotation left free, and a body merely MARKED at a vertex rat
 than held there. New validator `tools/vertex-check.js`, and a new bundled example
 (`hinge`) that is a ground pin and a weld and nothing else.
 
-Two corrections to what this phase was planned to be, both made while building it:
+One correction made after it shipped: **the vertex had no place of its own**, and was
+deleted when the last body it could borrow a position from went. `§X.15` is what
+replaced that, and why. Two corrections made while building it:
 
 - **There is no `vertices` array.** A vertex lives in `constraints`, with
   `type:'vertex'`, because that is the list of couplings and a vertex is one -- the
@@ -680,7 +723,10 @@ New validator `tools/line-check.js`; `tools/multipoint-check.js` retired with it
 subject; `frame-check`, `posable-check`, `rack-check`, `select-check`, `expr-check`
 and `scene-roundtrip` all ported.
 
-Two things this phase settled that the plan had not:
+One correction made after it shipped: **a line was deleted once it was down to fewer
+than two joints**, which -- with the vertex rule above -- made deleting one disk take a
+vertex and a line with it. `§X.15` is what replaced that, and why. Two things this
+phase settled that the plan had not:
 
 - **One held joint on a line holds nothing.** A station is a distance from the origin,
   so a lone held joint IS the origin and has nothing to be measured against. That is
@@ -734,6 +780,8 @@ One remains open, and it belongs to the phase that is furthest out:
    that a torsional rate falls out of a wrapped compliant strand with the energy and
    the rate the current element has -- before phase 3 commits to it.
 
+---
+
 ## X.14 What this does not touch
 
 The solver (§07), the substep and its islands (§08), the position projection (§09),
@@ -747,3 +795,57 @@ whose ledger already has a place for them.
 That is the claim to check this plan against: if a phase needs a change under
 `js/solver.js`, `js/physics.js` or `js/projection.js` beyond the role tags of phase
 0, something in it is wrong.
+
+---
+
+## X.15 Nothing owns anything: deletion, and the under-determined state
+
+The rule, stated once so every phase can be checked against it:
+
+> A body, a vertex and a line are objects of equal standing. A constraint between them
+> is a statement **about** them. Deleting an object removes the relations that named
+> it and **nothing else**. No object is ever deleted for having lost one.
+
+Phase 1 and phase 2 both broke it, in the same way and for the same reason, and it is
+worth recording how because the mistake is an easy one to make twice. Both had a rule
+that read like tidiness -- *a vertex with nothing left to be a point on has nothing to
+say; a line with one joint is not a line* -- and each was true about **rows** and
+false about **objects**. Compiled to a cascade, they made a disk the owner of the
+vertex at its centre and of the line between two of them: delete one circle and a
+vertex and a line went with it, silently, with nothing on the canvas having said they
+were dependents. That is the model the vertex was introduced to replace, re-entering
+through the deletion path.
+
+The two ideas the fix separates:
+
+| | what it means | what happens when it fails |
+|---|---|---|
+| **placed** | something says where this object is | it falls back on its own place: a vertex's `at`, a line's two furthest joints wherever they are |
+| **holding** | it produces rows | it produces none, and says so |
+
+Neither is existence. An object that is placed but holding nothing is an ordinary,
+useful thing to have on a bench -- it is what every arrangement looks like halfway
+through being built. So:
+
+- **A vertex is never deleted with a body.** Its incidences lose the row that named
+  the body; its own place was read off the live geometry first, so it does not move.
+- **A line is never deleted with a body or with a vertex.** Its joints are the
+  vertices naming it, and those vertices are still there.
+- **A line with fewer than two placed joints is still drawn and still pickable.** Its
+  *kinematic* frame (`lineFrame`, the one the rows are built from) needs joints with
+  columns and is honestly null without them; its *placement* (`linePlacement`, what
+  the canvas, the picker and the panel read) needs only joints with positions, and a
+  vertex always has one. An object that stops being drawn when a neighbour is deleted
+  is only a slower way of deleting it.
+- **One delete path, not four.** `deleteConstraint` is the single door: it strips a
+  line's joints' incidences before the line goes, so no `on=` is left pointing at an
+  id the file no longer defines. Three call sites had drifted apart -- the delete
+  tool, the keyboard and the two panels -- and two of them wrote scene files the
+  reader would not take back.
+
+What this does **not** claim is that a line owns coordinates the way a vertex now
+does. A line with **one** joint, or none, still has no placement to fall back on and
+is invisible; it can only be reached from the file. Giving a line its own remembered
+heading, so that even a one-joint line has a place, is the symmetric move and is left
+open deliberately -- it is a second stored quantity and it should be decided with
+phase 3, where the strand asks the same question about a path.

@@ -405,7 +405,10 @@ function wireVertexCard(v){
     setVertexWorld(v,x,y); projectPositions(8,null,q0);
     renderInspector(); saveState(); };
   el('vt_x').onchange=commitPos; el('vt_y').onchange=commitPos;
-  el('vt_del').onclick=()=>{ constraints=constraints.filter(c=>c!==v); clearSelection(); saveState(); };
+  // A vertex leaves on its own: every line it was a joint on keeps its identity and
+  // its other joints, and every body it touched is untouched. Nothing here owns
+  // anything else (constraints.js §06.2b).
+  el('vt_del').onclick=()=>{ deleteConstraint(v); clearSelection(); saveState(); };
 }
 // ...and the same relation from the body's side: every vertex INSIDE this body, each
 // with its place in the body's frame and the same ticks the vertex's own panel shows.
@@ -509,7 +512,9 @@ function renderInspector(){
     // Its joints in station order, the distance between each consecutive pair that is
     // HELD, and the one number it owns: the compliance.
     const c=selConstraint;
-    const f=lineFrame(c);
+    // The PLACEMENT, so the panel describes the line the canvas is drawing -- one
+    // whose joints have lost their bodies included (constraints.js §06.2f).
+    const f=linePlacement(c);
     const J=f?f.J:[];
     const bar=lineIsBar(c);
     // Every vertex the line's extent covers, in station order -- its joints, and the
@@ -571,11 +576,10 @@ function renderInspector(){
         for(let i=at;i<held.length;i++) held[i].e.s=(held[i].e.s||0)+delta;
         projectPositions(8); renderInspector(); saveState(); };
     });
+    // Deleting the line takes its joints' INCIDENCES and nothing else: the vertices
+    // it ran through stay where they are, each still whatever else it was joined to.
     document.getElementById('f_del').onclick=()=>{
-      const id=c.id;
-      constraints=constraints.filter(x=>x!==c);
-      dropBodyFromConstraints(id);            // takes the joints' incidences with it
-      clearSelection(); saveState(); };
+      deleteConstraint(c); clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
     const title = ({belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
@@ -612,7 +616,7 @@ function renderInspector(){
       document.getElementById('f_rA').onchange=commitWrap;
       document.getElementById('f_rB').onchange=commitWrap;
     }
-    document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
+    document.getElementById('f_del').onclick=()=>{ deleteConstraint(c); clearSelection(); saveState(); };
   } else if(selInteraction){
     const it=selInteraction, isHeat=it.type==='heat';
     const far = it.vessel.id==null ? 'background' : ('vessel '+it.vessel.id);

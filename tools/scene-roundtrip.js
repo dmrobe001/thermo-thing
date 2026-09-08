@@ -213,7 +213,6 @@ const rejects = [
   ['an authored length lock',    'scene 5\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
   ['a prototype key',            'scene 5\nbody 1 x=0 y=0 r=1 constructor=1'],
   ['a retired kind',             'scene 5\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 -- 2 len=2'],
-  ['a vertex with no incidence',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A'],
   ['two incidences on one body',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=1@(0.5,0)/join'],
   ['a weld with nothing joined',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/weld/restAng=0'],
   ['a weld with no rest angle',   'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/weld'],
@@ -354,6 +353,31 @@ const MULTI = [
                        'vertex C on=3@(-0.9,0)/join on=6/join on=7/join/fix/s=0'])
       ok(`the file writes back  ${line}`, t1.split('\n').includes(line),
          `not found in:\n${t1.split('\n').map(l=>'        '+l).join('\n')}`);
+  }
+}
+
+// A vertex stands on its own (constraints.js §06.2e), so the format has to be able to
+// say so: `at=` is written exactly when nothing else in the file says where the point
+// is, and omitted -- as derived geometry -- the moment something does. A bench that
+// could not write a free vertex would delete one every time it saved.
+{
+  const FREE = ['scene 5', 'sim gravity=off', 'cam x=0 y=0 scale=64', '',
+                'body 1 x=0 y=0 r=0.3', 'line 3', 'vertex A at=(-1,0.5) on=3/join',
+                'vertex B on=1/join on=3/join', 'vertex C at=(2,2)'].join('\n')+'\n';
+  let err=null, t1=null, t2=null;
+  try { run(`importScene(${JSON.stringify(FREE)})`); t1=run('exportScene()');
+        run(`importScene(${JSON.stringify(t1)})`);   t2=run('exportScene()'); }
+  catch(e){ err=e; }
+  ok('a vertex with no incidence at all loads', !err, err&&(err.stack||String(err)));
+  if(!err){
+    ok('a free vertex round-trips byte-for-byte', t1===t2, firstDiff(t1,t2));
+    const ls=t1.split('\n');
+    ok('...writing at= for the point nothing locates', ls.includes('vertex A at=(-1,0.5) on=3/join'), t1);
+    ok('...and for the one with no relations whatever', ls.includes('vertex C at=(2,2)'), t1);
+    ok('...and NOT for the one a body locates', ls.includes('vertex B on=1/join on=3/join'), t1);
+    ok('a line placed by a free vertex is still drawn',
+       run(`(()=>{ const L=constraints.find(isLine); const f=linePlacement(L);
+             return !!f && Math.abs(Math.hypot(f.wax-f.wbx, f.way-f.wby)-Math.hypot(1,0.5))<1e-9; })()`)===true);
   }
 }
 

@@ -86,7 +86,9 @@ function constraintHit(con,wx,wy){
   if(con.type==='line'){
     // A BAR is hit along its segment; a RAIL is an infinite line, hit by perpendicular
     // distance to it, exactly as the slot's was (constraints.js §06.2f lineIsBar).
-    const f=lineFrame(con); if(!f) return false;
+    // The same placement the canvas draws (constraints.js §06.2f): what is picked has
+    // to be what is seen, including a line whose joints have lost their bodies.
+    const f=linePlacement(con); if(!f) return false;
     if(lineIsBar(con)) return distSeg(wx,wy,f.wax,f.way,f.wbx,f.wby)<=tol;
     return Math.abs(f.nx*(wx-f.wax)+f.ny*(wy-f.way))<=tol;
   }
@@ -772,7 +774,10 @@ function runToolClick(wx,wy){
     // interactions take priority over bodies (updateHover, §13.4, mirrors
     // this order) -- a constraint/cable coincident with a body is what most
     // often needs deleting without also taking the body out with it.
-    const cci=pickConstraint(wx,wy); if(cci>=0){ constraints.splice(cci,1); clearSelection(); saveState(); return; }
+    // deleteConstraint, not a splice: a LINE is named by its joints' incidences, and
+    // taking it out without them leaves `on=` tokens pointing at nothing -- a bench
+    // that cannot reload the scene it just wrote (constraints.js §06.2b).
+    const cci=pickConstraint(wx,wy); if(cci>=0){ deleteConstraint(constraints[cci]); clearSelection(); saveState(); return; }
     const cbi=pickCable(wx,wy); if(cbi>=0){ cables.splice(cbi,1); clearSelection(); saveState(); return; }
     const rsi=pickRotSpring(wx,wy); if(rsi>=0){ rotSprings.splice(rsi,1); clearSelection(); saveState(); return; }
     const ii=pickInteraction(wx,wy); if(ii>=0){ interactions.splice(ii,1); clearSelection(); saveState(); return; }
@@ -803,7 +808,7 @@ function runToolClick(wx,wy){
     let v = vi>=0 ? constraints[vi] : null;
     if(!v){
       const t=anchorTarget(wx,wy);
-      v=makeVertex(null);
+      v=makeVertex(null, t ? t.wp : [wx,wy]);
       makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
       constraints.push(v);
     }
@@ -889,7 +894,10 @@ function runToolClick(wx,wy){
     const vi=pickVertexAt(wx,wy);
     if(vi>=0){ joinBodyToVertex(constraints[vi], wx, wy); selectConstraint(vi); saveState(); return; }
     const t=anchorTarget(wx,wy);
-    const v=makeVertex(null);
+    // The point it was tapped at is the vertex's OWN place from the start
+    // (constraints.js §06.2e), so it has one before anything is joined to it and
+    // still has one after everything is taken away again.
+    const v=makeVertex(null, t ? t.wp : [wx,wy]);
     makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
     constraints.push(v); selectConstraint(constraints.length-1); saveState();
     return;
@@ -913,7 +921,7 @@ function runToolClick(wx,wy){
     let v = vi>=0 ? constraints[vi] : null;
     if(!v){
       const t=anchorTarget(wx,wy);
-      v=makeVertex(null);
+      v=makeVertex(null, t ? t.wp : [wx,wy]);
       makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
       constraints.push(v);
     }
