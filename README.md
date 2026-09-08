@@ -24,6 +24,16 @@ Open `index.html` in a browser. Use the tool rail on the left to place bodies an
 
 Nothing in a scene is fixed by a checkbox. A body is held still by a rod welded at both ends to fixed ground; a vessel's length is held by a rod between two of its own caps. The engine still freezes those coordinates internally -- that is what makes a fixed body a wall that islands split at -- but it *derives* which ones from the constraints you placed, so deleting the rod frees the body. See `SCENE.md` §S.8.
 
+Points where things meet are **vertices**, and they are objects in their own right.
+Pick the vertex tool (3) and tap a body to plant one; tap the same spot again and the
+body underneath joins it, which is how a hinge is made. Select a vertex and the panel
+lists every body it touches, with where it sits in that body's frame and two ticks --
+**joined**, meaning the body is held to the point, and **welded**, meaning its angle
+is held to the vertex's frame as well, so everything welded there turns as one piece.
+Select a body and you get the same relation from the other side: every vertex on it.
+Vertices carry editable labels (A, B, C ...) drawn beside them. Joining one to the
+background is a ground pin -- the point held, the rotation free. See `VERTEX.md`.
+
 Bodies can be selected in bulk: pick the **lasso** (l), draw a loop around the part of
 the bench you want, and a box appears around everything caught. Drag inside it to move
 the selection, a corner to scale it, the stem above it to turn it -- every selected body
@@ -46,7 +56,7 @@ Any bench can be written out as a **scene file** -- a plain-text listing of ever
 
 **Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or
 Alt-drag -- pan · Ctrl/Cmd-C, Ctrl/Cmd-V -- copy and place a selection · Delete --
-remove it · keys 1-9, b/f/g/h/k/l/t/v/c/q -- select tools.
+remove it · keys 1-9, b/f/g/h/k/l/t/v/c/q -- select tools (3 is the vertex tool).
 
 ## Project layout
 
@@ -59,6 +69,6 @@ DEVELOPMENT.md          physics engine and constraint library design
 CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
 VESSEL.md               design note for the gas vessel (slots alongside DEVELOPMENT.md)
 SCENE.md                design note for the scene file format and the constructible set
-VERTEX.md               design note for the planned vertex/line scene model (not yet built)
+VERTEX.md               design note for the vertex/line scene model (vertices built; lines planned)
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```

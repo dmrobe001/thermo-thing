@@ -241,7 +241,7 @@ ok('three seconds of a posable pendulum is bit-identical to the plain one',
    plainRun===posableRun, `${plainRun}\n        ${posableRun}`);
 
 console.log('\n7. the scene file carries it');
-const FILE = ['scene 3','sim gravity=off',
+const FILE = ['scene 4','sim gravity=off',
               'body 1 x=1 y=0 r=0.2',
               'rod bg(0,0) -- 1 len=1 weld=A posable restAngA=0'].join('\n')+'\n';
 {
@@ -260,7 +260,7 @@ const FILE = ['scene 3','sim gravity=off',
 }
 // Authored fields are written only when they differ from their default, so a rod
 // nobody marked must not gain a key -- that is what keeps a default scene terse.
-run(`importScene(${JSON.stringify(['scene 3','sim gravity=off','body 1 x=1 y=0 r=0.2',
+run(`importScene(${JSON.stringify(['scene 4','sim gravity=off','body 1 x=1 y=0 r=0.2',
                                    'rod bg(0,0) -- 1 len=1 weld=A restAngA=0'].join('\n')+'\n')})`);
 ok('an unmarked rod defaults to off and writes no key',
    run(`constraints[0].posable===false`) && !run('exportScene()').includes('posable'),

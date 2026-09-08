@@ -215,8 +215,8 @@ function conPointsCard(c){
   const lockWord = c.type==='slot' ? 'prismatic' : 'welded';
   const rows=pts.map((pt,k)=>{
     const where = pt.ep.id==null ? 'background' : ('body '+pt.ep.id);
-    const what = pt.kind==='pinion' ? 'pinion' : (c.type==='pin' ? 'at the pivot'
-               : conPointHasStation(c) ? `station ${pt.s.toFixed(3)}` : 'rides the rail');
+    const what = pt.kind==='pinion' ? 'pinion'
+               : conPointHasStation(c) ? `station ${pt.s.toFixed(3)}` : 'rides the rail';
     const lock = conPointLockable(c,pt)
       ? `<label class="chk"><input type="checkbox" data-ptlock="${k}" ${pt.lock?'checked':''}> ${lockWord}</label>` : '';
     return `<div class="field"><span class="lab">${where}</span><span class="val">${what}</span></div>
@@ -235,11 +235,105 @@ function bindConPointsCard(c){
     el.onclick=()=>{ c.pts.splice(k,1); renderInspector(); saveState(); };
   }
 }
+// ---- the two lists a vertex and a body show of each other (constraints.js §06.2e) ----
+// One relation, read from either side: a vertex lists the bodies it touches, a body
+// lists the vertices on it. VERTEX.md §X.11.
+const bodyName = id => id==null ? 'the background' : `body ${id}`;
+// A vertex's own panel: its label, where it is, and one row per incidence -- the
+// body, where the vertex sits in that body's frame, and the two ticks.
+function vertexInspectorHTML(v){
+  const ons=vertexOns(v);
+  const [wx,wy]=vertexWorld(v);
+  const P=vertexPrimary(v);
+  const welds=ons.filter(e=>e.join&&e.weld).length;
+  const rows=ons.map((e,k)=>{
+    const off = e.id==null ? `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)}) world`
+              : `(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)})${bodies[bodyIndex(e.id)] && bodies[bodyIndex(e.id)].shape==='vessel' ? ' material' : ''}`;
+    return `<div class="field"><span class="lab">${bodyName(e.id)}${e===P?' &middot; primary':''}</span><span class="val">${off}</span></div>
+      <label class="chk"><input type="checkbox" data-vjoin="${k}" ${e.join?'checked':''}> joined</label>
+      <label class="chk"><input type="checkbox" data-vweld="${k}" ${e.weld?'checked':''} ${e.join?'':'disabled'}> welded</label>
+      <button class="del" data-vdel="${k}">Remove ${bodyName(e.id)}</button>`;
+  }).join('');
+  const hasBg = ons.some(e=>e.id==null);
+  const addBg = hasBg ? '' :
+    `<button class="del" id="vt_addbg">Pin to the background here</button>`;
+  // A single weld holds nothing, and saying so is better than drawing a tick that
+  // does not do anything: welding ties one frame to another, and one frame has
+  // nothing to tie to (VERTEX.md §X.3).
+  const weldNote = welds===1
+    ? '<p class="muted" style="margin:8px 0 0">Only one thing is welded here, so nothing is held: a weld ties two frames together. Weld a second body at this vertex &mdash; or the background &mdash; to make the joint rigid.</p>' : '';
+  return `
+    <h3>Vertex ${v.label}</h3><p class="sub">a named point, and the bodies it touches</p>
+    <div class="card"><div class="cardhead">label</div>
+      <div class="field"><span class="lab">name</span><input class="num" id="vt_label" type="text" value="${v.label}"></div>
+    </div>
+    <div class="card"><div class="cardhead">position</div>
+      ${numRow('x', 'vt_x', wx.toFixed(3), {step:0.05})}
+      ${numRow('y', 'vt_y', wy.toFixed(3), {step:0.05})}
+      <p class="muted" style="margin:8px 0 0">Moving the vertex re-reads every joined body's own anchor, so the bodies stay where they are and the point moves between them.</p>
+    </div>
+    <div class="card"><div class="cardhead">bodies at this vertex</div>
+      ${rows || '<p class="muted">none</p>'}${weldNote}${addBg}
+    </div>
+    <button class="del" id="vt_del">Delete vertex</button>`;
+}
+function wireVertexCard(v){
+  const el=id=>document.getElementById(id);
+  el('vt_label').onchange=ev=>{
+    const want=String(ev.target.value).trim();
+    const okName=/^[A-Za-z_][A-Za-z0-9_]*$/.test(want);
+    const taken=constraints.some(c=>isVertex(c)&&c!==v&&c.label===want);
+    if(okName && !taken) v.label=want;
+    renderInspector(); saveState(); };
+  const commitPos=()=>{ const x=numVal('vt_x'), y=numVal('vt_y');
+    if(!isFinite(x) || !isFinite(y)) return;
+    const q0=poseSnapshot();
+    setVertexWorld(v,x,y); projectPositions(8,null,q0);
+    renderInspector(); saveState(); };
+  el('vt_x').onchange=commitPos; el('vt_y').onchange=commitPos;
+  for(const e2 of document.querySelectorAll('[data-vjoin]')){
+    const k=Number(e2.dataset.vjoin);
+    e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexJoin(v,e,ev.target.checked);
+      renderInspector(); saveState(); }; }
+  for(const e2 of document.querySelectorAll('[data-vweld]')){
+    const k=Number(e2.dataset.vweld);
+    e2.onchange=ev=>{ const e=vertexOns(v)[k]; if(e) setVertexWeld(v,e,ev.target.checked);
+      renderInspector(); saveState(); }; }
+  for(const e2 of document.querySelectorAll('[data-vdel]')){
+    const k=Number(e2.dataset.vdel);
+    e2.onclick=()=>{ v.on.splice(k,1);
+      // A vertex with no incidence has no position and nothing to say (§06.2e).
+      if(!vertexOns(v).length) constraints=constraints.filter(c=>c!==v);
+      clearSelection(); saveState(); }; }
+  if(el('vt_addbg')) el('vt_addbg').onclick=()=>{
+    const [wx,wy]=vertexWorld(v);
+    makeVertexOn(v, {id:null, off:[wx,wy]}, {join:true});
+    renderInspector(); saveState(); };
+  el('vt_del').onclick=()=>{ constraints=constraints.filter(c=>c!==v); clearSelection(); saveState(); };
+}
+// ...and the same relation from the body's side: every vertex on it, selectable.
+function bodyVerticesCard(b){
+  const vs=verticesOn(b.id);
+  if(!vs.length) return '';
+  const rows=vs.map(v=>{
+    const e=vertexOns(v).find(x=>x.id===b.id);
+    const what = !e.join ? 'marked' : e.weld ? 'joined, welded' : 'joined';
+    return `<div class="field"><span class="lab"><a href="#" data-vsel="${constraints.indexOf(v)}">${v.label}</a></span>
+      <span class="val">(${e.off[0].toFixed(3)}, ${e.off[1].toFixed(3)}) &middot; ${what}</span></div>`;
+  }).join('');
+  return `<div class="card"><div class="cardhead">vertices on this body</div>${rows}</div>`;
+}
+function bindBodyVerticesCard(){
+  for(const el of document.querySelectorAll('[data-vsel]'))
+    el.onclick=ev=>{ ev.preventDefault(); selectConstraint(Number(el.dataset.vsel)); };
+}
 function renderInspector(){
   const p=document.getElementById('panelBody');
   // A group is checked first: it is a selection of many bodies, so none of the
   // single-object branches below can speak for it (select.js §18.5).
   if(selGroup){ p.innerHTML=groupInspectorHTML(selGroup); wireGroupCard(); return; }
+  if(selConstraint && isVertex(selConstraint)){
+    p.innerHTML=vertexInspectorHTML(selConstraint); wireVertexCard(selConstraint); wireNumIns(); return; }
   if(selBody && selBody.shape==='vessel'){ renderVesselInspector(selBody); return; }
   if(selBody){
     const b=selBody; const isRect=b.shape==='rect';
@@ -263,7 +357,9 @@ function renderInspector(){
         ${numRow('vy', 'f_vy', b.vy.toFixed(3), {step:0.1})}
         ${numRow('w', 'f_w', b.w.toFixed(3), {step:0.1})}
       </div>
+      ${bodyVerticesCard(b)}
       <button class="del" id="f_del">Delete body</button>`;
+    bindBodyVerticesCard();
     if(isRect){
       const commitSize=()=>{ const w=numVal('f_rw',x=>x>0.16), h=numVal('f_rh',x=>x>0.16);
         if(!isFinite(w) || !isFinite(h)) return;
@@ -308,7 +404,7 @@ function renderInspector(){
     const c=selConstraint;
     const isRod=c.type==='rod', isSlot=c.type==='slot';
     const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
-                : ({pin:'Pin · hinge',rod:'Rigid rod',
+                : ({rod:'Rigid rod',
                     belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',rack:'Rack and pinion'})[c.type];
     const isBelt=c.type==='belt', isCvt=c.type==='cvt', isRack=c.type==='rack';
     const showTorque = ((isRod||isRack) && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
@@ -481,6 +577,7 @@ function renderInspector(){
           <button data-ex="integrator">Wheel integrator (CVT)</button>
           <button data-ex="rack">Rack and pinion</button>
           <button data-ex="cable">Cable ratchet</button>
+          <button data-ex="hinge">Ground pin and weld (vertices)</button>
           <button data-ex="gasspring">Gas spring (vessel on ground)</button>
           <button data-ex="spinvessel">Spinning vessel (free)</button>
           <button data-ex="heatpair">Heat exchange (two vessels)</button>

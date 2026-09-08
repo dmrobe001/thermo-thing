@@ -399,6 +399,38 @@ function drawInteraction(it){
   ctx.restore();
 }
 
+// A VERTEX (constraints.js §06.2e): the point itself, one ring per body JOINED to it
+// beyond the first, and the label to its upper right. The rings are how a three-armed
+// hinge is told from a two-armed one on a canvas where every arm is in the same
+// place. A body merely MARKED at the vertex, joined to nothing, adds no ring -- it is
+// not being held there -- and a vertex that holds nothing at all is drawn hollow.
+// A welded vertex takes a square instead of a circle, the same shorthand a welded rod
+// end already uses (drawEndMarker below).
+function drawVertex(con,col){
+  const [wx,wy]=vertexWorld(con);
+  const [sx,sy]=w2s(wx,wy);
+  const joined=vertexOns(con).filter(e=>e.join).length;
+  const rigid=vertexOns(con).filter(e=>e.join&&e.weld).length>=2;
+  ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=1.5;
+  ctx.beginPath();
+  if(rigid) ctx.rect(sx-3.5,sy-3.5,7,7); else ctx.arc(sx,sy,3.5,0,Math.PI*2);
+  if(joined) ctx.fill(); else ctx.stroke();
+  for(let k=1;k<joined;k++){
+    ctx.beginPath(); ctx.arc(sx,sy,4.5+k*3.5,0,Math.PI*2); ctx.stroke();
+  }
+  drawLabel(con.label, sx, sy, col);
+}
+// A label, up and to the right of what it names -- vertices now, bodies and lines
+// when they get their own (VERTEX.md §X.8).
+function drawLabel(text, sx, sy, col){
+  if(!text) return;
+  ctx.save();
+  ctx.fillStyle=col; ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+  ctx.textAlign='left'; ctx.textBaseline='bottom';
+  ctx.fillText(text, sx+7, sy-6);
+  ctx.restore();
+}
+
 // ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
 // Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
 function drawConstraint(con){
@@ -461,20 +493,7 @@ function drawConstraint(con){
     drawConPoints(con,col);
     return;
   }
-  if(con.type==='pin'){
-    // Every endpoint coincides by construction -- the base pair and any extra
-    // control points alike -- so drawing con.a's alone is enough. A pin carrying
-    // extra ends gets a second ring around the dot to say so, since the ends
-    // themselves are all in the same place and cannot be counted on the canvas.
-    const [wax,way]=epWorld(con.a);
-    jointDot(wax,way,col);
-    if(conPoints(con).length){
-      const [sx,sy]=w2s(wax,way);
-      ctx.strokeStyle=col;ctx.lineWidth=1.5;
-      ctx.beginPath();ctx.arc(sx,sy,8,0,Math.PI*2);ctx.stroke();
-    }
-    return;
-  }
+  if(con.type==='vertex'){ drawVertex(con,col); return; }
   if(con.type==='rack'){ drawRackConstraint(con,col,sel); return; }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];

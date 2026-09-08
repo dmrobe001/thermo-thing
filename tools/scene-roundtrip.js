@@ -183,27 +183,35 @@ console.log('\n5. the reader accepts nothing the editor cannot build');
 run(`loadExample('pendulum')`);
 const before = run('exportScene()');
 const rejects = [
-  ['an unknown kind',            'scene 3\nrocket 1 x=0 y=0'],
-  ['an unknown field',           'scene 3\nbody 1 x=0 y=0 r=1 charge=3'],
-  ['a coordinate frozen by fiat','scene 3\nbody 1 x=0 y=0 r=1 xLocked'],
-  ['a dangling body reference',  'scene 3\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
-  ['a future version',           'scene 4\nbody 1 x=0 y=0 r=1'],
+  ['an unknown kind',            'scene 4\nrocket 1 x=0 y=0'],
+  ['an unknown field',           'scene 4\nbody 1 x=0 y=0 r=1 charge=3'],
+  ['a coordinate frozen by fiat','scene 4\nbody 1 x=0 y=0 r=1 xLocked'],
+  ['a dangling body reference',  'scene 4\nbody 1 x=0 y=0 r=1\nrod 1 -- 7'],
+  ['a future version',           'scene 5\nbody 1 x=0 y=0 r=1'],
   ['a version 1 file',           'scene 1\nbody 1 x=0 y=0 r=1'],
-  ['a missing separator',        'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
-  ['a duplicate id',             'scene 3\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
-  ['an authored static flag',    'scene 3\nbody 1 x=0 y=0 r=1 static'],
-  ['an authored length lock',    'scene 3\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
-  ['a prototype key',            'scene 3\nbody 1 x=0 y=0 r=1 constructor=1'],
-  ['a background pin',           'scene 3\nbody 1 x=0 y=0 r=1\npin 1 -- bg(0,1)'],
+  ['a missing separator',        'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 2'],
+  ['a duplicate id',             'scene 4\nbody 1 x=0 y=0 r=1\nbody 1 x=2 y=0 r=1'],
+  ['an authored static flag',    'scene 4\nbody 1 x=0 y=0 r=1 static'],
+  ['an authored length lock',    'scene 4\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
+  ['a prototype key',            'scene 4\nbody 1 x=0 y=0 r=1 constructor=1'],
+  ['a retired kind',             'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\npin 1 -- 2'],
+  ['a vertex with no incidence',  'scene 4\nbody 1 x=0 y=0 r=1\nvertex A'],
+  ['two incidences on one body',  'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=1@(0.5,0)/join'],
+  ['a weld with nothing joined',  'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/weld/restAng=0'],
+  ['a weld with no rest angle',   'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/weld'],
+  ['a rest angle with no weld',   'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/restAng=0'],
+  ['an unknown incidence option', 'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/slide'],
+  ['a duplicate label',           'scene 4\nbody 1 x=0 y=0 r=1\nvertex A on=1/join\nvertex A on=bg(0,1)/join'],
+  ['a label that is a number',    'scene 4\nbody 1 x=0 y=0 r=1\nvertex 7 on=1/join'],
   // The extra-control-point grammar (constraints.js §06.2c) is validated per kind,
   // the same way a line's own keys are: what a point may say depends on what it is
   // attached to, and anything else is a load error rather than a field ignored.
-  ['a pinion on a slot',         'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/pinion'],
-  ['a station on a pin',         'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\npin 1 -- 2 pt=3/s=0.5'],
-  ['a rod point with no station','scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nrod 1 -- 2 len=2 pt=3'],
+  ['a pinion on a slot',         'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/pinion'],
+  ['a station on a slot point',  'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/s=0.5'],
+  ['a rod point with no station','scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nrod 1 -- 2 len=2 pt=3'],
   ['a locked point with no rest angle',
-                                 'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/lock'],
-  ['a dangling point reference', 'scene 3\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nslot 1 -- 2 pt=9'],
+                                 'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nbody 3 x=1 y=0 r=1\nslot 1 -- 2 pt=3/lock'],
+  ['a dangling point reference', 'scene 4\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nslot 1 -- 2 pt=9'],
 ];
 for(const [what, text] of rejects){
   let msg=null;
@@ -295,7 +303,7 @@ console.log('\n8. a joint with extra control points round-trips');
 // them write what they hold and read back the same thing -- including the captured
 // station and rest angle, which the reader must NOT recompute.
 const MULTI = [
-  'scene 3',
+  'scene 4',
   'sim gravity=off',
   'body 1 x=0 y=0 r=0.2',
   'body 2 x=2 y=0 r=0.2',
@@ -304,7 +312,7 @@ const MULTI = [
   'body 5 x=1 y=-1 r=0.4',
   'rod 1 -- 2 len=2 pt=3/s=-1',
   'slot 1 -- 2 pt=4/lock/restAng=0',
-  'pin 1@(0.1,0) -- 2@(-1.9,0) pt=3@(-0.9,0)',
+  'vertex A on=1@(0.1,0)/join on=2@(-1.9,0)/join on=3@(-0.9,0)/join',
   'rack 1 -- 2 weld=A restAngA=0 pt=5/pinion pt=4/s=-3',
 ].join('\n')+'\n';
 {
@@ -318,12 +326,15 @@ const MULTI = [
     const shape = run(`JSON.stringify(constraints.map(c=>[c.type, conPoints(c).map(
       pt=>[pt.ep.id, pt.kind, pt.s===undefined?null:pt.s, pt.lock])]))`);
     ok('every point came back with its kind, station and lock',
-       shape==='[["rod",[[3,"point",-1,false]]],["slot",[[4,"point",null,true]]],'
-             +'["pin",[[3,"point",null,false]]],["rack",[[5,"pinion",null,false],[4,"point",-3,false]]]]',
+       // The vertex leads because the export writes vertices in their own section
+      // first (§17.3 SCENE_SECTIONS), and this is the SECOND import -- of that text.
+      // It carries no control points of its own: its incidences are its content.
+      shape==='[["vertex",[]],["rod",[[3,"point",-1,false]]],["slot",[[4,"point",null,true]]],'
+             +'["rack",[[5,"pinion",null,false],[4,"point",-3,false]]]]',
        shape);
     for(const line of ['rod 1 -- 2 len=2 pt=3/s=-1',
                        'slot 1 -- 2 pt=4/lock/restAng=0',
-                       'pin 1@(0.1,0) -- 2@(-1.9,0) pt=3@(-0.9,0)',
+                       'vertex A on=1@(0.1,0)/join on=2@(-1.9,0)/join on=3@(-0.9,0)/join',
                        'rack 1 -- 2 weld=A restAngA=0 pt=5/pinion pt=4/s=-3'])
       ok(`the file writes back  ${line}`, t1.split('\n').includes(line),
          `not found in:\n${t1.split('\n').map(l=>'        '+l).join('\n')}`);

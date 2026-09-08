@@ -124,16 +124,17 @@ function constraintsSatisfied(){
 // of that role is what a readout reports, which is the rule every branch below
 // already followed by hand ("the FIRST pinion", "the first weld's torque, as a
 // rod's").
-function lamAt(con, role, at){
-  const roles=con._roles, l=con._lam;
-  if(!roles || !l) return undefined;
+function lamAll(con, role, at){
+  const roles=con._roles, l=con._lam, out=[];
+  if(!roles || !l) return out;
   for(let i=0;i<roles.length;i++){
     if(roles[i][0]!==role) continue;
     if(at!==undefined && roles[i][1]!==at) continue;
-    return l[i];
+    out.push(l[i]);
   }
-  return undefined;
+  return out;
 }
+const lamAt = (con, role, at) => lamAll(con, role, at)[0];
 function reactionOf(con){
   const l=con._lam; const h=sim.h; if(!l||!l.length) return null;
   const lam = (role,at)=>{ const v=lamAt(con,role,at); return v===undefined?undefined:v/h; };
@@ -178,11 +179,19 @@ function reactionOf(con){
     }
     return {x:wax,y:way, fx, fy, tau};
   }
+  if(con.type==='vertex'){
+    // Every joined incidence past the primary carries its own pair of rows, and the
+    // readout reports the FIRST -- the same rule the rest of §09.3 follows, and on a
+    // two-body vertex (what a pin was) it is the only one there is.
+    // The rows come x, y per incidence, so the first pair is the first held body's.
+    const [wx,wy]=vertexWorld(con);
+    const f=lamAll(con,'pin');
+    return {x:wx, y:wy, fx:(f[0]||0)/h, fy:(f[1]||0)/h};
+  }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return null;
   const [wax,way]=epWorldPt(A,con.a.off);
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const nx=-hh[1]/hl, ny=hh[0]/hl; const t=lam('knife')||0;
     return {x:wax,y:way, fx:nx*t, fy:ny*t}; }
-  if(con.type==='pin'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }
   return null;
 }

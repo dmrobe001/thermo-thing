@@ -204,7 +204,7 @@ console.log('\n7. a selection copies, pastes and stands alone');
   const text = run('selectionFragment()');
   ok('the fragment carries no sim and no cam line',
      !/^\s*(sim|cam)\b/m.test(text), text);
-  ok('...and opens as a scene file', /^scene 3/.test(text), text.split('\n')[0]);
+  ok('...and opens as a scene file', /^scene 4/.test(text), text.split('\n')[0]);
   const shape = run(`(()=>{ const g=selGroup;
     const P=g.m.bodies.map(b=>[b.x,b.y,b.th]);
     return JSON.stringify([Math.hypot(P[0][0]-P[1][0],P[0][1]-P[1][1]),
@@ -241,7 +241,7 @@ console.log('\n8. a fragment that names a body it does not define is refused');
 {
   run('BENCH()');
   const before = run('JSON.stringify(poseOf())');
-  const bad = 'scene 3\n\n# bodies\nbody 1 x=0 y=0 r=0.2\n\n# constraints\nrod 1 -- 9 len=1\n';
+  const bad = 'scene 4\n\n# bodies\nbody 1 x=0 y=0 r=0.2\n\n# constraints\nrod 1 -- 9 len=1\n';
   const caught = run(`(()=>{ try{ pasteFragment(${JSON.stringify(bad)}); return null; }
     catch(e){ return String(e.message||e); } })()`);
   ok('the paste raises, naming the line and the missing body',

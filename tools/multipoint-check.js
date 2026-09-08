@@ -7,14 +7,13 @@
 //      captured station -- and stays one when the bar is moved or turned.
 //   2. a locked extra point also turns with the bar, exactly as a welded end does.
 //   3. a slot's rider is held on the rail and NOTHING else: it slides freely along.
-//   4. a pin's extra end brings a third body to the same pivot.
-//   5. a rack's jointed point carries its body along with the rack.
-//   6. the lock a new point inherits: all-alike is copied, a mix reads non-rotating.
-//   7. every extra point couples its body into the same island as the joint's ends.
-//   8. the placement gesture that creates them: clicking an existing joint of the
+//   4. a rack's jointed point carries its body along with the rack.
+//   5. the lock a new point inherits: all-alike is copied, a mix reads non-rotating.
+//   6. every extra point couples its body into the same island as the joint's ends.
+//   7. the placement gesture that creates them: clicking an existing joint of the
 //      tool's own kind adds a point to it, and on a rack a click near a disk's rim
 //      makes that disk a pinion where a click through a body makes it a joint.
-//   9. the editing surface holds up -- handles name each point, and deleting a
+//   8. the editing surface holds up -- handles name each point, and deleting a
 //      point's body drops the point while deleting an END drops the whole joint.
 const fs=require('fs'), path=require('path'), vm=require('vm');
 const ROOT=path.join(__dirname,'..');
@@ -122,21 +121,6 @@ for(let i=0;i<200;i++) run('substep(sim.h)');
 ok('the rider never left the rail', near(lat,0,1e-6), `lateral ${lat}`);
 ok('but it did slide down it', run(`bodies[0].x`)<0.9, `x=${run('bodies[0].x')}`);
 
-console.log('\n4. a pin\'s extra end brings a third body to the same pivot');
-run(`(()=>{ clearScene();
-  const a=makeBody(0,0,0.3); bodies.push(a);
-  const b=makeBody(0.4,0,0.3); bodies.push(b);
-  const c=makeBody(0,0.4,0.3); bodies.push(c);
-  const pin=makePinCon({id:a.id,off:[0,0]}, {id:b.id,off:[-0.4,0]});
-  makeConPoint(pin, {id:c.id, off:[0,-0.4]}, {});
-  constraints.push(pin); refreshFrozen(); })()`);
-run(`projectPositions(30)`);
-const P = run(`JSON.stringify([epWorld(constraints[0].a), epWorld(constraints[0].b),
-                               epWorld(constraints[0].pts[0].ep)].map(p=>[p[0],p[1]]))`);
-const pts = JSON.parse(P);
-ok('all three ends coincide', near(pts[0][0],pts[2][0],1e-6) && near(pts[0][1],pts[2][1],1e-6)
-   && near(pts[0][0],pts[1][0],1e-6) && near(pts[0][1],pts[1][1],1e-6), P);
-
 console.log('\n5. a rack\'s jointed point carries its body along with the rack');
 // Both pins on a cart moving right, plus a body jointed to the rack a metre away:
 // the joint is a rigid attachment to the rack, so it must travel with the cart.
@@ -154,7 +138,7 @@ ok('the cart travelled', cx>0.5, `cart x=${cx}`);
 ok('and the jointed body travelled with it, keeping its station',
    near(jx-cx, 1, 1e-6) && near(jvx, cvx, 1e-6), carry);
 
-console.log('\n6. the lock a newly added point inherits');
+console.log('\n5. the lock a newly added point inherits');
 const inherit = (wa,wb,extra)=>run(`(()=>{ clearScene();
   const a=makeBody(0,0,0.2); bodies.push(a); const b=makeBody(2,0,0.2); bodies.push(b);
   const rod=makeRodCon({id:a.id,off:[0,0]},{id:b.id,off:[0,0]},${wa},${wb});
@@ -181,7 +165,7 @@ ok('the bar and all three of its bodies are one island, the loose body another',
    isl.length===2 && isl.some(g=>g.length===3) && isl.some(g=>g.length===1),
    JSON.stringify(isl));
 
-console.log('\n8. the placement gesture: a click on a joint of the tool\'s own kind');
+console.log('\n7. the placement gesture: a click on a joint of the tool\'s own kind');
 // The rack is the three-click case AND the one where the click is read two ways, so
 // it carries this section. cam.scale matters: the pinion test is a screen-space
 // tolerance around the rim (tools.js §13.5 PINION_RIM_PX).
@@ -218,7 +202,7 @@ run(`pending=null; runToolClick(1,0)`);
 ok('clicking again, over a body the joint already holds, adds nothing',
    run(`conPoints(constraints[0]).length===1`), run('JSON.stringify(conPoints(constraints[0]))'));
 
-console.log('\n9. the editing surface: handles, rendering, and deletion');
+console.log('\n8. the editing surface: handles, rendering, and deletion');
 ok('conHandles lists the base pair and then every point',
    run(`JSON.stringify(conHandles(constraints[0]).map(h=>h.which))`)==='["A","B","pt"]',
    run(`JSON.stringify(conHandles(constraints[0]).map(h=>h.which))`));
@@ -226,7 +210,7 @@ ok('conHandles lists the base pair and then every point',
 // its handle still has somewhere to be, which is what makeConPoint's normalization
 // of the endpoint shape buys.
 run(`importScene([
-  'scene 3','sim gravity=off',
+  'scene 4','sim gravity=off',
   'body 1 x=0 y=0 r=0.2','body 2 x=2 y=0 r=0.2','body 3 x=1 y=-1 r=0.4',
   'rack 1 -- 2 pt=3/pinion'].join('\\n'))`);
 ok('a file-loaded pinion resolves to a handle position',

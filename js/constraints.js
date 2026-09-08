@@ -16,13 +16,15 @@
 //    §06.1b the LINE frame (lineFrameOf, frameAngleRow) -- a straight bar's own
 //           frame, derived from its two endpoints and owning no coordinates. The
 //           third frame kind beside a body's and the background's (VERTEX.md §X.5)
-//    §06.2  the remaining constraint makers (pin, belt, cvt, knife, cable)
+//    §06.2  the remaining constraint makers (belt, cvt, knife, cable)
 //    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen) and the
 //           recaptures that follow a hand move (recaptureConAngles/recaptureConPose)
 //    §06.2c extra control points (conPoints, makeConPoint, conEndpoints) -- the
 //           third and further ends a pin/rod/slot/rack may carry
 //    §06.2d posable rods (withPosing, rodReleased, recapturePosable) -- the
 //           pose-time release that turns a rod into a rail while it is dragged
+//    §06.2e the VERTEX (makeVertex, makeVertexOn, vertexWorld, verticesOn) -- a
+//           named point and the bodies it touches, which is what a pin became
 //    §06.3  cableFrame (tetherball tangent geometry for the unilateral cable)
 //    §06.4  (retired -- see §06.1)
 //    §06.5  rowsFor    (the dispatch: one branch per constraint type)
@@ -232,16 +234,12 @@ function slotRailAngle(con){
 }
 
 // ---- §06.2 · the remaining constraint makers ----
-// Pin, belt, CVT, knife and cable were built as object literals at each of their
+// Belt, CVT, knife and cable were built as object literals at each of their
 // call sites until the scene file (§17) needed a third one. Every constraint kind
 // now has exactly ONE constructor, called from exactly two places -- the tool
 // dispatch (§13.5) and the scene reader (§17.4) -- so "what fields does a belt
 // have" has a single answer, and a scene file cannot describe a constraint the
 // tools cannot build. See SCENE.md §S.2.
-
-// A pin coincides two body-local points. Both ends are real bodies: pinning a body
-// to the background is a rod with a welded background end (§15's rodBG), not this.
-function makePinCon(a,b){ return {type:'pin', a, b, pts:[], sel:false}; }
 
 // A belt couples two disks' rim speeds. The wrap radii default to the bodies' own
 // radii and the phase is captured from their live angles, so a freshly built belt
@@ -501,6 +499,7 @@ function recaptureGrounding(b){
 // being held across the edit -- compiled away, released for a drag (§06.2d), or
 // carried bodily by a selection box (select.js §18.2) -- which is every caller here.
 function recaptureConAngles(con){
+  if(isVertex(con)){ recaptureVertex(con); return; }
   con._phiRef=undefined;
   if(con.type==='rod' || con.type==='rack'){
     if(con.weldA) captureRestAngle(con,'A');
@@ -522,6 +521,18 @@ function recaptureConAngles(con){
 // knife holds none of these and comes out untouched but for the phi anchor.
 function recaptureConPose(con){
   recaptureConAngles(con);
+  // A VERTEX's counterpart to a rod's rest length. Its incidences are body-frame
+  // offsets that agreed when it was placed; a scaled selection box spreads the
+  // bodies without resizing them (select.js §18.2), so those offsets stop naming one
+  // point. Re-seat every joined incidence on the PRIMARY's world point -- the same
+  // "the geometry the transform left is the geometry to hold" rule the rod's length
+  // and the points' stations follow, with the primary as the tiebreak because the
+  // disagreeing anchors give no single live answer to re-read.
+  if(isVertex(con)){
+    const P=vertexPrimary(con);
+    if(P){ const [wx,wy]=epWorld(P); setVertexWorld(con, wx, wy); }
+    return;
+  }
   if(con.type==='rod'){
     const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
     con.len=Math.hypot(wax-wbx,way-wby);
@@ -530,13 +541,12 @@ function recaptureConPose(con){
 }
 
 // ---- §06.2c · extra control points (a constraint with more than two ends) ----
-// A pin, rod, slot or rack is named by two endpoints, and those two are what the
+// A rod, slot or rack is named by two endpoints, and those two are what the
 // constraint IS: a rod's pair fixes its length, a slot's pair is its rail, a rack's
 // pair is its line. Anything else attached to the same joint is an EXTRA CONTROL
 // POINT, kept in `con.pts` -- an ordinary {id, off} endpoint (a body or the fixed
 // background, exactly like a and b) plus what that attachment means:
 //
-//   pin    the point coincides with the pivot          2 rows
 //   rod    the point is fixed to the bar at station s  2 rows  (+1 welded)
 //   slot   the point rides the rail, free to slide     1 row   (+1 prismatic)
 //   rack   'point'  jointed to the rack at station s   2 rows  (+1 welded)
@@ -558,11 +568,11 @@ function recaptureConPose(con){
 // same pointAngleLockRow, against a rest angle captured when the lock goes on.
 const conPoints = con => con.pts || (con.pts=[]);
 // Which kinds take extra points at all, and whether their points hold a station.
-const CON_MULTI = ['pin','rod','slot','rack'];
+const CON_MULTI = ['rod','slot','rack'];
 const conTakesPoints = con => CON_MULTI.includes(con.type);
 const conPointHasStation = con => con.type==='rod' || con.type==='rack';
 // A rack's pinions have no rotation lock and no station: they mesh wherever they sit.
-const conPointLockable = (con,pt) => conTakesPoints(con) && con.type!=='pin' && pt.kind!=='pinion';
+const conPointLockable = (con,pt) => conTakesPoints(con) && pt.kind!=='pinion';
 
 // The station an extra point currently sits at, read off the live geometry -- the
 // capture makeConPoint does when the scene file does not name one.
@@ -615,7 +625,7 @@ function conNewPointLock(con){
   const flags=[];
   if(con.type==='rod'||con.type==='rack') flags.push(!!con.weldA, !!con.weldB);
   else if(con.type==='slot') flags.push(!!con.prismaticA, !!con.prismaticB);
-  else return false;                       // a pin has no rotation lock to inherit
+  else return false;
   for(const pt of conPoints(con)) if(pt.kind!=='pinion') flags.push(!!pt.lock);
   return flags.every(v=>v===flags[0]) ? flags[0] : true;
 }
@@ -624,6 +634,10 @@ function conNewPointLock(con){
 // delete paths (§13.5, §14.2) and the body-resize rescale (§13.3).
 function conEndpoints(con){
   const eps=[];
+  // A vertex names its bodies through its incidences, which ARE {id, off} endpoints
+  // (§06.2e) -- so islands, deletion, resizing and the selection's membership rule
+  // all read it through this one function like everything else.
+  if(isVertex(con)) return vertexOns(con);
   if(con.a) eps.push(con.a);
   if(con.b) eps.push(con.b);
   for(const pt of conPoints(con)) eps.push(pt.ep);
@@ -646,9 +660,154 @@ function conLineProject(con, wx, wy){
 // constraint cannot exist without both its ends -- but only the individual extra
 // points that do, since the rest of the joint is still a joint without them.
 function dropBodyFromConstraints(id){
-  constraints = constraints.filter(c => c.a.id!==id && !(c.b && c.b.id===id));
+  // A vertex loses the incidence naming the body, and goes with it once nothing is
+  // left for it to be a point ON -- a vertex with no incidence has no position and
+  // nothing to say. That is the same rule as a constraint losing an end, applied to
+  // an object whose ends are its whole content.
+  for(const c of constraints)
+    if(isVertex(c)) c.on = vertexOns(c).filter(e => e.id!==id);
+  constraints = constraints.filter(c =>
+    isVertex(c) ? vertexOns(c).length>0
+                : (c.a.id!==id && !(c.b && c.b.id===id)));
   for(const c of constraints)
     if(c.pts && c.pts.length) c.pts = c.pts.filter(pt => pt.ep.id!==id);
+}
+
+// ---- §06.2e · the vertex (a named point, and the bodies it touches) ----
+// A VERTEX is a named point. It carries a label, and a list of INCIDENCES -- one per
+// body it touches -- and it has no coordinates of its own. That last clause is why
+// it costs the engine nothing: a vertex is not a particle, it contributes no column,
+// and it is never solved for. It is a NAME for a coincidence, and it compiles to the
+// rows the pin already built. See VERTEX.md §X.2, §X.3.
+//
+// It lives in `constraints` because that is the list of couplings, and a vertex is
+// one -- the pin generalized, and the pin lived there. Everything that walks
+// couplings (the island pass §08.0, the row assembly §08.3, the projection §09.1,
+// transport's scratch clearing §16.1, the selection's membership rule §18.1) works
+// on it with no change at all.
+//
+//   { type:'vertex', label:'A',
+//     on:[ {id, off, join, weld, restAng}, ... ] }
+//
+// `off` is the ordinary endpoint offset every anchor in the engine has (§05.2c),
+// material on a vessel. `id === null` is the background -- a body with a fixed frame,
+// which is what epFrame's null branch has always made it.
+//
+//   join   held to the vertex, rather than merely marking a spot on that body
+//   weld   held to the vertex's FRAME as well as its point
+//
+// One incidence per body: a vertex is at one material place on each thing it
+// touches, so a second incidence on the same body would be the vertex claiming to be
+// in two places at once. The background included -- it is one body.
+const vertexOns = v => v.on || (v.on=[]);
+const isVertex = con => con && con.type==='vertex';
+// Which incidence speaks for the vertex's position. The BACKGROUND first, because it
+// is the one that does not move; then a real body. (Phase 2 adds lines, which come
+// last: a line's own frame is derived from vertices, and this order is what keeps
+// that derivation acyclic -- VERTEX.md §X.3.)
+const incidenceRank = e => e.id==null ? 0 : 1;
+function vertexPrimary(v){
+  let best=null;
+  for(const e of vertexOns(v)){
+    if(!e.join) continue;
+    if(!best || incidenceRank(e) < incidenceRank(best)) best=e;
+  }
+  return best;
+}
+// ...and where the vertex IS: its primary incidence's world point, or -- for a vertex
+// joined to nothing, a bare marker -- wherever its first incidence sits.
+function vertexWorld(v){
+  const ons=vertexOns(v);
+  const e = vertexPrimary(v) || ons[0];
+  if(!e) return [0,0];
+  const [wx,wy]=epWorld(e);
+  return [wx,wy];          // just the point: epWorld's trailing arm vector is a rod's business
+}
+// The first WELDED incidence: the frame every other welded one is held against. A
+// vertex with fewer than two welds holds no angle, and that is not a wart -- welding
+// is a relation between two frames, and one frame has nothing to relate to. The
+// inspector says so rather than pretending (§14.2).
+function vertexWeldRef(v){
+  for(const e of vertexOns(v)) if(e.join && e.weld) return e;
+  return null;
+}
+// An incidence's captured rest angle is its body's OWN angle at the moment the weld
+// went on -- an absolute world angle, not one measured against another incidence. So
+// each capture is independent of every other, the row between two welds is
+// (th_i - rest_i) - (th_j - rest_j), and which incidence happens to be the reference
+// cannot matter. It also needs no unwrapping anchor: a body's `th` is never wrapped,
+// so there is no atan2 branch cut here of the kind twoPointFrame has to track.
+const incidenceAngle = e => e.id==null ? 0 : (bodies[bodyIndex(e.id)] || {th:0}).th;
+
+// THE constructor for a vertex (SCENE.md §S.2), and THE constructor for one of its
+// incidences -- called by the tool dispatch (§13.5) and the scene reader (§17.4) and
+// nowhere else.
+function makeVertex(label){
+  return { type:'vertex', label: label || nextVertexLabel(), on:[], pts:[], sel:false };
+}
+// `opts.restAng` is the file's captured value; omitted, it is read off the live
+// geometry, so a freshly welded incidence starts exactly where it already was.
+function makeVertexOn(v, ep, opts){
+  const o = opts || {};
+  const id = ep.id==null ? null : ep.id;
+  const ons = vertexOns(v);
+  if(ons.some(e => e.id===id)) return null;         // one incidence per body
+  const e = { id, off: ep.off ? ep.off.slice() : [0,0],
+              join: o.join!==undefined ? !!o.join : true, weld:false };
+  if(e.join && o.weld){ e.weld=true;
+    e.restAng = o.restAng!==undefined ? o.restAng : incidenceAngle(e); }
+  ons.push(e);
+  return e;
+}
+// Turning `join` ON re-reads the offset from where the vertex actually is, so the
+// tick never snaps anything -- the discipline captureRestAngle and setConPointLock
+// already follow (§06.1, §06.2c). Turning it off takes the weld with it: welding is
+// something a JOINED body does, and a weld on a body the vertex is not held to would
+// tie an angle to a point that is not there.
+function setVertexJoin(v, e, val){
+  if(!!val === !!e.join) return;
+  if(val){
+    const [wx,wy]=vertexWorld(v);
+    e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
+    e.join = true;
+  } else { e.join=false; e.weld=false; delete e.restAng; }
+}
+function setVertexWeld(v, e, val){
+  if(!e.join){ e.weld=false; delete e.restAng; return; }
+  e.weld = !!val;
+  if(e.weld) e.restAng = incidenceAngle(e);
+  else delete e.restAng;
+}
+// Re-read every weld's rest angle off the live pose -- recaptureConAngles' vertex
+// counterpart, called from the same places (a hand move, a scaled selection box).
+function recaptureVertex(v){
+  for(const e of vertexOns(v)) if(e.join && e.weld) e.restAng = incidenceAngle(e);
+}
+// Move the whole coincident set to a world point: every joined incidence re-reads its
+// own offset, so the bodies stay where they are and the vertex moves between them.
+// What the pivot handle drags (§13.3) and what the inspector's position field commits.
+function setVertexWorld(v, wx, wy){
+  for(const e of vertexOns(v)){
+    if(!e.join) continue;
+    e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
+  }
+}
+// Every vertex touching a body, and every body a vertex touches -- the one relation,
+// read from either side, which is what the two inspector lists show (§14.2).
+const verticesOn = id => constraints.filter(c => isVertex(c) && vertexOns(c).some(e=>e.id===id));
+
+// Labels. A vertex defaults to A, B, ... Z, AA, AB, ..., taking the first name not
+// already in use, so deleting one frees its letter again. One namespace with bodies
+// is the plan (VERTEX.md §X.8); bodies keep their numeric ids as labels until the
+// format version that gives them their own.
+function labelFor(n){
+  let s='';
+  for(n=n+1; n>0; n=Math.floor((n-1)/26)) s = String.fromCharCode(65+(n-1)%26) + s;
+  return s;
+}
+function nextVertexLabel(){
+  const taken = new Set(constraints.filter(isVertex).map(c=>c.label));
+  for(let n=0;;n++){ const s=labelFor(n); if(!taken.has(s)) return s; }
 }
 
 // ---- §06.2d · posable rods (the pose-time release) ----
@@ -934,7 +1093,8 @@ function linePointRows(con, f, pt, station, unlocked, at){
 // ---- §06.5 · rowsFor (constraint -> rows dispatch) ----
 // One branch per con.type; to reach a specific joint's row math, search its tag,
 // e.g.  type==='rod'. Catalog (rows) -- cross-references spec §4:
-//   pin            2   shared point coincident
+//   vertex         2 per joined incidence past the primary (a shared point), plus
+//                      1 per welded incidence past the first (a shared frame angle)
 //   rod            1   distance held along the connecting line; +1 per welded
 //                      end (locks that end's body -- or the fixed world frame,
 //                      for a background end -- to the rod's own direction).
@@ -952,8 +1112,8 @@ function linePointRows(con, f, pt, station, unlocked, at){
 //   rack           0   a rack line named by two pins; +1 per welded pin (as rod's
 //                      weld); +1 per meshing pinion (tangential match at the
 //                      pinion's live pitch radius, NONHOLONOMIC)
-// Every one of pin, rod, slot and rack may carry EXTRA CONTROL POINTS on top of the
-// above (§06.2c): +2 per point on a pin or a rod, +1 on a slot, +2 on a rack's
+// Every one of rod, slot and rack may carry EXTRA CONTROL POINTS on top of the
+// above (§06.2c): +2 per point on a rod, +1 on a slot, +2 on a rack's
 // jointed point, and +1 more wherever that point is rotation-locked. Their rows are
 // always appended after the base pair's.
 //
@@ -988,21 +1148,41 @@ function rowsFor(con){
       { cols:ep.velCols(0,1), C: ep.wy-con.world[1], soft:true, role:'drag' }
     ];
   }
-  if(con.type==='pin'){
-    const A=epFrame(con.a), B=epFrame(con.b);
-    const Cx = A.wx-B.wx, Cy = A.wy-B.wy;
-    const rows=[
-      { cols: mergeCols([A.velCols(1,0), B.velCols(-1,0)]), C:Cx, role:'pin' },
-      { cols: mergeCols([A.velCols(0,1), B.velCols(0,-1)]), C:Cy, role:'pin' }
-    ];
-    // Every extra point (§06.2c) is one more body brought to the same pivot: the
-    // identical pair of rows, measured against end a. A three-armed hinge is three
-    // endpoints on one pin, not two pins stacked at the same place.
-    conPoints(con).forEach((pt,at)=>{
-      const K=epFrame(pt.ep);
-      rows.push({ cols: mergeCols([K.velCols(1,0), A.velCols(-1,0)]), C:K.wx-A.wx, role:'pin', at });
-      rows.push({ cols: mergeCols([K.velCols(0,1), A.velCols(0,-1)]), C:K.wy-A.wy, role:'pin', at });
+  if(con.type==='vertex'){
+    // A vertex is a coincidence with a name (§06.2e). Two rules, and they are the
+    // whole of what pin, and every weld the line joints will carry, are:
+    //
+    //   every JOINED incidence but the primary   2 rows -- its point is the primary's
+    //   every WELDED incidence but the first     1 row -- its angle is that one's
+    //
+    // Both are stated against ONE reference rather than pairwise, which is what
+    // makes m incidences cost 2(m-1) rows and not m(m-1): coincidence is transitive,
+    // so holding each to the first holds all of them to each other.
+    const rows=[];
+    const ons=vertexOns(con);
+    const P=vertexPrimary(con);
+    if(!P) return rows;                       // joined to nothing: a bare marker
+    const F=epFrame(P);
+    ons.forEach((e,at)=>{
+      if(!e.join || e===P) return;
+      const K=epFrame(e);
+      rows.push({ cols: mergeCols([K.velCols(1,0), F.velCols(-1,0)]), C:K.wx-F.wx, role:'pin', at });
+      rows.push({ cols: mergeCols([K.velCols(0,1), F.velCols(0,-1)]), C:K.wy-F.wy, role:'pin', at });
     });
+    // The angle rows measure (th - restAng) against the reference's own
+    // (th - restAng): each rest angle is that body's absolute angle at the moment
+    // its weld went on (§06.2e), so neither side is privileged and no capture
+    // depends on any other.
+    const W=vertexWeldRef(con);
+    if(W){
+      const R0=epFrame(W), c0=(R0.th-(W.restAng||0));
+      ons.forEach((e,at)=>{
+        if(!e.join || !e.weld || e===W) return;
+        const K=epFrame(e);
+        rows.push({ cols: mergeCols([K.angCols(), scaleCols(R0.angCols(),-1)]),
+                    C: (K.th-(e.restAng||0)) - c0, role:'weld', at });
+      });
+    }
     return rows;
   }
   if(con.type==='rod'){

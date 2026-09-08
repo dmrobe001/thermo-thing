@@ -136,7 +136,7 @@ for(const [s,t] of [[0,0],[0.7,0],[-1.3,0],[0.9,0.4],[-0.5,-0.25]]){
 
 console.log('\n3. every row carries a role, and only roles §09.3 knows');
 // One bench per kind, each carrying every optional row that kind can build.
-const KINDS = `scene 3
+const KINDS = `scene 4
 sim gravity=on
 cam x=0 y=0 scale=64
 body 1 x=0 y=0 r=0.2
@@ -148,7 +148,7 @@ vessel 6 x=6 y=0 bore=0.5 len=1.2 P=101325 T=293.15
 rod 1 -- 2 len=3.0016662 weld=both restAngA=0.2 restAngB=-0.3 pt=3/s=2/lock/restAng=0.1 pt=4/s=1
 slot 1 -- 2 lock=both restAngA=0.1 restAngB=0.1 pt=3/lock/restAng=0.05 pt=4
 rack 1 -- 2 weld=both restAngA=0.1 restAngB=0.2 pt=5/pinion pt=4/s=1
-pin 1@(0.5,0) -- 2@(-2.5,0) pt=3@(-0.5,0)
+vertex A on=1@(0.5,0)/join on=2@(-2.5,0)/join on=3@(-0.5,0)/join/weld/restAng=0
 belt 1 -- 2 rA=0.2 rB=0.2 restPhase=0
 cvt 1 -- 2
 knife 3 dir=(1,0)

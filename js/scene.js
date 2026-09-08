@@ -35,7 +35,14 @@
 // version had to move because the old two-token form still parses under the new
 // reading and means something else (a rack with no pinion at all), which is exactly
 // the silent reinterpretation a version number exists to prevent.
-const SCENE_VERSION = 3;
+//
+// Version 4 added the `vertex` line and retired `pin`. A vertex is a named point and
+// the list of bodies it touches (constraints.js §06.2e), and a pin is what it looks
+// like with two joined incidences and nothing welded -- so the pin did not need
+// translating so much as absorbing. The version had to move because the kind is gone:
+// a version 3 file naming one is now a file this build cannot read, which is the
+// error the reader should give rather than a silent omission. See VERTEX.md §X.10.
+const SCENE_VERSION = 4;
 
 // ---- §17.1 · the ledger ----
 // One row per kind of thing a scene can contain. Each row names:
@@ -181,10 +188,32 @@ const SCENE_SCHEMA = [
   // rotation lock. See fmtPt/parsePt (§17.2) for the grammar, and note that the
   // per-kind validation there is what keeps a pin from claiming a station or a slot
   // from claiming a pinion.
-  { kind:'pin', list:'constraints', match:c=>c.type==='pin',
-    ends:[['a','ep-body'], ['b','ep-body']],
-    fields:{ pt:PT_FIELD('pin') },
-    build:(q,e)=>makePinCon(e.a, e.b) },
+  // A VERTEX (constraints.js §06.2e) carries a LABEL rather than an id, and its whole
+  // content is the repeatable `on=` key: one incidence per body it touches. It names
+  // no positional ends, because none of the bodies at a vertex is more the vertex
+  // than any other -- which is exactly what the pin it replaces could not say.
+  //
+  // The incidences are CAPTURED (SCENE.md §S.3): an offset is read off the geometry
+  // when the vertex is placed or a join is ticked on, and a rest angle when a weld
+  // is, and neither is recomputed after. The pose in the file does not imply them.
+  { kind:'vertex', list:'constraints', label:true, match:c=>c.type==='vertex',
+    fields:{ on:{t:'ons', always:true, get:c=>vertexOns(c),
+                 set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
+    build:()=>makeVertex(null),
+    // Checked in evalScene, before the bench is touched: a vertex with no incidence
+    // has no position and nothing to say, and two incidences on one body would be
+    // the vertex claiming to be in two material places at once.
+    validate:(it)=>{
+      const ons = it.f.on || [];
+      if(!ons.length) return 'a vertex needs at least one on= incidence';
+      const seen=new Set();
+      for(const e of ons){
+        const k = e.id==null ? 'bg' : e.id;
+        if(seen.has(k)) return `two incidences on ${e.id==null?'the background':'body '+e.id} -- a vertex touches each body at one place`;
+        seen.add(k);
+      }
+      return null;
+    } },
 
   { kind:'rod', list:'constraints', match:c=>c.type==='rod',
     ends:[['a','ep'], ['b','ep']],
@@ -476,23 +505,26 @@ function fmtPt(fd, pt){
 // parenthesis AND are followed by one of this format's option words -- nothing else
 // can begin a segment, and no expression can look like one.
 const PT_OPT = /^(s=|restAng=|lock(?=\/|$)|pinion(?=\/|$))/;
-function splitPt(tok){
+function splitOpts(tok, optRe){
   const out=[]; let depth=0, start=0;
   for(let i=0;i<tok.length;i++){
     const c=tok[i];
     if(c==='(') depth++;
     else if(c===')') depth--;
-    else if(c==='/' && depth===0 && PT_OPT.test(tok.slice(i+1))){ out.push(tok.slice(start,i)); start=i+1; }
+    else if(c==='/' && depth===0 && optRe.test(tok.slice(i+1))){ out.push(tok.slice(start,i)); start=i+1; }
   }
   out.push(tok.slice(start));
   return out;
 }
+const splitPt = tok => splitOpts(tok, PT_OPT);
+// The field types a line may repeat: one token per control point, one per incidence.
+const REPEATABLE = new Set(['pts','ons']);
 function parsePt(fd, name, tok, ln, env){
   const kind=fd.kind;
   const parts=splitPt(String(tok));
   const out={};
   const rest=parts.slice(1);
-  const takes = kind==='pin' ? [] : kind==='slot' ? ['lock','restAng']
+  const takes = kind==='slot' ? ['lock','restAng']
               : kind==='rod' ? ['s','lock','restAng'] : ['s','lock','restAng','pinion'];
   for(const seg of rest){
     const eq=seg.indexOf('=');
@@ -523,6 +555,48 @@ function parsePt(fd, name, tok, ln, env){
   return {ep, kind:'point', s:out.s, lock:!!out.lock, restAng:out.restAng};
 }
 
+// One INCIDENCE of a vertex (constraints.js §06.2e), on the `pt=` pattern: an
+// endpoint, then slash-separated options. `join` and `weld` are flags, written when
+// true, so an incidence that merely marks a spot on a body is the bare endpoint --
+// which is also what makes the terse form mean the quiet thing.
+//
+//   1@(0.2,-0.1)/join/weld/restAng=0.3   held, and rigid, at that body-frame point
+//   bg(0,4.4)/join                       a ground pin
+//   3@(0,0.5)                            a feature point: marked, not held
+function fmtOn(e){
+  const parts=[fmtEp(e,'ep')];
+  if(e.join) parts.push('join');
+  if(e.weld) parts.push('weld', `restAng=${fmtNum(e.restAng||0)}`);
+  return parts.join('/');
+}
+const ON_OPT = /^(join(?=\/|$)|weld(?=\/|$)|restAng=)/;
+function parseOn(name, tok, ln, env){
+  const parts=splitOpts(String(tok), ON_OPT);
+  const out={};
+  for(const seg of parts.slice(1)){
+    const eq=seg.indexOf('=');
+    const key = eq<0 ? seg : seg.slice(0,eq);
+    if(!['join','weld','restAng'].includes(key))
+      throw new SceneError(ln, `${name}: an incidence takes join, weld, restAng, got "${key}"`);
+    if(out[key]!==undefined) throw new SceneError(ln, `${name}: "${key}" given twice`);
+    if(key==='restAng'){
+      if(eq<0) throw new SceneError(ln, `${name}: "restAng" needs a value, as restAng=...`);
+      out[key]=numTok(seg.slice(eq+1), ln, `${name} restAng`, env);
+    } else {
+      if(eq>=0) throw new SceneError(ln, `${name}: "${key}" is a flag -- write it on its own`);
+      out[key]=true;
+    }
+  }
+  if(out.weld && !out.join)
+    throw new SceneError(ln, `${name}: weld means nothing on a body the vertex is not joined to`);
+  if(out.weld && out.restAng===undefined)
+    throw new SceneError(ln, `${name}: a welded incidence needs its captured rest angle, as restAng=...`);
+  if(!out.weld && out.restAng!==undefined)
+    throw new SceneError(ln, `${name}: restAng means nothing on an incidence that is not welded`);
+  const ep=parseEp(parts[0], 'ep', ln, name, env);
+  return {id:ep.id, off:ep.off, join:!!out.join, weld:!!out.weld, restAng:out.restAng};
+}
+
 // A field's value -> its token text, and back. `flag` fields have no token: they
 // are the bare word itself, present or absent.
 function fmtVal(fd, v){
@@ -540,6 +614,7 @@ function fmtVal(fd, v){
     // A whole list in one string, for the field-by-field comparisons that read
     // through fmtVal; emitFields below writes it as one `pt=` token per point.
     case 'pts':    return v.map(pt=>fmtPt(fd,pt)).join(' ');
+    case 'ons':    return v.map(e=>fmtOn(e)).join(' ');
   }
   throw new SceneError(0, `no formatter for field type ${fd.t}`);
 }
@@ -594,6 +669,7 @@ function emitFields(fields, o){
     // The one repeatable key: one token per point, and nothing at all when a joint
     // carries none (so an ordinary two-ended constraint's line is unchanged).
     if(fd.t==='pts'){ for(const pt of v) out.push(`${name}=${fmtPt(fd,pt)}`); continue; }
+    if(fd.t==='ons'){ for(const e of v) out.push(`${name}=${fmtOn(e)}`); continue; }
     if(!fd.always){
       const d = typeof fd.def==='function' ? fd.def(q) : fd.def;
       if(isDefault(fd, v, d)) continue;
@@ -651,6 +727,7 @@ function emitSceneLine(list, o){
   const r = SCENE_SCHEMA.find(x => x.list===list && x.match(o));
   if(!r) throw new SceneError(0, `nothing in the scene table matches a ${list} entry of type "${o.type||o.shape}"`);
   const parts=[r.kind];
+  if(r.label) parts.push(String(o.label));
   if(r.id) parts.push(String(o.id));
   if(r.ends){
     const toks = r.ends.map(([name,spec]) => fmtEp(o[name], spec));
@@ -658,16 +735,23 @@ function emitSceneLine(list, o){
   }
   return parts.concat(emitFields(r.fields, o)).join(' ');
 }
-// The sections a listing is written in, in order, with the titles they carry.
-const SCENE_SECTIONS = [['bodies','bodies'], ['constraints','constraints'], ['cables','cables'],
+// The sections a listing is written in, in order, with the titles they carry, and
+// optionally a filter -- vertices and the other constraints share one world array
+// (constraints.js §06.2e) but read as two different things, and a file a person reads
+// should say so. Order between the sections is presentation only: the reader builds
+// bodies in a first pass and does not otherwise care.
+const SCENE_SECTIONS = [['bodies','bodies'],
+  ['vertices','constraints', o=>o.type==='vertex'],
+  ['constraints','constraints', o=>o.type!=='vertex'],
+  ['cables','cables'],
   ['springs','springs'], ['rotational springs','rotSprings'], ['interactions','interactions']];
 // The listing half of a file: one section per non-empty list. `pick(list)` says
 // which objects of that list to write -- the whole world for exportScene below, a
 // selected subset for exportFragment (§17.7).
 function emitSceneBody(pick){
   const L=[];
-  for(const [title, list] of SCENE_SECTIONS){
-    const arr = pick(list) || [];
+  for(const [title, list, only] of SCENE_SECTIONS){
+    const arr = (pick(list) || []).filter(o => !only || only(o));
     if(!arr.length) continue;
     L.push('', `# ${title}`);
     for(const o of arr) L.push(emitSceneLine(list, o));
@@ -892,7 +976,7 @@ function sceneExprEnv(scan, simVals){
 function parseScene(text){ return evalScene(scanScene(text)); }
 
 function scanScene(text){
-  const out = { version:null, sim:{}, simLn:0, cam:{}, camLn:0, items:[], byId:new Map() };
+  const out = { version:null, sim:{}, simLn:0, cam:{}, camLn:0, items:[], byId:new Map(), byLabel:new Map() };
   const lines = String(text).split(/\r?\n/);
   const kindRow = k => SCENE_SCHEMA.find(r => r.kind===k);
 
@@ -926,7 +1010,22 @@ function scanScene(text){
     const row = kindRow(kind);
     if(!row) throw new SceneError(ln, `unknown kind "${kind}" -- a scene can only contain ${SCENE_SCHEMA.map(r=>r.kind).join(', ')}`);
 
-    const item = { row, ln, id:null, endToks:[], raw:null };
+    const item = { row, ln, id:null, label:null, endToks:[], raw:null };
+    // A LABEL is a name, where an id is a number: the thing the canvas draws and the
+    // inspector edits. Vertices carry one; bodies keep their numeric ids as labels
+    // until the version that gives them their own (VERTEX.md §X.8). The two share one
+    // namespace, and the GRAMMAR is what keeps them apart rather than a second check:
+    // a label must start with a letter or an underscore, so it can never be a body id,
+    // and an id is digits only, so it can never be a label.
+    if(row.label){
+      const lt = tok.shift();
+      if(lt===undefined) throw new SceneError(ln, `a ${kind} line needs a label`);
+      if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(lt))
+        throw new SceneError(ln, `${kind} label: expected a name (letters, digits, underscore; not starting with a digit), got "${lt}"`);
+      if(out.byLabel.has(lt)) throw new SceneError(ln, `duplicate label ${lt}`);
+      out.byLabel.set(lt, item);
+      item.label = lt;
+    }
     if(row.id){
       const idt = tok.shift();
       if(idt===undefined) throw new SceneError(ln, `a ${kind} line needs an id`);
@@ -963,10 +1062,10 @@ function scanKeyed(fields, tok, ln, kind){
     const name = eq<0 ? t : t.slice(0, eq);
     const fd = fieldOf(fields, name);
     if(!fd) throw new SceneError(ln, `${kind}: unknown field "${name}" -- this kind takes ${Object.keys(fields).join(', ')||'no fields'}`);
-    if(fd.t==='pts'){
+    if(REPEATABLE.has(fd.t)){
       if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
       (f[name] || (f[name]=[])).push(t.slice(eq+1));
-      continue;                       // the one key a line may repeat, once per point
+      continue;                       // the keys a line may repeat, once per item
     }
     if(f[name]!==undefined) throw new SceneError(ln, `${kind}: "${name}" given twice`);
     if(fd.t==='flag'){
@@ -990,6 +1089,7 @@ function evalKeyed(fields, raw, ln, kind, env, numOf){
     if(r===undefined) continue;
     if(fd.t==='flag'){ f[name] = true; continue; }
     if(fd.t==='pts'){ f[name] = r.map(t => parsePt(fd, name, t, ln, env)); continue; }
+    if(fd.t==='ons'){ f[name] = r.map(t => parseOn(name, t, ln, env)); continue; }
     f[name] = (fd.t==='num' && numOf) ? numOf(name) : parseVal(fd, name, r, ln, env);
   }
   return f;
@@ -1013,7 +1113,7 @@ function evalScene(scan){
     const ends = {};
     (it.row.ends||[]).forEach(([name, spec], e) =>
       { ends[name] = parseEp(it.endToks[e], spec, it.ln, `${it.row.kind} end ${name}`, bound.env); });
-    out.items.push({ row:it.row, ln:it.ln, id:it.id, ends, f:bound.fieldsOf(it) });
+    out.items.push({ row:it.row, ln:it.ln, id:it.id, label:it.label, ends, f:bound.fieldsOf(it) });
   }
 
   // Every body id anything names has to exist. Checked here, before the bench is
@@ -1028,9 +1128,16 @@ function evalScene(scan){
       if(fd.t==='ep-centre' && it.f[name]!=null) refs.push([it.f[name].id, name]);
       if(fd.t==='pts' && it.f[name]) for(const pt of it.f[name])
         if(pt.ep.id!=null) refs.push([pt.ep.id, name]);
+      if(fd.t==='ons' && it.f[name]) for(const e of it.f[name])
+        if(e.id!=null) refs.push([e.id, name]);
     }
     for(const [id, what] of refs)
       if(!scan.byId.has(id)) throw new SceneError(it.ln, `${it.row.kind} ${what} names body ${id}, which this file does not define`);
+    // Whatever else a row wants to say about itself before anything is built.
+    if(it.row.validate){
+      const why = it.row.validate(it);
+      if(why) throw new SceneError(it.ln, `${it.row.kind}: ${why}`);
+    }
   }
   return out;
 }
@@ -1069,6 +1176,10 @@ function buildItem(it, fresh){
   const q = fieldReader(it.row.fields, it.f, it.ln);
   const o = it.row.build(q, it.ends);
   if(it.row.id && !fresh) o.id = it.id;     // the file's ids are the scene's ids
+  // ...and its labels are the scene's labels, on the same terms: a PASTED fragment
+  // keeps the label the constructor just allocated, because a widget's names belong
+  // to the bench it was cut from (§17.7).
+  if(it.row.label && !fresh) o.label = it.label;
   applyFields(it.row.fields, o, it.f);
   if(it.row.finish) it.row.finish(o, it.f, q);
   SCENE_LISTS[it.row.list](o);
@@ -1155,8 +1266,9 @@ function remapItem(it, map){
     else if(fd.t==='ep-centre') f[name] = Object.assign({}, f[name], {id: at(f[name].id)});
     else if(fd.t==='pts') f[name] = f[name].map(pt =>
       Object.assign({}, pt, {ep: Object.assign({}, pt.ep, {id: at(pt.ep.id)})}));
+    else if(fd.t==='ons') f[name] = f[name].map(e => Object.assign({}, e, {id: at(e.id)}));
   }
-  return { row:it.row, ln:it.ln, id:it.id, ends, f };
+  return { row:it.row, ln:it.ln, id:it.id, label:it.label, ends, f };
 }
 
 // Read a fragment and ADD it to the bench -- the one import path that does not
@@ -1173,8 +1285,12 @@ function pasteFragment(text){
   for(const it of parsed.items) if(itemIsBody(it)){
     const o = buildItem(it, true); map.set(it.id, o.id); made.bodies.push(o);
   }
+  // `fresh` here is about LABELS, not ids: nothing outside `bodies` carries an id, so
+  // the flag was previously moot on this pass. A vertex does carry a label, and a
+  // widget's labels belong to the bench it was cut from exactly as its ids do -- so a
+  // paste takes the fresh one its constructor just allocated (§06.2e).
   for(const it of parsed.items) if(!itemIsBody(it)){
-    const o = buildItem(remapItem(it, map)); made[it.row.list].push(o);
+    const o = buildItem(remapItem(it, map), true); made[it.row.list].push(o);
   }
   refreshFrozen();
   return made;

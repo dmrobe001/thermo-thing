@@ -20,7 +20,7 @@ const TOOLS=[
   {id:'body',key:'2',tip:'Add body (2)',svg:'<circle cx="12" cy="12" r="7"/><path d="M12 8v8M8 12h8"/>'},
   {id:'rectbody',key:'q',tip:'Add rectangle (q)',svg:'<rect x="4" y="6" width="16" height="12" rx="1"/><path d="M12 8v8M6 12h12"/>'},
   {id:'vessel',key:'g',tip:'Add gas vessel (g)',svg:'<rect x="7" y="3" width="10" height="18" rx="1"/><path d="M7 5.5h10M7 18.5h10" stroke-width="2.6"/>'},
-  {id:'pin',key:'3',tip:'Pin / hinge (3)',svg:'<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/>'},
+  {id:'vertex',key:'3',tip:'Vertex \u2014 a named point; tap it again to join another body (3)',svg:'<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/>'},
   {id:'rod',key:'4',tip:'Rigid rod (4)',svg:'<circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M7.5 16.5l9-9"/>'},
   {id:'slot',key:'5',tip:'Slot / prismatic (5)',svg:'<path d="M3 9h18M3 15h18"/><rect x="9" y="9" width="6" height="6" rx="1"/>'},
   {id:'belt',key:'b',tip:'Belt (b)',svg:'<circle cx="7" cy="12" r="4"/><circle cx="17" cy="12" r="4"/><path d="M7 8h10M7 16h10"/>'},
@@ -83,9 +83,13 @@ function constraintHit(con,wx,wy){
     const midx=(ax+bx)/2, midy=(ay+by)/2;
     return Math.abs(nx*(wx-midx)+ny*(wy-midy))<=tol;
   }
-  if(con.type==='pin'){
-    const [ax,ay]=epWorld(con.a);
-    return (wx-ax)**2+(wy-ay)**2<=tol*tol;
+  if(con.type==='vertex'){
+    // A dot, not a segment: the vertex IS the point. Picked a little more generously
+    // than the tolerance a line gets, because it is the thing most often sitting
+    // underneath one.
+    const [ax,ay]=vertexWorld(con);
+    const r=VERTEX_PICK_PX/cam.scale;
+    return (wx-ax)**2+(wy-ay)**2<=r*r;
   }
   if(con.type==='rack'){
     // Either the rack line (infinite, like slot's rail) or any pinion's pitch
@@ -215,6 +219,10 @@ function conPointHandles(con){
   return conPoints(con).map((pt,k)=>{ const [x,y]=epWorld(pt.ep); return {which:'pt', k, x, y}; });
 }
 function conHandles(con){
+  // A vertex is one point wearing several bodies' offsets, so it has exactly one
+  // handle and dragging it moves the whole coincident set (§06.2e setVertexWorld) --
+  // which is what the pin's pivot handle did, on an object that now says so.
+  if(con.type==='vertex'){ const [x,y]=vertexWorld(con); return [{which:'pivot',x,y}]; }
   if(con.type==='rod'||con.type==='slot'||con.type==='rack'){
     // A rack's two pins are handles exactly as a rod's or a slot's two ends are:
     // drag to re-bind, tap to toggle the weld. There is no heading handle any more --
@@ -233,11 +241,6 @@ function conHandles(con){
     return handles;
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return [];
-  // A pin's extra points all sit ON the pivot, so they get no handles of their own:
-  // there is nowhere distinct to drag one to, and the pivot handle below moves the
-  // whole coincident set. The inspector's point list (§14.2) is where they are
-  // toggled and removed.
-  if(con.type==='pin'){ const [x,y]=epWorldPt(A,con.a.off); return [{which:'pivot',x,y}]; }
   if(con.type==='knife'){ const [px,py]=epWorldPt(A,con.a.off);
     const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     return [ {which:'anchor',x:px,y:py}, {which:'dir',x:px+hh[0]/hl*0.7, y:py+hh[1]/hl*0.7} ]; }
@@ -308,13 +311,15 @@ function applyHandle(ad, wx, wy){
   // Every extra control point (constraints.js §06.2c) shares one handle behaviour,
   // whatever constraint carries it, so it is handled ahead of the per-type branches.
   if(ad.which==='pt'){ applyPointHandle(con, ad.k, wx, wy); return; }
-  if(con.type==='pin'){
-    const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
-    const s=snapAnchor(wx,wy,[A.id,B.id]); lastSnap=s; const P=s?s.wp:[wx,wy];
-    con.a.off=offOf(A,P); con.b.off=offOf(B,P);
-    // The pivot is one point wearing several bodies' offsets -- move them together.
-    for(const pt of conPoints(con)){ if(pt.ep.id==null){ pt.ep.off=[P[0],P[1]]; continue; }
-      const K=bodies[bodyIndex(pt.ep.id)]; if(K) pt.ep.off=offOf(K,P); }
+  if(con.type==='vertex'){
+    // Snap only to the bodies this vertex already touches (snapAnchor's third
+    // argument is a whitelist), because those are the ones whose rims and centres the
+    // point is being placed against -- the pin's pivot drag did the same. Re-binding
+    // a vertex to a DIFFERENT body is joining it, which is the tool's job (§13.5),
+    // not a drag's.
+    const s=snapAnchor(wx,wy, vertexOns(con).map(e=>e.id).filter(id=>id!=null));
+    lastSnap=s; const P=s?s.wp:[wx,wy];
+    setVertexWorld(con, P[0], P[1]);
   } else if(con.type==='rod'||con.type==='slot'||con.type==='rack'){
     // Snap to a body if one is under/near the cursor; otherwise the end
     // re-binds to the background at the raw world point.
@@ -388,7 +393,6 @@ function applyPointHandle(con, k, wx, wy){
       pt.ep={id:bodies[bi].id, off:[0,0]};
     return;
   }
-  if(con.type==='pin'){ return; }              // a pin's points have no handles (§13.3)
   const P=conLineProject(con,wx,wy);
   const bi=pickBody(P[0],P[1]);
   pt.ep = bi>=0 ? {id:bodies[bi].id, off:offOf(bodies[bi],P)} : {id:null, off:[P[0],P[1]]};
@@ -585,11 +589,16 @@ function updateHover(wx,wy){
     const bi=pickBody(wx,wy); if(bi>=0){ hover=bodies[bi]; return; }
     return;
   }
-  if(tool==='slot'||tool==='cable'||tool==='pin'||tool==='rod'||tool==='spring'){
+  if(tool==='slot'||tool==='cable'||tool==='vertex'||tool==='rod'||tool==='spring'){
+    // A VERTEX under the cursor takes the click as another body joined to IT, so it
+    // is what the highlight should name -- the same rule as the joint below, on the
+    // object whose own pick it is (§13.5 pickVertexAt).
+    if(tool==='vertex'){
+      const vi=pickVertexAt(wx,wy); if(vi>=0){ hover=constraints[vi]; return; } }
     // With nothing pending, a joint of this tool's own kind under the cursor takes
     // the click as an extra control point (§13.5 addControlPoint) -- highlight the
     // joint that would receive it rather than the body behind it.
-    if(!pending && tool!=='cable' && tool!=='spring'){
+    if(!pending && tool!=='cable' && tool!=='spring' && tool!=='vertex'){
       const ci=pickConstraintOfType(tool,wx,wy); if(ci>=0){ hover=constraints[ci]; return; } }
     // these tools attach to a snapped anchor (body centre/edge) or a bare body
     const t=anchorTarget(wx,wy); if(t){ hover=t.body; hoverSnap=t.snap; }
@@ -643,9 +652,9 @@ function startPinch(){
 // This is where each tool builds its constraint. The branches, in order, handle:
 // pinch guard, explicit pan, select (+handles/resize/grab -- the only case
 // that can claim a one-finger drag instead of panning), body, delete,
-// belt/cvt, knife, cable, pin, rod, slot, spring, rotspring.
+// belt/cvt, knife, cable, vertex, rod, slot, spring, rotspring.
 //
-// The four kinds that take extra control points -- pin, rod, slot, rack
+// The three kinds that take extra control points -- rod, slot, rack
 // (constraints.js §06.2c) -- check first, on their FIRST click only, whether the
 // cursor is on an existing joint of their own kind: if it is, the click adds a point
 // to that joint instead of starting a new one (addControlPoint below). The cost is
@@ -790,14 +799,12 @@ function pickConstraintOfType(type,wx,wy){
 function addControlPoint(type, wx, wy){
   const ci=pickConstraintOfType(type,wx,wy); if(ci<0) return false;
   const con=constraints[ci];
-  const P = type==='pin' ? epWorld(con.a) : conLineProject(con,wx,wy);
+  const P = conLineProject(con,wx,wy);
   // A body this joint already names cannot take a second point on it: on a rigid
   // body the new rows would only restate what the existing anchor already says. So
-  // the pick looks THROUGH those bodies to whatever else is under the cursor -- on a
-  // pin, where every end sits at the pivot, that is the difference between the tool
-  // working and it only ever finding the arms already attached. A vessel is the
-  // exception the rod tool already makes: two of its material planes are genuinely
-  // two points, and what a strut between them holds is the length.
+  // the pick looks THROUGH those bodies to whatever else is under the cursor. A
+  // vessel is the exception the rod tool already makes: two of its material planes
+  // are genuinely two points, and what a strut between them holds is the length.
   const taken = conEndpoints(con).map(ep=>ep.id);
   const usable = b => b.shape==='vessel' || !taken.includes(b.id);
   let B=null;
@@ -816,6 +823,30 @@ function addControlPoint(type, wx, wy){
   }
   selectConstraint(ci); saveState();
   return true;
+}
+// A vertex under the cursor, or -1. Its own pick rather than pickConstraint's,
+// because the vertex tool has to find one even where a rod is drawn on top of it.
+const VERTEX_PICK_PX = 11;
+function pickVertexAt(wx,wy){
+  const r=VERTEX_PICK_PX/cam.scale;
+  for(let i=constraints.length-1;i>=0;i--){ const c=constraints[i];
+    if(!isVertex(c)) continue;
+    const [x,y]=vertexWorld(c);
+    if((wx-x)**2+(wy-y)**2<=r*r) return i; }
+  return -1;
+}
+// Add the topmost body under the cursor to an existing vertex, at the vertex's own
+// point. Bodies it already touches are looked THROUGH (see the vertex tool above),
+// which is what lets the same tap twice in the same place pin two bodies together.
+function joinBodyToVertex(v, wx, wy){
+  const [px,py]=vertexWorld(v);
+  const taken=vertexOns(v).map(e=>e.id);
+  for(let i=bodies.length-1;i>=0;i--){ const b=bodies[i];
+    if(!bodyContains(b,wx,wy)) continue;
+    if(taken.includes(b.id)) continue;
+    makeVertexOn(v, {id:b.id, off:offOf(b,[px,py])}, {join:true});
+    return true; }
+  return false;
 }
 // the click logic for every non-select tool, run only on a confirmed tap
 // (pointerdown that never turned into a drag) -- see the pointerdown handler
@@ -970,22 +1001,24 @@ function runToolClick(wx,wy){
     pending=null; saveState();
     return;
   }
-  if(tool==='pin'){
-    if(!pending && addControlPoint('pin',wx,wy)) return;
-    // FIRST pick -- snapped anchor on body A, pending.wp is the pivot world point
-    if(!pending){ const t=anchorTarget(wx,wy); if(!t) return;
-      pending={ep:{id:t.body.id, off:offOf(t.body,t.wp)}, wp:t.wp}; return; }
-    const Aep=pending.ep;
-    // the second click only *names* body B -- click any part of it, including
-    // where A covers it -- and B is anchored at the first pivot.
-    let Bep=null;
-    const bi = Aep.id!=null ? pickBodyExcept(wx,wy,Aep.id) : pickBody(wx,wy);
-    if(bi>=0){ Bep={id:bodies[bi].id, off:offOf(bodies[bi],pending.wp)}; }
-    else { const s=snapAnchor(wx,wy); if(s && s.body.id!==Aep.id) Bep={id:s.body.id, off:offOf(s.body,pending.wp)}; }
-    if(!Bep) return;   // nothing indicated -- keep the pivot and wait
-    if(Aep.id!=null && Bep.id===Aep.id) return;
-    constraints.push(makePinCon(Aep, Bep));
-    pending=null; saveState();
+  if(tool==='vertex'){
+    // ONE tap. On a body it takes an incidence there, joined; on empty space it takes
+    // one on the background, joined -- a ground anchor, which is what a rod end
+    // clicked in empty space has always meant.
+    //
+    // On an EXISTING vertex it JOINS another body to it instead: the topmost body
+    // under the cursor the vertex does not already touch, at the vertex's own point.
+    // So pinning two bodies together is the same gesture twice in the same place --
+    // the first tap plants the vertex on the top body, the second reaches through it
+    // to the one underneath. A vessel is no exception here, unlike on a rod: a rod's
+    // two ends may ride two material planes of one vessel, but a VERTEX is at one
+    // material place on each thing it touches, so it takes one incidence per body.
+    const vi=pickVertexAt(wx,wy);
+    if(vi>=0){ joinBodyToVertex(constraints[vi], wx, wy); selectConstraint(vi); saveState(); return; }
+    const t=anchorTarget(wx,wy);
+    const v=makeVertex(null);
+    makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
+    constraints.push(v); selectConstraint(constraints.length-1); saveState();
     return;
   }
   if(tool==='rod'){

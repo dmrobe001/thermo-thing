@@ -9,7 +9,8 @@ untouched. What changes is **the scene, and the pass that turns a scene into row
 This note uses `§X.n` for its own sections (`V` is the vessel note's) and the
 codebase's own `§NN` tokens for code, per `AGENT.md`.
 
-> **Status:** design only. Nothing in this note is built. `§X.12` phases it.
+> **Status:** phase 0 (the frame seam) and phase 1 (the vertex) are built; the line
+> and the strand are not. `§X.12` phases it and says where each phase stands.
 
 ---
 
@@ -63,6 +64,13 @@ particle: it has no mass, contributes no columns, and is never solved for. It is
 built. What it buys is that the coincidence is now a thing you can select, label,
 list, drag, and hang a body list off.
 
+> **As built (`js/constraints.js` §06.2e).** It lives in the `constraints` array,
+> with `type:'vertex'`, because that array is the list of couplings and a vertex is
+> one. Nothing else had to move: the island pass, the row assembly, the position
+> projection, Reset's snapshot, transport's scratch clearing and the selection's
+> membership rule all read a vertex through `conEndpoints` and `rowsFor` like every
+> other coupling.
+
 **Bodies, for the purposes of a vertex's list, are: disks, rectangles, vessels,
 lines, and the background.** The background is a body with a fixed frame -- position
 `(0,0)`, angle `0`, no coordinates -- which is exactly what `epFrame`'s `id==null`
@@ -108,9 +116,16 @@ welded at a vertex ties everything welded there to the world frame, which is exa
 what `restAngA` on a background rod end means today.
 
 A consequence worth stating plainly because it will surprise: **a single weld at a
-vertex holds nothing.** There is nothing to hold it to. The inspector should say so
-rather than pretend. `§X.5` shows why this is not a wart but the correct reading, and
-`§X.9` gives the default that makes the obvious gesture do the obvious thing.
+vertex holds nothing.** There is nothing to hold it to. The inspector says so rather
+than pretending. `§X.5` shows why this is not a wart but the correct reading, and
+`§X.11` gives the line-tool default that will make the obvious gesture do the
+obvious thing once lines exist.
+
+A rest angle is captured as that body's **own absolute angle** at the moment its weld
+went on, not as an offset from another incidence. So every capture is independent,
+the row between two welded incidences is `(th_i - rest_i) - (th_j - rest_j)`, which
+of them happens to be the reference cannot matter, and -- unlike a rod's weld, which
+measures against an `atan2` -- there is no branch cut to unwrap.
 
 **Where a vertex is.** Its **primary** incidence gives its world position, and the
 primary is chosen in a fixed order: the background if it is joined there, else the
@@ -119,12 +134,19 @@ first incidence at all. Background first because the background does not move; r
 bodies before lines because a line's own frame is derived from vertices, and the
 order is what keeps that derivation acyclic (`§X.5`).
 
-Every vertex has a background incidence in its list, always, and it always reads
-out the live world position. Ticking `join` on it nails the vertex to that world
-point, which is a **ground pin** -- 2 rows, position held, rotation free. The bench
-does not have that today: pinning a point to ground currently takes a rod with a
-welded background end, which also removes the rotation. Getting it for free is a
-small sign the factoring is right.
+The background is in the list only when it is actually a body the vertex touches --
+that is, when the vertex is joined to it, or when it is all the vertex has. An
+unjoined background row would have to carry a derived offset, and every other offset
+in the model is authored. The panel shows the world position as its own field
+instead, and a button puts the vertex on the background there.
+
+Joining a vertex to the background is a **ground pin**: 2 rows, position held,
+rotation free. The bench could not say that before -- pinning a point to ground took
+a rod with a welded background end, which removes the rotation along with the
+position. Getting it for free is a small sign the factoring is right, and so is the
+other thing that arrived with it: a body merely MARKED at a vertex, named at a
+material spot without being held there, which is `DEVELOPMENT.md` §8's "feature" with
+nothing else added.
 
 ---
 
@@ -394,6 +416,13 @@ that did the freezing as today, and release everything a `posable` line touches
 during a pose drag as today. What is new is that "two ground pins hold a body still"
 is now recognized, which is both obvious and currently missed.
 
+None of this landed with phase 1, deliberately. Freezing is an OPTIMIZATION, not the
+physics (`SCENE.md` §S.8): an arrangement the rules do not recognize is held exactly
+as it always was, at the cost of the rows and the island split. So a body held by two
+ground-pinned vertices works today and is simply not compiled away, and the rules
+above can arrive with phase 2, when the line gives them the vocabulary they are
+written in.
+
 `posable` ports directly: while a body a posable line touches is dragged, every
 joint on that line becomes a sliding, unwelded rider, and the line re-reads its
 stations, segments and rest angles from the pose the drag left (§06.2d
@@ -401,16 +430,20 @@ stations, segments and rest angles from the pose the drag left (§06.2d
 
 ---
 
-## X.10 The scene format, version 4
+## X.10 The scene format, version 5
 
-Two new kinds, five retired. The grammar is untouched -- one object per line, `#`
-comments, `key=value`, every number an expression, the repeatable-key mechanism the
-`pt=` field already established (§17.2).
+Version 4 landed the first half of this with phase 1: the `vertex` line, the `on=`
+incidence token, labels, and the retirement of `pin`. What follows is the second
+half, which is version 5.
 
 ```
-vertex <label> on=<incidence> on=<incidence> ...
+vertex <label> on=<incidence> on=<incidence> ...     [version 4, built]
 line   <label> [soft=<num>] [posable] [seg=<num> ...] [mesh=<body> ...]
 ```
+
+The grammar is untouched -- one object per line, `#` comments, `key=value`, every
+number an expression, the repeatable-key mechanism `pt=` established and `on=` now
+shares (§17.2).
 
 An incidence token is one word, on the `pt=` pattern -- an endpoint, then
 slash-separated options:
@@ -438,21 +471,21 @@ implies them); a line's frame, its joint order, its extent, its stations, every 
 position and every rest length derived from a segment are **derived** and never
 written.
 
-Retired: `pin`, `rod`, `slot`, `rack`, `spring`. Version 4 must move rather than
-extend, because `rod A -- B len=2.6` still parses under a reader that has only lines
-and would mean something else. `tools/scene-convert.js` is a one-shot v3 -> v4
-translator, used once to regenerate the bundled examples and then kept for anyone
-holding an old file. The eleven examples are regenerated through it and re-canonicalized
+Retired: `rod`, `slot`, `rack`, `spring` (`pin` went with version 4). Version 5 must
+move rather than extend, because `rod A -- B len=2.6` still parses under a reader that
+has only lines and would mean something else. `tools/scene-convert.js` is a one-shot
+v4 -> v5 translator, used once to regenerate the bundled examples and then kept for
+anyone holding an old file. The examples are regenerated through it and re-canonicalized
 (`tools/scene-roundtrip.js --canon`), and the migration is verified the way the last
 two were: the world the converter produces must agree with the world the old reader
 produced, field for field, and over three seconds of real substeps.
 
-The pendulum, as version 4 writes it. Both joints are `fix`, which is what makes the
+The pendulum, as version 5 writes it. Both joints are `fix`, which is what makes the
 line a bar rather than a rail; nothing is welded, so it hinges at both ends -- which
 is now the default rather than something to untick:
 
 ```
-scene 4
+scene 5
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
@@ -465,7 +498,7 @@ vertex A on=bg(0,4.4)/join on=2/join/fix
 vertex B on=1/join on=2/join/fix
 ```
 
-and the slider-crank's rail, which the version-3 file has to place ten metres out to
+and the slider-crank's rail, which the version-3 file had to place ten metres out to
 dodge a singularity (`js/examples.js`, `crank:`), stops needing the trick. Two
 background vertices fix the rail's heading outright, so nothing is holding a raw
 `atan2` any more -- and since every joint on it slides, not one of them writes an
@@ -561,18 +594,39 @@ endpoint, with everything else bit-identical. The reaction readout was checked
 separately and harder: for every joint on every bench, the role lookup resolves to the
 *same multiplier index* the old counting reached.
 
-**Phase 1 -- vertices.** The `vertices` array, incidences, labels on everything, the
-vertex tool, the vertex and body panels, vertex rendering, the `vertex` line in the
-format, and the compile of `§X.5`'s first rule. `pin` retires into it; the ground pin
-arrives. Rod, slot, rack and spring stay as they are, but their endpoints become
-vertex references, so there is exactly one place a shared point is stored. New
-validator `tools/vertex-check.js`: the coincidence rows match the pin's exactly, the
-primary ordering is acyclic, a weld count below two costs no rows, and a labelled
-bench round-trips.
+**Phase 1 -- vertices. `[done]`** The vertex (§06.2e), its incidences, its label, the
+vertex tool, the vertex panel and the vertex list a body shows, the canvas dot and
+label, the `vertex` line in format version 4, and the compile of `§X.5`'s first rule.
+`pin` retired into it, and two things it could not say arrived: a point pinned to the
+background with its rotation left free, and a body merely MARKED at a vertex rather
+than held there. New validator `tools/vertex-check.js`, and a new bundled example
+(`hinge`) that is a ground pin and a weld and nothing else.
+
+Two corrections to what this phase was planned to be, both made while building it:
+
+- **There is no `vertices` array.** A vertex lives in `constraints`, with
+  `type:'vertex'`, because that is the list of couplings and a vertex is one -- the
+  pin generalized, and the pin lived there. The payoff is that islands, the row
+  assembly, the position projection, Reset, the scratch clearing and the selection's
+  membership rule needed no change at all, which is what `§X.14` asks of every phase
+  and what a second array would have cost. A `line`, in phase 2, is a *body* and goes
+  in `bodies`: bodies have coordinates, couplings have rows, and each list holds the
+  things that behave alike.
+- **Rod, slot, rack and spring keep their own `{id, off}` endpoints.** The plan said
+  to convert them to vertex references here, "so there is exactly one place a shared
+  point is stored". But once the pin is gone, the only SHARED points in a scene are
+  vertices already -- a rod end that nothing else touches is not a shared point --
+  so the goal is met without the conversion, and doing it now would be phase 2's
+  blast radius without phase 2's payoff, done twice. It moves to phase 2, where the
+  line is the thing that actually wants it.
+
+Body labels moved with it. Giving bodies their own would change every reference in
+the format, and that is a version bump the line is going to force anyway.
 
 **Phase 2 -- lines.** The `line` body, the derived frame, the row table of `§X.4`,
-compliance, the line tool with its two modes, the line panel, format version 4, the
-converter, the regenerated examples, and the retirement of rod, slot, rack and
+compliance, the line tool with its two modes, the line panel, body labels, the
+conversion of rod/slot/rack/spring endpoints to vertex references, format version 5,
+the converter, the regenerated examples, and the retirement of rod, slot, rack and
 spring. `refreshFrozen` restated per `§X.9`. New validator `tools/line-check.js`;
 `tools/multipoint-check.js`, `tools/posable-check.js`, `tools/rack-check.js` and
 `tools/select-check.js` all ported. This is the large phase, and it is the one that
