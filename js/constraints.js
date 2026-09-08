@@ -434,14 +434,33 @@ function vertexPrimary(v){
   }
   return best;
 }
-// ...and where the vertex IS: its primary incidence's world point, or -- for a vertex
-// joined to nothing, a bare marker -- wherever its first incidence sits.
+// ...and where the vertex IS. Its primary incidence's world point; failing that, its
+// BACKGROUND incidence, which is the vertex's own world coordinates and the one frame
+// that cannot move out from under it.
+//
+// An incidence on a BODY that the vertex is not JOINED to never locates it, and that
+// is the whole of the rule: dragging a body must not carry along a point it is not
+// holding. An unjoined incidence marks a material spot on that body -- it says where
+// the vertex was, not where it now is -- so reading a position out of it would make
+// letting go of a body silently equivalent to still being held by it. The trailing
+// `find` is the legacy path: a hand-written file whose only incidence is such a mark
+// still has to resolve to something, and that mark is all there is.
 function vertexWorld(v){
   const ons=vertexOns(v);
-  const e = vertexPrimary(v) || ons.find(x=>!isLineOn(x));
+  const e = vertexPrimary(v) || ons.find(x=>x.id==null) || ons.find(x=>!isLineOn(x));
   if(!e) return [0,0];
   const [wx,wy]=epWorld(e);
   return [wx,wy];          // just the point: epWorld's trailing arm vector is a rod's business
+}
+// A vertex has to know where it is, and the background is the only frame that cannot
+// move. So whenever nothing JOINED locates it any more, its background incidence
+// does: made if there is none, and re-read at the point the vertex was already at, so
+// letting go of a body never moves the point. Called wherever a join is released.
+function groundVertex(v, wx, wy){
+  if(vertexPrimary(v)) return;
+  const bg = vertexOns(v).find(e=>e.id==null);
+  if(!bg) makeVertexOn(v, {id:null, off:[wx,wy]}, {join:false});
+  else if(!bg.join) bg.off=[wx,wy];
 }
 // The first WELDED incidence: the frame every other welded one is held against. A
 // vertex with fewer than two welds holds no angle, and that is not a wart -- welding
@@ -518,7 +537,13 @@ function setVertexJoin(v, e, val){
       const [wx,wy]=vertexWorld(v);
       e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
     }
-  } else { e.join=false; e.weld=false; delete e.restAng; delete e.s; }
+  } else {
+    // Where it is BEFORE letting go, so the release holds the pose it found -- the
+    // same discipline every capture toggle here follows.
+    const [wx,wy]=vertexWorld(v);
+    e.join=false; e.weld=false; delete e.restAng; delete e.s;
+    groundVertex(v, wx, wy);
+  }
 }
 function setVertexWeld(v, e, val){
   if(!e.join){ e.weld=false; delete e.restAng; return; }
@@ -553,8 +578,14 @@ function recaptureVertex(v){
 // What the pivot handle drags (§13.3) and what the inspector's position field commits.
 function setVertexWorld(v, wx, wy){
   for(const e of vertexOns(v)){
-    if(!e.join || isLineOn(e)) continue;         // a line holds no offset to re-read
-    e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
+    if(isLineOn(e)) continue;                    // a line holds no offset to re-read
+    // The background incidence is re-read whether it is joined or not: joined it is a
+    // ground pin, unjoined it is simply where the vertex is (vertexWorld above), and
+    // either way it has to follow the point. A BODY's is re-read only when joined --
+    // an unjoined one marks a spot, and moving the vertex does not move the mark.
+    if(e.id==null){ e.off=[wx,wy]; continue; }
+    if(!e.join) continue;
+    e.off = epOffOf(bodies[bodyIndex(e.id)], wx, wy);
   }
 }
 // Every vertex touching a body, and every body a vertex touches -- the one relation,
@@ -580,16 +611,26 @@ const verticesOn = id => constraints.filter(c => isVertex(c) && vertexOns(c).som
 //     (§13.2 pickBody); it has nothing to say about what a point is inside.
 //
 // A body's extent is its own outline, so `bodyContains` (§05.2) answers it exactly. A
-// LINE has no width, so "on it" has to be a tolerance rather than a test: a
-// millimetre, which at any zoom the bench is usable at sits well inside one pixel, so
-// a line the vertex is not visibly on does not appear.
-const LINE_EXTENT_TOL = 1e-3;
+// LINE has no width, so "on it" has to be a tolerance -- and the tolerance is a
+// question about the DRAWING, not about the metres: the vertex is on the line when
+// its dot touches the line's stroke, which is what a person tapping the two together
+// is judging. So it is measured in PIXELS and converted through the camera, the way
+// every other hit test here already is (§13.2). A fixed world distance would mean
+// something different at every zoom -- a millimetre is untouchable zoomed out and
+// enormous zoomed in -- and it would make the obvious gesture, tap a spot on the line
+// and then tick `joined`, work or not work depending on how far you had scrolled.
+//
+// The number is the vertex dot's own radius (3.5px, render.js §11.4) plus a bar's
+// half-stroke (1.5px, §11.5): the two glyphs touching, and nothing more.
+const LINE_EXTENT_PX = 5;
+const lineExtentTol = () => LINE_EXTENT_PX / (cam.scale || 1);
 function lineCovers(line, wx, wy){
   const f=lineFrame(line); if(!f) return false;
-  if(Math.abs(f.nx*(wx-f.wax) + f.ny*(wy-f.way)) > LINE_EXTENT_TOL) return false;
+  const tol=lineExtentTol();
+  if(Math.abs(f.nx*(wx-f.wax) + f.ny*(wy-f.way)) > tol) return false;
   if(!lineIsBar(line)) return true;                    // a rail runs on past its joints
   const du = f.ux*(wx-f.wax) + f.uy*(wy-f.way);        // P sits at 0, Q at -L (§06.2f)
-  return du <= LINE_EXTENT_TOL && du >= -f.L - LINE_EXTENT_TOL;
+  return du <= tol && du >= -f.L - tol;
 }
 function extentCovers(id, wx, wy){
   if(id==null) return true;

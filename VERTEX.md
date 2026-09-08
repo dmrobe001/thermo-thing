@@ -517,10 +517,14 @@ vertex C on=2/join/weld     on=6/join/weld    # the piston, riding it, angle hel
 
 **The rail loses four tools and gains two.** Out: pin, rod, slot, rack, spring. In:
 
-- **vertex (`v`)** -- one tap places a vertex. On a body, it takes an incidence on
-  that body, joined. On empty space, it takes a background incidence, joined -- a
-  ground anchor, matching what a rod end clicked in empty space does today. On an
-  existing vertex, it selects it.
+- **vertex (`v`)** -- one tap places a **point**: a background incidence, unjoined,
+  holding the world coordinates of the place tapped (the snap is still honoured, so a
+  tap near a rim or a centre lands on it). Nothing else, whatever body it landed on.
+  Which body that would be is a question about draw order, and a point must not take
+  its frame from whatever happens to be on top -- nor be dragged around by a body it
+  is not held to. Attaching is a tick in the panel, where every body the point is
+  inside is already listed. A tap on an EXISTING vertex still reaches through to join
+  a body, topmost first, which is the two-tap hinge by hand.
 - **line (`l`)**, with a **new / extend** toggle in the header, the way the transport
   controls already carry state:
   - **new** -- tap vertices in turn. Every joint is created **sliding**, so the
@@ -553,8 +557,13 @@ it off releases it and *leaves the body listed*, holding nothing. There is there
 no "remove" button on either side, and nothing a press could lose.
 
 A body's extent is its own outline, so `bodyContains` answers it exactly. A line has
-no width, so "on it" has to be a tolerance rather than a test: a millimetre, which at
-any zoom the bench is usable at sits well inside one pixel.
+no width, so "on it" has to be a tolerance rather than a test -- and the tolerance is
+a question about the **drawing**: the vertex is on the line when its dot touches the
+line's stroke, which is what a person tapping the two together is judging. So it is
+measured in **pixels** and converted through the camera, like every other hit test in
+`§13.2`. A fixed distance in metres would mean something different at every zoom, and
+would make the obvious gesture -- tap a spot on the line, then tick `joined` -- work
+or not work depending on how far you had scrolled.
 
 - *A vertex selected*: its label, its world position, and one row per **site** -- the
   body, where the vertex sits in that body's frame, `joined`, `welded`, and `slide`
@@ -568,6 +577,15 @@ any zoom the bench is usable at sits well inside one pixel.
 - *The background selected*: reachable from the empty-bench panel, listing every
   vertex pinned to ground.
 
+A vertex is located by its **joined** incidences, and by the background when none of
+them locate it: an incidence on a body the vertex is not joined to marks a material
+spot -- where the vertex *was* -- and reading a position out of that would make
+letting go of a body silently the same as still being held by it. So releasing the
+last join grounds the vertex where it stood, and a completely unjoined vertex has its
+coordinates in the background frame, which is the one frame that cannot move out from
+under it. A vertex whose only join is a line is not a joint at all (`§X.3` -- a line
+is never a locator), and its panel says so rather than drawing one.
+
 **Every coordinate in one of those rows is editable, and committing one is a solve
 attempt.** Where an incidence holds the vertex there, the number *is* the anchor, so
 the anchor moves and the assembly has to follow; where nothing holds it, there is no
@@ -578,7 +596,10 @@ rearranges around it, while a slider -- or a vertex with no joint at all -- owns
 none, so the number says where along the bar to put the point. Either way it ends in
 `projectPositions`, which is an *attempt*: a distance the mechanism cannot take
 leaves the bench wherever the solver could get to, exactly as typing a body's pose
-does.
+does. Ticking `joined` on ends in the same projection. The tick itself is exact where
+it stands, so on its own that is a no-op; what it is for is the rows the tick has just
+brought to life, so that ticking a line and a body at one vertex lands on the same
+assembled bench in either order.
 
 **Canvas.** Vertices draw as dots -- one dot per joint, not the stack of coincident
 endpoints the pin draws today -- filled when joined, hollow when merely marking a

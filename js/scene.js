@@ -1100,6 +1100,10 @@ function evalScene(scan){
 // reuse. Shared with §15 so there is one answer to "what is a fresh bench".
 function clearScene(){
   bodies=[]; constraints=[]; cables=[]; rotSprings=[]; interactions=[];
+  // A half-finished tool gesture names objects this scene is throwing away, so it
+  // goes with them: a `pending` first pick or a `bodyPreview` left over from the
+  // bench being replaced is a reference to something that no longer exists.
+  pending=null; bodyPreview=null; hover=null; hoverHandle=null; hoverSnap=null;
   uid=1; sim.bathQ=0;
   ENERGY_BANK.clear();
   refreshFrozen();

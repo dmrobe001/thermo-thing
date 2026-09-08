@@ -287,21 +287,28 @@ function incidenceRow(v, id, o={}){
     </div>
   </div>`;
 }
-// Ticking `joined` on. Where there is no incidence yet it makes one AT THE PLACE THE
-// VERTEX ALREADY IS, so the tick never snaps anything -- the discipline every capture
-// in the engine follows. A line's joint is made sliding, as the line tool makes them
-// (VERTEX.md §X.11), and gets the quick solve that brings the vertex onto the bar; a
-// body's is exact where it stands and needs none.
+// Ticking `joined`. Where there is no incidence yet it makes one AT THE PLACE THE
+// VERTEX ALREADY IS, so the tick itself never snaps anything -- the discipline every
+// capture in the engine follows -- and a line's joint is made sliding, as the line
+// tool makes them (VERTEX.md §X.11).
+//
+// Then it solves, whichever it was. A fresh incidence is satisfied where it stands,
+// so on its own the projection is a no-op; what it is for is the rows this tick has
+// just brought to LIFE. A vertex lying near a line, joined to the line and to nothing
+// else, is not a joint at all -- a line is never a locator (§X.3), so there is nothing
+// for the row to move -- and the moment a body is ticked at that same vertex the
+// on-line row becomes real and is violated by however far off the line the point was
+// put. Solving here is what closes that gap, so the two ticks in either order end at
+// the same assembled bench.
 function setIncidenceJoin(v, id, want){
   const e = vertexOns(v).find(x=>x.id===id) || null;
-  if(e){ setVertexJoin(v, e, want); return; }
+  if(e){ setVertexJoin(v, e, want); if(want) projectPositions(12); return; }
   if(!want) return;
-  const line = id!=null ? lineById(id) : null;
   const [wx,wy]=vertexWorld(v);
   const b = id!=null ? bodies[bodyIndex(id)] : null;
   const off = id==null ? [wx,wy] : b ? epOffOf(b,wx,wy) : [0,0];
   if(!makeVertexOn(v, {id, off}, {join:true, slide:true})) return;
-  if(line) projectPositions(12);
+  projectPositions(12);
 }
 // The two commits a row's coordinates make, lifted out of the handlers so the panel
 // wiring is only wiring and each is one testable thing. Both snapshot the pose first:
@@ -375,6 +382,13 @@ function vertexInspectorHTML(v){
   // nothing to tie to (VERTEX.md §X.3).
   const weldNote = welds===1
     ? '<p class="muted" style="margin:8px 0 0">Only one thing is welded here, so nothing is held: a weld ties two frames together. Weld a second body at this vertex &mdash; or the background &mdash; to make the joint rigid.</p>' : '';
+  // A line holds POINTS, and a vertex whose only join is a line has none: a line's own
+  // frame is read off the vertices on it, so a vertex located by one would be defined
+  // in terms of something defined in terms of it (VERTEX.md §X.3). Saying so beats
+  // drawing a joint that is not one -- and what to do about it is one more tick.
+  const adrift = !vertexPrimary(v) && vertexOns(v).some(e=>e.join && isLineOn(e));
+  const adriftNote = adrift
+    ? '<p class="muted" style="margin:8px 0 0">Nothing says where this vertex is, so the line it is joined to holds nothing: a line carries points, and its own position is read off the points on it. Join it to a body as well &mdash; or to the background &mdash; and it becomes a real joint on the line.</p>' : '';
   return `
     <h3>Vertex ${v.label}</h3><p class="sub">a named point, and the bodies it touches</p>
     <div class="card"><div class="cardhead">label</div>
@@ -386,7 +400,7 @@ function vertexInspectorHTML(v){
       <p class="muted" style="margin:8px 0 0">Moving the vertex re-reads every joined body's own anchor, so the bodies stay where they are and the point moves between them.</p>
     </div>
     <div class="card"><div class="cardhead">bodies at this vertex</div>
-      ${rows || '<p class="muted">none</p>'}${weldNote}
+      ${rows || '<p class="muted">none</p>'}${adriftNote}${weldNote}
       <p class="muted" style="margin:8px 0 0">Everything whose extent covers this point, whether it is held here or not &mdash; the background always, since its extent is the whole plane. Tick <b>joined</b> to hold the vertex to one, untick it to let go; the body stays listed either way, because what is listed is where the point <em>is</em>. Editing a coordinate moves the anchor and asks the assembly to follow.</p>
     </div>
     <button class="del" id="vt_del">Delete vertex</button>`;
