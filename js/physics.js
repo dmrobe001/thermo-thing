@@ -649,12 +649,23 @@ function substep(h){
   const rows=[];
   for(let ci=0;ci<constraints.length;ci++){
     constraints[ci]._rows=[];
+    // ...and what each of those rows IS (constraints.js §06.5 tags every row with a
+    // role and, where the kind has more than one of a role, which end or control
+    // point it belongs to). The reaction readout (projection.js §09.3) then looks a
+    // multiplier up by name instead of re-deriving the row order from the joint's
+    // flags -- arithmetic that was written out once per kind and had to be kept in
+    // step with rowsFor by hand.
+    constraints[ci]._roles=[];
     // A compiled-away constraint contributes nothing: it is the thing that froze
     // the coordinates it touches, so every column it would write is zero
     // (constraints.js §06.2b). Skipping it keeps a row of zeros out of the Schur
     // complement, where only the Tikhonov term would have kept it solvable.
     if(constraints[ci]._compiled) continue;
-    for(const r of rowsFor(constraints[ci])){ constraints[ci]._rows.push(rows.length); rows.push(r); }
+    for(const r of rowsFor(constraints[ci])){
+      constraints[ci]._rows.push(rows.length);
+      constraints[ci]._roles.push([r.role, r.at]);
+      rows.push(r);
+    }
   }
   for(const cb of cables){
     if(cb._active){

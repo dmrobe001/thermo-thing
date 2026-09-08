@@ -50,7 +50,7 @@ function restoreState(){
   // restored geometry's raw atan2, matching how restAngA/B were themselves
   // captured from a fresh, un-accumulated angle. Mirrors cables' _spoolAngle
   // reset below.
-  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._phiRef=undefined; });
+  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._roles=[]; c._phiRef=undefined; });
   cables.forEach(c=>{
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
     c._Lallow=null; c._spoolAngle=undefined;

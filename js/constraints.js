@@ -13,6 +13,9 @@
 //  the §09 projection uses C directly. Same rows serve both.
 //    §06.1  bodyIndex, epWorld, twoPointFrame, endpointAngleLockRow, and the
 //           rod/slot constructors and endpoint-lock toggles built on them
+//    §06.1b the LINE frame (lineFrameOf, frameAngleRow) -- a straight bar's own
+//           frame, derived from its two endpoints and owning no coordinates. The
+//           third frame kind beside a body's and the background's (VERTEX.md §X.5)
 //    §06.2  the remaining constraint makers (pin, belt, cvt, knife, cable)
 //    §06.2b derived freezing (rodGrounds, rodLocksLength, refreshFrozen) and the
 //           recaptures that follow a hand move (recaptureConAngles/recaptureConPose)
@@ -84,29 +87,73 @@ function twoPointFrame(con){
   con._phiRef=phi;
   return {hasA,hasB,A,B,ia,ib,epA,epB,wax,way,rax,ray,wbx,wby,rbx,rby,ux,uy,nx,ny,L,phi};
 }
-// One row locking `which` end's frame angle -- a body's theta, or 0 for a
-// background end -- to the live direction phi of the segment from B to A.
-// Shared by rod's weld and slot's prismatic lock: both are the same
-// operation (pin an endpoint's rotation to the line joining the two
-// endpoints), just attached to different base constraints.
-// The row measures  d/dt(theta_here - phi), with phi the A->B segment's world angle.
-// Since dphi/dt = n.(vA - vB)/L, that is the endpoint's own angular-velocity column
-// minus (1/L) times the two endpoints' velocity columns along the segment normal --
-// which is exactly what the closures below build. This is the same row the previous
-// hand-assembled version produced for two plain bodies, and the correct one for a
-// vessel endpoint, whose velCols carries the extra length column.
-// `here` is the endpoint whose rotation is being locked -- epA or epB for the base
-// pair, or an extra control point's own frame (§06.2c), which is why this takes an
-// endpoint rather than the 'A'/'B' selector its two callers used to pass.
+// ---- §06.1b · the LINE frame (a frame with no coordinates of its own) ----
+// A rod, a slot and a rack are all a straight massless bar, and a bar has a FRAME:
+// a heading, and a material point at every station along it. What it does not have
+// is coordinates -- its pose is a function of the two endpoints that define it, so
+// nothing about it is integrated, stored, snapshotted or given an inverse mass.
+//
+// `lineFrameOf` is that frame, and it answers the same two questions epFrame (§06.1)
+// answers for a body and for the background:
+//
+//   angCols()             the columns of the frame's own ANGLE
+//   minusPointAlong/Across  the columns of the frame's material point at (s, t),
+//                         negated, since every caller measures something relative
+//                         to it (see below)
+//
+// Three frame kinds, one interface: a body's angle column is its own theta, the
+// background's is nothing at all (a fixed world frame), and a line's is the pair of
+// endpoint closures below. That is the whole reason this exists as an object rather
+// than as arithmetic inlined into the three row builders that used to each carry
+// their own copy of it. See VERTEX.md §X.5.
+//
+// The angle. dphi/dt = n.(v_a - v_b)/L, so the line's angular column is (1/L) times
+// the two endpoints' velocity columns along the segment normal -- which is what the
+// closures build, and which is correct unchanged for a vessel endpoint, whose
+// velCols carries the extra length column.
+//
+// The material point at (station s along u, lateral t along n) has world position
+// P = P_a + s*u + t*n, and since u and n turn with the bar (du/dt = w*n,
+// dn/dt = -w*u), its velocity is v_a + w*(s*n - t*u). Probed along u that is
+// v_a.u - w*t; probed along n it is v_a.n + w*s. Those two are the whole of what the
+// point-on-line and station rows need, and they are returned NEGATED because both
+// rows measure a real point's motion RELATIVE to the bar's material point under it.
+// Returned as a LIST of column arrays rather than pre-merged, so the caller merges
+// once, flat -- which is what keeps a row's summation order (and so its last bit)
+// exactly what it was before this frame was factored out.
+function lineFrameOf(f){
+  const {epA,epB,ux,uy,nx,ny,L,phi} = f;
+  let w=null;
+  const angCols = () => (w || (w = mergeCols([ epA.velCols(nx/L, ny/L),
+                                               epB.velCols(-nx/L, -ny/L) ])));
+  return {
+    th: phi,
+    angCols,
+    // Where a world point sits in the bar's own frame: [station, lateral], both
+    // measured from end a. The lateral is zero for any point the rows are holding.
+    localOf: (wx,wy) => { const Dx=wx-f.wax, Dy=wy-f.way;
+                          return [ux*Dx+uy*Dy, nx*Dx+ny*Dy]; },
+    minusPointAlong:  (s,t) => [ epA.velCols(-ux,-uy), scaleCols(angCols(),  t) ],
+    minusPointAcross: (s,t) => [ epA.velCols(-nx,-ny), scaleCols(angCols(), -s) ],
+  };
+}
+// One row tying `here`'s frame angle to `there`'s, offset by a captured rest angle.
+// `here` is an endpoint (a body's theta, or the fixed world zero for a background
+// end) and `there` is the line frame above -- so this is "pin this end's rotation to
+// the bar's heading", which is the ONE row that today appears under five names: a
+// rod's and a rack's weldA/weldB, a slot's prismaticA/prismaticB, and an extra
+// control point's lock (§06.2c). Written against two frames rather than against a
+// segment, it is also the row a vertex will build between any two frames meeting at
+// it (VERTEX.md §X.5), which is why it takes frames and not a constraint.
+function frameAngleRow(here, there, restAng){
+  const cols = mergeCols([ scaleCols(there.angCols(), -1), here.angCols() ]);
+  return { cols, C: here.th-there.th-restAng };
+}
+// The same row, reached from a constraint's twoPointFrame -- what the rod, slot and
+// rack branches of rowsFor call. `here` is epA or epB for the base pair, or an extra
+// control point's own frame.
 function pointAngleLockRow(f, here, restAng){
-  const {epA,epB,nx,ny,L,phi} = f;
-  const k = -1/L;
-  const cols = mergeCols([
-    epA.velCols(k*nx, k*ny),
-    epB.velCols(-k*nx, -k*ny),
-    here.angCols()
-  ]);
-  return { cols, C: here.th-phi-restAng };
+  return frameAngleRow(here, lineFrameOf(f), restAng);
 }
 function endpointAngleLockRow(which, f, restAng){
   return pointAngleLockRow(f, which==='A' ? f.epA : f.epB, restAng);
@@ -855,33 +902,32 @@ function cableCurrentLength(cb, f){
 // whether the point also holds its place along the line (a rod's and a rack's do; a
 // slot's riders slide).
 //
-// The point is held at  P_k = P_a + s*u,  with u the live a-b heading, so the rows
-// are the two components of that in the line's own frame:
+// Both rows say the same thing: the point does not move relative to the BAR'S OWN
+// MATERIAL POINT under it -- laterally always, and along the line too when it holds
+// a station. So both are the point's own velocity columns minus that material
+// point's, which is exactly what lineFrameOf's minusPoint* closures return (§06.1b);
+// the bar's rotation term the two rows carry is the frame's angCols, not arithmetic
+// this routine owns. `at` is the point's index in con.pts, carried on the rows so
+// the reaction readout (§09.3) can find a multiplier by name instead of counting.
 //
 //   lateral      C = n . (P_k - P_a)          -- on the line
 //   longitudinal C = u . (P_k - P_a) - s      -- at its station
 //
-// Differentiating picks up the line's own rotation, since u and n turn with it:
-// du/dt = w*n and dn/dt = -w*u, where w = n.(v_a - v_b)/L is the bar's angular rate
-// (the same dphi/dt endpointAngleLockRow uses). That is the third term in each row,
-// and it is why the columns are a scaled combination of the endpoint closures rather
-// than a plain difference -- one place scaleCols exists for.
 // `unlocked` overrides the point's own rotation lock -- the pose-time release
 // (§06.2d) makes every rider a pin, whatever the lock the rod holds it by when it
 // is rigid again.
-function linePointRows(con, f, pt, station, unlocked){
-  const K=epFrame(pt.ep);
-  const Dx=K.wx-f.wax, Dy=K.wy-f.way;
-  const du=f.ux*Dx+f.uy*Dy, dn=f.nx*Dx+f.ny*Dy;
-  // The bar's angular-rate columns, w = n.(v_a - v_b)/L.
-  const wCols=mergeCols([ f.epA.velCols(f.nx/f.L, f.ny/f.L), f.epB.velCols(-f.nx/f.L, -f.ny/f.L) ]);
+function linePointRows(con, f, pt, station, unlocked, at){
+  const K=epFrame(pt.ep), LF=lineFrameOf(f);
+  const [du,dn]=LF.localOf(K.wx, K.wy);
   const rows=[{
-    cols: mergeCols([ K.velCols(f.nx,f.ny), f.epA.velCols(-f.nx,-f.ny), scaleCols(wCols,-du) ]),
-    C: dn }];
+    cols: mergeCols([ K.velCols(f.nx,f.ny), ...LF.minusPointAcross(du,dn) ]),
+    C: dn, role:'online', at }];
   if(station) rows.push({
-    cols: mergeCols([ K.velCols(f.ux,f.uy), f.epA.velCols(-f.ux,-f.uy), scaleCols(wCols, dn) ]),
-    C: du-(pt.s||0) });
-  if(pt.lock && !unlocked) rows.push(pointAngleLockRow(f, K, pt.restAng||0));
+    cols: mergeCols([ K.velCols(f.ux,f.uy), ...LF.minusPointAlong(du,dn) ]),
+    C: du-(pt.s||0), role:'station', at });
+  if(pt.lock && !unlocked){
+    const r=pointAngleLockRow(f, K, pt.restAng||0); r.role='weld'; r.at=at; rows.push(r);
+  }
   return rows;
 }
 
@@ -909,8 +955,17 @@ function linePointRows(con, f, pt, station, unlocked){
 // Every one of pin, rod, slot and rack may carry EXTRA CONTROL POINTS on top of the
 // above (§06.2c): +2 per point on a pin or a rod, +1 on a slot, +2 on a rack's
 // jointed point, and +1 more wherever that point is rotation-locked. Their rows are
-// always appended after the base pair's, which is what lets §09.3 keep reading the
-// pair's multipliers off fixed indices.
+// always appended after the base pair's.
+//
+// EVERY ROW CARRIES A ROLE -- dist, weld, online, station, lateral, mesh, pin, belt,
+// cvt, knife -- and, where a kind has more than one row of a role, an `at` naming
+// which end ('A'/'B') or which control point (its index in con.pts). physics.js
+// §08.3 records them beside the multipliers, and the reaction readout (§09.3) looks
+// one up by name. It used to count instead: every branch of §09.3 re-derived this
+// section's row ORDER from the joint's own flags, which is the same arithmetic
+// written out four times, in another file, that nothing checked against the rows it
+// described -- so adding a row to a kind silently moved every readout after it.
+// A new row needs a role; tools/frame-check.js fails if you skip this.
 // (Cable rows are built inline in §08.2, not here, because they are unilateral.)
 function rowsFor(con){
   // Each row carries the raw position error C (the value to drive to zero). The
@@ -929,25 +984,25 @@ function rowsFor(con){
     const A = bodies[bodyIndex(con.a.id)];
     const ep = epFrame(con.a);
     return [
-      { cols:ep.velCols(1,0), C: ep.wx-con.world[0], soft:true },
-      { cols:ep.velCols(0,1), C: ep.wy-con.world[1], soft:true }
+      { cols:ep.velCols(1,0), C: ep.wx-con.world[0], soft:true, role:'drag' },
+      { cols:ep.velCols(0,1), C: ep.wy-con.world[1], soft:true, role:'drag' }
     ];
   }
   if(con.type==='pin'){
     const A=epFrame(con.a), B=epFrame(con.b);
     const Cx = A.wx-B.wx, Cy = A.wy-B.wy;
     const rows=[
-      { cols: mergeCols([A.velCols(1,0), B.velCols(-1,0)]), C:Cx },
-      { cols: mergeCols([A.velCols(0,1), B.velCols(0,-1)]), C:Cy }
+      { cols: mergeCols([A.velCols(1,0), B.velCols(-1,0)]), C:Cx, role:'pin' },
+      { cols: mergeCols([A.velCols(0,1), B.velCols(0,-1)]), C:Cy, role:'pin' }
     ];
     // Every extra point (§06.2c) is one more body brought to the same pivot: the
     // identical pair of rows, measured against end a. A three-armed hinge is three
     // endpoints on one pin, not two pins stacked at the same place.
-    for(const pt of conPoints(con)){
+    conPoints(con).forEach((pt,at)=>{
       const K=epFrame(pt.ep);
-      rows.push({ cols: mergeCols([K.velCols(1,0), A.velCols(-1,0)]), C:K.wx-A.wx });
-      rows.push({ cols: mergeCols([K.velCols(0,1), A.velCols(0,-1)]), C:K.wy-A.wy });
-    }
+      rows.push({ cols: mergeCols([K.velCols(1,0), A.velCols(-1,0)]), C:K.wx-A.wx, role:'pin', at });
+      rows.push({ cols: mergeCols([K.velCols(0,1), A.velCols(0,-1)]), C:K.wy-A.wy, role:'pin', at });
+    });
     return rows;
   }
   if(con.type==='rod'){
@@ -961,13 +1016,13 @@ function rowsFor(con){
       // point-on-line row: the line IS the segment between them, so such a row would
       // be the same tautology the slot's base pair avoids.
       const rows=[];
-      for(const pt of conPoints(con)) rows.push(...linePointRows(con, f, pt, false, true));
+      conPoints(con).forEach((pt,at)=>rows.push(...linePointRows(con, f, pt, false, true, at)));
       return rows;
     }
     const {ux,uy,L}=f;
     // d/dt|A-B| = u.(vA - vB): the two endpoints' velocity columns along the segment.
     const distCols=mergeCols([f.epA.velCols(ux,uy), f.epB.velCols(-ux,-uy)]);
-    const rows=[{ cols:distCols, C:L-con.len }];
+    const rows=[{ cols:distCols, C:L-con.len, role:'dist' }];
     // A welded end locks its body's angle (or, for a background end, the
     // fixed world frame) to the rod's own direction phi -- see
     // endpointAngleLockRow. phi is recomputed fresh each step (not
@@ -975,13 +1030,13 @@ function rowsFor(con){
     // spins through more than ~half a turn between steps can see its
     // Baumgarte bias jump -- fine for the intended use (fixed/rigid
     // attachments), not for a fast-spinning weld.
-    if(con.weldA) rows.push(endpointAngleLockRow('A', f, con.restAngA));
-    if(con.weldB) rows.push(endpointAngleLockRow('B', f, con.restAngB));
+    if(con.weldA) rows.push(Object.assign(endpointAngleLockRow('A', f, con.restAngA), {role:'weld', at:'A'}));
+    if(con.weldB) rows.push(Object.assign(endpointAngleLockRow('B', f, con.restAngB), {role:'weld', at:'B'}));
     // Extra control points (§06.2c) ride the bar as rigid attachments: on the line,
     // and at their own captured station along it. Two rows each -- see linePointRows
     // -- plus the same angle lock a welded end gets, and appended AFTER the base
     // rows so §09.3's row-order walk over the pair is untouched by them.
-    for(const pt of conPoints(con)) rows.push(...linePointRows(con, f, pt, true));
+    conPoints(con).forEach((pt,at)=>rows.push(...linePointRows(con, f, pt, true, false, at)));
     return rows;
   }
   if(con.type==='slot'){
@@ -1004,8 +1059,8 @@ function rowsFor(con){
     // anchor well outside the slider's range of travel.
     const f=twoPointFrame(con);
     const rows=[];
-    if(con.prismaticA) rows.push(endpointAngleLockRow('A', f, con.restAngA));
-    if(con.prismaticB) rows.push(endpointAngleLockRow('B', f, con.restAngB));
+    if(con.prismaticA) rows.push(Object.assign(endpointAngleLockRow('A', f, con.restAngA), {role:'weld', at:'A'}));
+    if(con.prismaticB) rows.push(Object.assign(endpointAngleLockRow('B', f, con.restAngB), {role:'weld', at:'B'}));
     if(con.prismaticA && con.prismaticB){
       // Lateral lock: kill point A's drift off the rail, whose direction is
       // tracked live via B's frame (theta_B - restAngB) rather than
@@ -1027,7 +1082,7 @@ function rowsFor(con){
         epA.velCols(rnx,rny), epB.velCols(-rnx,-rny),
         hasB?[[ib,0,0,-dDot,0]]:[]
       ]);
-      rows.push({ cols, C: rnx*Dx+rny*Dy });
+      rows.push({ cols, C: rnx*Dx+rny*Dy, role:'lateral' });
     }
     // Extra control points (§06.2c) are RIDERS on the rail, not definitions of it:
     // each gets the point-on-line row unconditionally (that is what riding means)
@@ -1036,7 +1091,7 @@ function rowsFor(con){
     // end's railAngle -- the tautology that forced the base pair's row to use
     // railAngle does not arise, because a rider is a third point, not one of the two
     // the segment is drawn between.
-    for(const pt of conPoints(con)) rows.push(...linePointRows(con, f, pt, false));
+    conPoints(con).forEach((pt,at)=>rows.push(...linePointRows(con, f, pt, false, false, at)));
     return rows;
   }
   if(con.type==='belt'){
@@ -1045,7 +1100,7 @@ function rowsFor(con){
     const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     const ia=bodyIndex(con.a.id), ib=bodyIndex(con.b.id), s=con.sense;
     const C=(con.rA*A.th - s*con.rB*B.th) - con.restPhase;
-    return [{ cols:[[ia,0,0,con.rA],[ib,0,0,-s*con.rB]], C }];
+    return [{ cols:[[ia,0,0,con.rA],[ib,0,0,-s*con.rB]], C, role:'belt' }];
   }
   if(con.type==='knife'){
     // no-side-slip (Chaplygin knife edge): the contact point's velocity across the
@@ -1053,7 +1108,7 @@ function rowsFor(con){
     const A=bodies[bodyIndex(con.a.id)];
     const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
     const nx=-hh[1]/hl, ny=hh[0]/hl;                 // lateral normal to heading
-    return [{ cols:epFrame(con.a).velCols(nx,ny), C:0, nh:true }];
+    return [{ cols:epFrame(con.a).velCols(nx,ny), C:0, nh:true, role:'knife' }];
   }
   if(con.type==='cvt'){
     // rolling contact at P = the point on A's rim nearest B. Match the two bodies'
@@ -1064,7 +1119,7 @@ function rowsFor(con){
     let rvx=B.x-A.x, rvy=B.y-A.y; const d=Math.hypot(rvx,rvy)||1e-6;
     const ux=rvx/d, uy=rvy/d; const tx=-uy, ty=ux;   // tangent at contact
     const rA=A.r, armB=d-rA;
-    return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true }];
+    return [{ cols:[[ia, tx, ty, rA],[ib, -tx, -ty, armB]], C:0, nh:true, role:'cvt' }];
   }
   if(con.type==='rack'){
     // The rack line, its two pins, and everything meshed with or jointed to it.
@@ -1074,14 +1129,14 @@ function rowsFor(con){
     // rod's weld and a slot's prismatic lock build, against the same phi. With both
     // pins on one body the row is identically zero (the body already fixes phi), so
     // the arrangement costs nothing beyond a multiplier the regularizer zeroes.
-    if(con.weldA) rows.push(endpointAngleLockRow('A', f, con.restAngA));
-    if(con.weldB) rows.push(endpointAngleLockRow('B', f, con.restAngB));
-    for(const pt of conPoints(con)){
+    if(con.weldA) rows.push(Object.assign(endpointAngleLockRow('A', f, con.restAngA), {role:'weld', at:'A'}));
+    if(con.weldB) rows.push(Object.assign(endpointAngleLockRow('B', f, con.restAngB), {role:'weld', at:'B'}));
+    conPoints(con).forEach((pt,at)=>{
       if(pt.kind!=='pinion'){
         // A jointed point is fixed to the rack exactly as a rod's extra point is
         // fixed to its bar: on the line, at its captured station (§06.2c).
-        rows.push(...linePointRows(con, f, pt, true));
-        continue;
+        rows.push(...linePointRows(con, f, pt, true, false, at));
+        return;
       }
       // Rolling contact between the rack and this pinion at Q, the foot of the
       // perpendicular from the pinion's centre to the rack line: the two materials
@@ -1100,10 +1155,10 @@ function rowsFor(con){
       // against a straight rack instead of a second rim.
       // rho is a live coordinate (it changes as either body moves, and as the rack
       // swings), so this row is NONHOLONOMIC exactly as the CVT's is.
-      const g=rackPitch(f, pt); if(!g) continue;
+      const g=rackPitch(f, pt); if(!g) return;
       const cols=mergeCols([ f.epA.velCols(f.ux,f.uy), [[g.ib, -f.ux, -f.uy, -g.rho]] ]);
-      rows.push({ cols, C:0, nh:true });
-    }
+      rows.push({ cols, C:0, nh:true, role:'mesh', at });
+    });
     return rows;
   }
   return [];

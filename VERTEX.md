@@ -130,53 +130,65 @@ small sign the factoring is right.
 
 ## X.4 The line
 
-> A **line** is a body: a straight, massless, infinite bar. Its frame is not stored;
-> it is **derived** from the vertices joined to it.
+> A **line** is a body: a straight, massless bar. Its frame is not stored; it is
+> **derived** from the vertices joined to it.
 
 A line has a label, a set of joints (which are just the vertices whose list contains
-it), an inverse elastic modulus, and a `posable` flag. It has no endpoints, no
+it), a compliance, and a `posable` flag. It has no endpoints, no
 length field, no rest angles, and no `pts` array. Everything that used to live on a
 `rod`, `slot` or `rack` lives on the incidences instead.
 
-**Order along the line is geometric, not stored.** Joints are ordered by their
-**station** -- signed distance from the line's origin along its heading. That is
-already the quantity `pt.s` captures (§06.2c); making it the ordering means the file
-carries no arbitrary index, a joint dragged past another simply reorders, and
-"consecutive" in the inspector means what it looks like it means.
+**Order along the line is geometric, not stored.** Joints are ordered by where they
+project onto the line's own heading. That needs no material origin, so it is defined
+for a line that has none; where there is one, it is the station `pt.s` already
+captures (§06.2c). Ordering geometrically means the file carries no arbitrary index,
+a joint dragged past another simply reorders, and "consecutive" in the inspector
+means what it looks like it means.
 
-**The frame.** Two joints define it:
+**Two things are derived from the joints, and they are not the same thing.** Every
+joined joint lies *on* the line -- that is what joining to a line means -- and
+`slide` says only whether it additionally holds a **station**, a material position
+along the bar. So:
 
-- the **origin** `O` -- the first non-sliding joint in station order. It is the one
-  material point of the bar that is located. (If every joint slides, the bar is
-  undetermined; see below.)
-- the **aim** `A` -- the joint furthest from `O` in station order. It gives the
-  heading. The longest available baseline, which is strictly better conditioned than
-  today's rod, whose frame is whichever two ends the tool happened to place first.
-
-This is the rack's asymmetry (§06.2, "a pins the rack, b only aims it") promoted to
-the general rule, and it is *forced*: a station is a distance from a material origin,
-so an origin that slides would make every station meaningless.
+- the line's **placement** -- where it is and which way it points -- comes from the
+  two joints furthest apart, `P` and `Q`, sliding or not. The longest available
+  baseline, which is better conditioned than today's rod, whose frame is whichever
+  two ends the tool happened to place first. (Below a tolerance apart, the next
+  furthest pair; a line with fewer than two joints has no direction and no
+  existence.)
+- the line's **material origin** `O` -- the first non-sliding joint in station
+  order -- exists only when some joint does not slide, and is what stations are
+  measured from. A station is a distance from a material point, so an origin that
+  slid would make every station meaningless. This is the rack's asymmetry
+  (§06.2, "a pins the rack, b only aims it") promoted to the general rule.
 
 **Rows.** With joints `J1..Jn` in station order:
 
 | Joint | Rows |
 |---|---|
-| `O` | none |
-| `A` | 1 station row, if `A` does not slide |
-| any other `Jk` | 1 on-line row; + 1 station row if it does not slide |
+| `P`, `Q` -- the two that place the line | none: they *are* the line |
+| any other joint | 1 on-line row |
+| each non-sliding joint except `O` | 1 station row -- its distance from `O` is held |
 | a meshing disk | 1 nonholonomic mesh row |
 
-`A` gets no on-line row because it is a tautology -- the line is drawn *through* `A`.
-That single omission is the whole difference between today's rod (`O` and `A` both
-held: 1 distance row) and today's slot (`A` slides: 0 rows, "purely visual"), and the
-degenerate case falls out with no branch: **a line all of whose joints slide has no
-origin, no rows, and no defined pose -- it is inert, exactly as a two-pin slot is
-today.**
+**Every joint slides by default.** A fresh two-joint line is `P` and `Q` and nothing
+else: **zero rows, a drawn guide** -- exactly what a two-pin slot is today. A third
+tap adds one on-line row, and that is a rail with a rider. Untick `slide` on two
+joints and the distance between them is held, and that is a rod. The three cases
+are one object with no branch between them, and the common one -- laying out a rail
+and dropping things onto it -- is the one that needs no ticking and asks the solver
+for nothing.
 
-The rows themselves are `linePointRows` (§06.2c) with `(O, A)` in place of `(a, b)`,
-unchanged. The mesh row is the rack's pinion row (§06.5), unchanged, and it still
-reads the rack's tangential speed off `O`'s columns -- which is correct precisely
-because `O` is now *defined* to be non-sliding.
+**Extent is derived, and there are no end stops.** All joints non-sliding: the line
+is a **bar**, drawn finite between its extreme joints. Any joint slides: it is a
+**rail**, drawn infinite to the viewport edge. No field says which. Nothing clamps
+travel either -- a slider may always pass a non-slider, or a slider that happens to
+be stationary.
+
+The rows themselves are `linePointRows` (§06.2c) with `(O, P..Q)` in place of
+`(a, b)`, unchanged. The mesh row is the rack's pinion row (§06.5), unchanged, and it
+still reads the rack's tangential speed off the material origin -- which is correct
+precisely because `O` is now *defined* to be non-sliding.
 
 **Weld rows do not appear in this table**, and that is the point: a line's welds are
 its incidences' welds, held by the vertices they sit at (`§X.5`). The four names for
@@ -184,11 +196,11 @@ one row collapse to zero names.
 
 **The segment distances.** Consecutive non-sliding joints have a fixed distance
 between them -- `station(k) - station(k-1)` -- and that is what the inspector lists
-and what the file writes. Stations are relative, so the first non-sliding joint is
-station 0 by definition and the segments give the rest. Editing a segment shifts
-every station after it. A rod's `len` is the one-segment case of this.
+and what the file writes. Stations are relative, so `O` is station 0 by definition
+and the segments give the rest. Editing a segment shifts every station after it. A
+rod's `len` is the one-segment case of this.
 
-**The line's own angle.** `phi`, the `O -> A` heading, unwrapped against `_phiRef`
+**The line's own angle.** `phi`, the `P -> Q` heading, unwrapped against `_phiRef`
 exactly as `twoPointFrame` does today (§06.1) and for exactly the same reason.
 
 ---
@@ -258,11 +270,11 @@ than a rod reports today.
 
 ## X.6 Compliance: where the spring goes
 
-> A line carries an **inverse elastic modulus**, `soft`. Zero -- the default -- means
-> the axial relation is a constraint. Above zero it is a force.
+> A line carries a **compliance**, `soft` -- the inverse of a stiffness. Zero -- the
+> default -- means the axial relation is a constraint. Above zero it is a force.
 
 With `soft > 0`, every **station** row is dropped and replaced by an axial force
-element between consecutive non-sliding joints, `F = (L - L0) / (soft * L0)`, in the
+element between consecutive non-sliding joints, `F = (L - L0) / soft`, in the
 solve's applied-force pass (§08.1) beside the springs, with its strain energy in the
 ledger (§12) so the per-island conservation target stays honest. The **on-line** rows
 stay: a soft line still is a line, and its riders still ride it.
@@ -277,8 +289,12 @@ Two consequences fall out, and both are the good kind:
   carrying a rider, or two bodies sprung apart along a rail they both sit on. Getting
   it for nothing is the usual sign.
 
-`soft` is `1/(EA)` -- per unit length, so a long line is softer at the same modulus,
-which is what calling it a modulus commits us to. `§X.13` lists the alternative.
+`soft` is a plain **compliance**, `1/k` in m/N -- not a true modulus. A modulus
+(`1/(EA)`, so a long segment is softer at the same value) is the more physical
+reading, and it was rejected because a value you can think about beats one you have
+to derive: `soft = 0.01` is a segment that gives a centimetre per newton, whatever
+it is a segment of, and editing a rod's length does not quietly change its
+stiffness.
 
 The draggable rest-length handle (`springRestHandlePos`, §06.6) generalizes to one
 handle per segment.
@@ -314,15 +330,16 @@ Under that reading:
   (§06.6) already picks between drawing a *belt* and drawing a *spiral*: the code
   guessed the unification before the model had it.
 
-This is not speculative. It was built once, on this branch's history, and reverted
-whole: commit `03c163b`, "Redesign the belt as a closed loop of wheels and eyelets"
--- nodes in `con.pts`, one material-balance row per segment, a per-node `wrap` side
-replacing the single `crossed` flag, compliance turning the rows into a tension force
-element, and `tools/belt-check.js` checking the path against the textbook two-pulley
-closed form. `CABLE.md` §C.2 and §C.5 already argue the same collapse from the other
-end (a bare tether is a spool of radius 0; a point-to-point cable is a rod). The work
-to do here is to rebuild that on the vertex model -- nodes are vertices -- rather than
-to invent it.
+An earlier attempt at the belt half of this exists in the branch's history and was
+reverted whole. **It is not a foundation and must not be read as one** -- neither its
+diff nor its reasoning should inform this design, because a flawed derivation that
+gets copied forward is worse than no derivation at all. The strand is to be worked
+out from first principles when phase 3 comes up, against `CABLE.md` §C.2 and §C.5,
+which already argue the same collapse from the other end (a bare tether is a spool of
+radius 0; a point-to-point cable is a rod) and which were written independently of
+that attempt.
+
+That is also why phase 3 is last and why nothing in phases 0-2 depends on it.
 
 The decision it explains: a line's joint order is derived from geometry and a
 strand's is stored, because on a line "which side of you is it" is a fact about
@@ -400,20 +417,24 @@ slash-separated options:
 
 ```
 on=1@(0.2,-0.1)/join/weld       a body-frame point, held, and rigid
-on=5/join/slide                 on line 5, free to travel along it
+on=5/join                       on line 5, free to travel along it (the default)
+on=5/join/fix                   ...held at its place along line 5 instead
 on=bg(0,4.4)/join               a ground pin
 on=3@(0,0.5)                    a feature point: marked, not held
 on=5/join/weld/restAng=1.5708   a weld, with its captured rest angle
 ```
 
-`seg=` is repeatable and gives the distances between consecutive non-sliding joints,
-in station order -- the same list the inspector shows. `mesh=` is repeatable and
-names the disks meshing with the line, replacing `pt=<body>/pinion`.
+The word is `fix`, not `slide`, because sliding is the default (`§X.4`) and the
+format writes what differs from the default. `seg=` is repeatable and gives the
+distances between consecutive non-sliding joints, in station order -- the same list
+the inspector shows, and absent entirely on a line that has fewer than two of them.
+`mesh=` is repeatable and names the disks meshing with the line, replacing
+`pt=<body>/pinion`.
 
 Classification, in `SCENE.md` §S.3's terms: an incidence's `off`, `join`, `weld` and
-`slide` are **authored**; `restAng` and `seg` are **captured** (`always:true`,
-written every time -- they are read off the geometry at creation and the pose no
-longer implies them); a line's frame, its joint order, its stations, every world
+`fix` are **authored**; `restAng` and `seg` are **captured** (`always:true`, written
+every time -- they are read off the geometry at creation and the pose no longer
+implies them); a line's frame, its joint order, its extent, its stations, every world
 position and every rest length derived from a segment are **derived** and never
 written.
 
@@ -426,34 +447,35 @@ holding an old file. The eleven examples are regenerated through it and re-canon
 two were: the world the converter produces must agree with the world the old reader
 produced, field for field, and over three seconds of real substeps.
 
-The pendulum, as version 4 writes it:
+The pendulum, as version 4 writes it. Both joints are `fix`, which is what makes the
+line a bar rather than a rail; nothing is welded, so it hinges at both ends -- which
+is now the default rather than something to untick:
 
 ```
 scene 4
-# A disk on a rigid bar, swinging from a fixed point. Nothing is welded, so the bar
-# hinges at both ends -- which is now the default rather than something to untick.
 sim gravity=on
 cam x=0 y=2.6 scale=64
 
 # bodies
 disk 1 x=2.6 y=4.4 r=0.38
-line 2
+line 2 seg=2.6
 
 # vertices
-vertex A on=bg(0,4.4)/join on=2/join/weld
-vertex B on=1/join on=2/join/weld
+vertex A on=bg(0,4.4)/join on=2/join/fix
+vertex B on=1/join on=2/join/fix
 ```
 
 and the slider-crank's rail, which the version-3 file has to place ten metres out to
-dodge a singularity (`js/examples.js`, `crank:`), stops needing the trick -- two
+dodge a singularity (`js/examples.js`, `crank:`), stops needing the trick. Two
 background vertices fix the rail's heading outright, so nothing is holding a raw
-`atan2` any more:
+`atan2` any more -- and since every joint on it slides, not one of them writes an
+option at all:
 
 ```
-line 6                                  # the rail
-vertex D on=bg(-4,2.4)/join on=6/join/weld
-vertex E on=bg(4,2.4)/join  on=6/join/weld
-vertex C on=2/join/weld     on=6/join/slide/weld    # the piston, riding it
+line 6                                  # the rail -- no seg=, nothing is fixed to it
+vertex D on=bg(-4,2.4)/join on=6/join
+vertex E on=bg(4,2.4)/join  on=6/join
+vertex C on=2/join/weld     on=6/join/weld    # the piston, riding it, angle held
 ```
 
 ---
@@ -468,12 +490,15 @@ vertex C on=2/join/weld     on=6/join/slide/weld    # the piston, riding it
   existing vertex, it selects it.
 - **line (`l`)**, with a **new / extend** toggle in the header, the way the transport
   controls already carry state:
-  - **new** -- tap vertices in turn. The first two become the bar; each further tap
-    joins that vertex to the line as a **sliding** rider and runs
-    `projectPositions` to bring it onto the line, which is the "quick solve" the
-    brief asks for and is code that already exists (§09.1). Tapping empty space
-    places a vertex there first. Overlapping lines are ordinary -- three lines
-    sharing four vertices is how you build rigid carriages on a shared rail.
+  - **new** -- tap vertices in turn. Every joint is created **sliding**, so the
+    first two place the line and ask nothing of the solver, and each further tap
+    runs `projectPositions` to bring that vertex onto the line -- the "quick solve",
+    and code that already exists (§09.1). Only from the third tap is there anything
+    to solve, which is also the only point at which a vertex might be somewhere the
+    line is not: drop the bodies roughly where you want them, then say they are in
+    a line. Tapping empty space places a vertex there first. Overlapping lines are
+    ordinary -- three lines sharing four vertices is how you build rigid carriages
+    on a shared rail.
   - **extend** -- tap an existing line, then tap vertices to join them to it, as
     sliding riders, same quick solve.
   - Every joint the tool creates is welded **on the line's own incidence** and not on
@@ -517,11 +542,24 @@ one, since rest angles now live on incidences.
 
 Each phase leaves the bench working, the examples loading and the validators green.
 
-**Phase 0 -- the frame seam.** Generalize `epFrame` (§06.1) into `frameOf`, with the
-three cases of `§X.5`, and tag every row with its role and joint index so
-`reactionOf` (§09.3) looks up instead of counting. No new objects, no format change,
-no behaviour change. `tools/scene-roundtrip.js` and `tools/rack-check.js` must pass
-untouched -- that is the phase's whole test.
+**Phase 0 -- the frame seam. `[done]`** `lineFrameOf` (§06.1b) is the line's own
+frame: `angCols` for its heading, and its material point at any `(station, lateral)`,
+both derived from the two endpoints and owning no coordinates. `frameAngleRow` is the
+one row that ties two frames' angles, which is what `weldA`, `weldB`, `prismaticA`,
+`prismaticB` and `pt.lock` all were. Every row now carries a `role` and, where a kind
+has more than one of a role, an `at`; physics records them beside the multipliers and
+`reactionOf` (§09.3) looks one up instead of re-deriving row order from the joint's
+flags in a second file. New validator `tools/frame-check.js`, which checks the frame
+against a finite difference of the live geometry.
+
+No new objects, no format change, and the arithmetic is unchanged but for one thing
+worth recording: the weld row used to form the reciprocal as `(-1/L)*n` and the
+point-on-line rows as `n/L`, two roundings against one. Unified on the single-rounding
+form, weld rows moved by **under one ulp** -- verified row by row across every bundled
+example and five synthetic benches covering every weld, lock, pinion and vessel
+endpoint, with everything else bit-identical. The reaction readout was checked
+separately and harder: for every joint on every bench, the role lookup resolves to the
+*same multiplier index* the old counting reached.
 
 **Phase 1 -- vertices.** The `vertices` array, incidences, labels on everything, the
 vertex tool, the vertex and body panels, vertex rendering, the `vertex` line in the
@@ -553,33 +591,33 @@ lost. Do not let phase 2's design bend to accommodate this.
 
 ---
 
-## X.13 Decisions still open
+## X.13 Decisions, settled and open
 
-1. **What a fresh line's joints default to.** The brief reads two ways: "each new
-   selection constrains the new vertex to fall on the line" suggests every joint
-   slides, and "for each pair of consecutive non-sliding joints the inspector lists
-   the distance" suggests some do not. `§X.11` assumes **the first two joints do not
-   slide and every later one does**, so two taps give a rod and three give a rod with
-   a rider -- which is also the only reading under which "a quick solve makes them
-   colinear" has anything to do (the first two are trivially colinear). Worth
-   confirming, because it is the most-used gesture in the editor.
-2. **Whether `soft` is a modulus or a compliance.** `§X.6` takes it as `1/(EA)`, so a
-   long segment is softer at the same value. The alternative -- a plain `1/k` in m/N
-   -- makes a segment's rate independent of its length, which is less physical but
-   means that editing a rod's length does not change its stiffness.
-3. **One namespace for labels, or two.** `§X.8` puts vertices and bodies in one, so
-   expressions are unambiguous. Two namespaces would let a vertex be `A` and a body
-   be `A`, at the cost of qualifying every expression name.
-4. **How much of the strand to specify now.** `§X.7` sketches it and `03c163b`
-   implements most of it, but the rotational-spring-as-compliant-strand claim in
-   particular deserves a worked check (that `k_th = r^2/soft` reproduces the current
-   element's energy and rate) before phase 3 commits to it.
-5. **Whether a line should be finite.** Everything above treats a line as infinite,
-   like today's slot and rack, and draws it to the viewport edge. A rod is finite. If
-   lines should carry an extent, it is a pair of authored end stations -- which is
-   also the natural home for the hard end-stops `DEVELOPMENT.md` §4.3 wants.
+Five questions this note originally left open. Four are answered and folded into the
+sections above; the reasoning is kept here because each one moves the design.
 
----
+1. **What a fresh line's joints default to: SLIDING, all of them** (`§X.4`). Rails
+   get placed about as often as rods, so neither should be the privileged one; a
+   line that starts by asking the solver for nothing is the calmer thing to drop
+   onto a bench; and it puts the quick solve exactly where it earns its keep -- the
+   third joint and after, which is the only one that can be somewhere the line is
+   not.
+2. **`soft` is a compliance, `1/k`, not a modulus** (`§X.6`). Easier to think about,
+   and a rod's stiffness stops depending on its length.
+3. **One label namespace** for vertices and bodies (`§X.8`), so an expression name is
+   unambiguous.
+4. **Extent is derived and there are no end stops** (`§X.4`): a line with only
+   non-sliding joints is a finite bar, a line with any slider is an infinite rail,
+   and a moving slider may always pass anything on the line -- including a
+   non-slider, and including a slider that happens to be stationary.
+
+One remains open, and it belongs to the phase that is furthest out:
+
+5. **How much of the strand to specify before building it.** `§X.7` sketches it and
+   says why the earlier attempt is not to be built on. The
+   rotational-spring-as-compliant-strand claim in particular needs a worked check --
+   that a torsional rate falls out of a wrapped compliant strand with the energy and
+   the rate the current element has -- before phase 3 commits to it.
 
 ## X.14 What this does not touch
 
