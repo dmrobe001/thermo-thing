@@ -680,7 +680,11 @@ function pickConstraintOfType(type,wx,wy){
 // Nothing moves for the first two joints, whose own placement defines the line.
 function joinVertexToLine(line, v){
   if(vertexOns(v).some(e=>e.id===line.id)) return false;
+  const [wx,wy]=vertexWorld(v);
   makeVertexOn(v, {id:line.id}, {join:true, slide:true});
+  // A vertex nothing grounds is now CARRIED by this line, which needs the station to
+  // carry it by (constraints.js §06.2e). One that something grounds is unaffected.
+  settleVertex(v, wx, wy);
   projectPositions(12);
   return true;
 }

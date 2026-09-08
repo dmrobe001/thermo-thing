@@ -36,8 +36,13 @@
 //      the station it is given.
 //  11. what "lying on the bar" means, which is a question about the PICTURE: the two
 //      glyphs touching, so the same 4 cm is on the line at one zoom and off it at the
-//      next. Then the gesture the lists exist for -- put a point down, tick it onto a
-//      line and onto a body -- landing on the same assembled bench in either order.
+//      next. Then the gesture the lists exist for -- put a point down and tick it onto
+//      a line and onto a body -- and what the line does with a point nothing else
+//      holds: it CARRIES it, at its station, so the point rides the bar and asks
+//      nothing of it until a body is ticked at the vertex and it becomes an ordinary
+//      joint. Which way the two ticks move things depends on which came first, and
+//      that is the same rule twice rather than an inconsistency: a tick holds what it
+//      finds.
 const fs=require('fs'), path=require('path'), vm=require('vm');
 const ROOT=path.join(__dirname,'..');
 const stubEl = () => new Proxy({}, { get:(t,k)=>
@@ -486,39 +491,93 @@ run(`(()=>{ const v=makeVertex(null); makeVertexOn(v,{id:null,off:[0,0.04]},{joi
      J(`vertexSites(constraints[2]).map(s=>s.id)`).includes(J(`${theBar}.id`)),
      JSON.stringify(J(`vertexSites(constraints[2]).map(s=>s.id)`)));
 }
+// A disk straddling the bar, and a point inside the disk 4px above the bar -- which
+// is the state a tap leaves, and the state from which both ticks are offered.
+const BAR_AND_DISK = `(()=>{ clearScene(); sim.gravity=false; cam.scale=100;
+  const mk=(x,y)=>{ const v=makeVertex(null); makeVertexOn(v,{id:null,off:[x,y]},{join:true}); constraints.push(v); return v; };
+  const L=makeLine(); constraints.push(L);
+  for(const v of [mk(-1,0),mk(1,0)]) makeVertexOn(v,{id:L.id},{join:true,slide:false});
+  bodies.push(makeBody(0.25, 0.15, 0.30)); refreshFrozen();
+  const v=makeVertex(null); makeVertexOn(v,{id:null,off:[0.25,0.04]},{join:false});
+  constraints.push(v); })()`;
+const V='constraints[constraints.length-1]';
 {
-  // The gesture the lists exist for: put a point down, then tick it onto things. A
-  // line is never a locator (§X.3), so joining the line alone makes no joint at all --
-  // and the tick that gives the vertex a body is what brings the row to life and
-  // closes the gap the point was left at.
-  run(BAR);
-  run(`(()=>{ bodies.push(makeBody(0.25, 1.0, 0.2)); refreshFrozen();
-    const v=makeVertex(null); makeVertexOn(v,{id:null,off:[0.25,0.04]},{join:false});
-    constraints.push(v); })()`);
-  const V='constraints[constraints.length-1]';
+  // LINE FIRST. Nothing grounds the point, so the line takes it: it goes onto the bar
+  // and rides there. It is not a joint -- it places nothing and holds nothing, having
+  // no body at it to hold anything with -- so the bar is untouched.
+  run(BAR_AND_DISK);
   run(`setIncidenceJoin(${V}, ${theBar}.id, true)`);
-  ok('joining only the line makes no joint -- nothing says where the point is',
-     J(`lineJoints(${theBar}).length`)===2, String(J(`lineJoints(${theBar}).length`)));
+  ok('joining only the line makes no joint: the line CARRIES the point instead',
+     J(`lineJoints(${theBar}).length`)===2 && J(`!!vertexRide(${V})`)===true,
+     String(J(`lineJoints(${theBar}).length`)));
+  ok('...and the point went onto the bar, which is what riding it means',
+     near(J(`vertexWorld(${V})[1]`), 0, 1e-9), JSON.stringify(J(`vertexWorld(${V})`)));
+  ok('...leaving the disk exactly where it was', near(J('bodies[0].y'), 0.15, 1e-12));
+  // It rides: swing the bar by lifting one of its ground pins and the point goes too.
+  const was=J(`vertexWorld(${V})`);
+  run(`(()=>{ const a=constraints.filter(isVertex)[0]; setVertexWorld(a, -1, 0.5); })()`);
+  const now=J(`vertexWorld(${V})`);
+  ok('...and swinging the bar carries the point with it',
+     Math.abs(now[1]-was[1])>1e-3, JSON.stringify([was,now]));
+  ok('...at the same station on it',
+     near(J(`vertexOns(${V}).find(e=>e.kind==='line').s`),
+          run(`lineStationAt(${theBar}, vertexWorld(${V})[0], vertexWorld(${V})[1])`), 1e-9));
+  run(BAR_AND_DISK);
+  run(`setIncidenceJoin(${V}, ${theBar}.id, true)`);
   run(`setIncidenceJoin(${V}, bodies[0].id, true)`);
-  ok('...and ticking a body at it makes the joint real',
-     J(`lineJoints(${theBar}).length`)===3, String(J(`lineJoints(${theBar}).length`)));
-  ok('...with the solve having closed the gap it was placed at',
-     run(`conMaxC(${theBar})`)<1e-8, String(run(`conMaxC(${theBar})`)));
-  ok('...by bringing the DISK down, the bar being pinned at both ends',
-     near(J('bodies[0].y'), 1.0-0.04, 1e-6), String(J('bodies[0].y')));
+  ok('...and ticking the disk at it makes the joint real',
+     J(`lineJoints(${theBar}).length`)===3 && J(`!!vertexRide(${V})`)===false);
+  ok('...taking the disk at the point, so nothing had to move',
+     run(`conMaxC(${theBar})`)<1e-9 && near(J('bodies[0].y'), 0.15, 1e-12),
+     String(J('bodies[0].y')));
+  ok('...and the station is gone, the joint being an ordinary slider now',
+     J(`vertexOns(${V}).find(e=>e.kind==='line').s===undefined`)===true);
 }
 {
-  // The same two ticks the other way round must land in the same place.
-  run(BAR);
-  run(`(()=>{ bodies.push(makeBody(0.25, 1.0, 0.2)); refreshFrozen();
-    const v=makeVertex(null); makeVertexOn(v,{id:null,off:[0.25,0.04]},{join:false});
-    constraints.push(v); })()`);
-  const V='constraints[constraints.length-1]';
+  // DISK FIRST, which is the other thing that can be ticked, and it lands somewhere
+  // else -- not an inconsistency but the same rule twice: a tick holds what it finds.
+  // Held to the disk, the point cannot move on its own, so the DISK moves to put it
+  // on the line.
+  run(BAR_AND_DISK);
   run(`setIncidenceJoin(${V}, bodies[0].id, true)`);
+  ok('joining the disk first grounds the point there, moving nothing',
+     near(J('bodies[0].y'), 0.15, 1e-12) && near(J(`vertexWorld(${V})[1]`), 0.04, 1e-12));
   run(`setIncidenceJoin(${V}, ${theBar}.id, true)`);
-  ok('body first, then line, ends at the same assembled bench',
+  ok('...and joining the line then brings the DISK to the bar instead',
      J(`lineJoints(${theBar}).length`)===3 && run(`conMaxC(${theBar})`)<1e-8
-       && near(J('bodies[0].y'), 1.0-0.04, 1e-6), String(J('bodies[0].y')));
+       && near(J('bodies[0].y'), 0.15-0.04, 1e-6), String(J('bodies[0].y')));
+}
+{
+  // Letting the body go hands the point back to the line, where it stands.
+  const before=J(`vertexWorld(${V})`);
+  run(`setIncidenceJoin(${V}, bodies[0].id, false)`);
+  const after=J(`vertexWorld(${V})`);
+  ok('releasing the body gives the point back to the line, where it stood',
+     J(`!!vertexRide(${V})`)===true && near(before[0],after[0],1e-9) && near(before[1],after[1],1e-9),
+     JSON.stringify([before,after]));
+  ok('...and it is no longer a joint the bar has to place',
+     J(`lineJoints(${theBar}).length`)===2);
+}
+{
+  // A carried point has no offset anywhere that says where it is -- its station does
+  // -- so dragging it runs it ALONG the bar rather than off it.
+  run(`setVertexWorld(${V}, 0.9, 3)`);
+  ok('dragging a carried point slides it along the bar',
+     near(J(`vertexWorld(${V})[1]`), 0, 1e-9) && near(J(`vertexWorld(${V})[0]`), 0.9, 1e-9),
+     JSON.stringify(J(`vertexWorld(${V})`)));
+}
+{
+  // ...and the file carries the station, `fix` or not: for a rider it is not the
+  // constraint `fix` names but the whole of what says where the point is.
+  const txt=run(`exportScene()`);
+  ok('the file writes a rider as a joined line and a station',
+     /on=\d+\/join\/s=/.test(txt), txt.split('\n').filter(l=>l.startsWith('vertex')).join(' | '));
+  ok('...and it round-trips, with the point still riding where it was',
+     run(`(()=>{ const t=exportScene(); const w=vertexWorld(${V});
+       importScene(t);
+       const v=constraints[constraints.length-1];
+       return t===exportScene() && !!vertexRide(v)
+         && Math.abs(vertexWorld(v)[0]-w[0])<1e-9 && Math.abs(vertexWorld(v)[1]-w[1])<1e-9; })()`)===true);
 }
 
 console.log(`\n${pass} ok, ${fail} failed\n`);

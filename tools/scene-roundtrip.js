@@ -225,7 +225,10 @@ const rejects = [
   // the same way a line's own keys are: what a point may say depends on what it is
   // attached to, and anything else is a load error rather than a field ignored.
   ['fix on a body incidence',    'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/fix/s=0'],
-  ['a station with no fix',      'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/join/s=0'],
+  // A station with no `fix` is legal -- that is a vertex the line CARRIES, and the
+  // station is what says where on the bar it rides (constraints.js §06.2e). What is
+  // still meaningless is a station on a line the vertex is not joined to at all.
+  ['a station with no join',     'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/s=0'],
   ['a fix with no station',      'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/join/fix'],
   ['a dangling line reference',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=9/join'],
   ['a dangling mesh reference',  'scene 5\nbody 1 x=0 y=0 r=1\nline 2 mesh=9'],

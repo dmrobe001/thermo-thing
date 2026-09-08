@@ -471,6 +471,7 @@ const REPEATABLE = new Set(['ons','refs']);
 //   1@(0.2,-0.1)/join/weld/restAng=0.3   held, and rigid, at that body-frame point
 //   bg(0,4.4)/join                       a ground pin
 //   3@(0,0.5)                            a feature point: marked, not held
+//   7/join/s=0.75                        a point riding line 7, joined to nothing else
 // While a FRAGMENT is being written this holds the ids the listing will contain, so
 // an incidence naming something outside it can be left out. A vertex whose bodies are
 // all in a selection is a member (SCENE.md §S.9) even when it also sits on a line that
@@ -482,10 +483,14 @@ const inScope = id => id==null || !EMIT_SCOPE || EMIT_SCOPE.has(id);
 function fmtOn(e){
   const parts=[ e.kind==='line' ? String(e.id) : fmtEp(e,'ep') ];
   if(e.join) parts.push('join');
-  // Sliding is the default on a line (constraints.js §06.2f), so the word is `fix`
-  // and it comes with the station it captured -- the one thing about a held joint
-  // the pose does not imply.
-  if(e.kind==='line' && e.join && !e.slide) parts.push('fix', `s=${fmtNum(e.s||0)}`);
+  // Sliding is the default on a line (constraints.js §06.2f), so the word is `fix`.
+  // The STATION is written separately from it, because the two say different things
+  // and only usually travel together: `fix` is the constraint -- this joint keeps its
+  // station rather than running along the bar -- while `s` is the station itself, and
+  // a vertex the line CARRIES (§06.2e vertexRide) has one whether or not it is fixed,
+  // that station being the whole of what says where the point is.
+  if(e.kind==='line' && e.join && !e.slide) parts.push('fix');
+  if(e.kind==='line' && e.join && e.s!==undefined) parts.push(`s=${fmtNum(e.s||0)}`);
   if(e.weld) parts.push('weld', `restAng=${fmtNum(e.restAng||0)}`);
   return parts.join('/');
 }
@@ -529,8 +534,12 @@ function parseOn(name, tok, ln, env, lines){
   }
   if(out.fix && out.s===undefined)
     throw new SceneError(ln, `${name}: a joint held on a line needs its captured station, as s=...`);
-  if(!out.fix && out.s!==undefined)
-    throw new SceneError(ln, `${name}: "s" is the station of a HELD joint -- a sliding one has none`);
+  // A SLIDING joint may carry a station too, and then it is not a constraint but a
+  // position: it is a vertex the line CARRIES (constraints.js §06.2e vertexRide),
+  // nothing else holding it, and the station is the whole of what says where it is.
+  // Which is only meaningful without a join to hold it by.
+  if(out.s!==undefined && !out.join)
+    throw new SceneError(ln, `${name}: a station means nothing on a line this vertex is not joined to`);
   return {id:Number(parts[0]), kind:'line', join:!!out.join, slide:!out.fix,
           weld:!!out.weld, restAng:out.restAng, s:out.s};
 }

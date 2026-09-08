@@ -368,7 +368,7 @@ function dropBodyFromConstraints(id){
     else if(isLine(c)) c.mesh = (c.mesh||[]).filter(m => m!==id);
   }
   constraints = constraints.filter(c =>
-    isVertex(c) ? !!vertexPrimary(c) || vertexOns(c).some(e=>!isLineOn(e))
+    isVertex(c) ? !!vertexPrimary(c) || !!vertexRide(c) || vertexOns(c).some(e=>!isLineOn(e))
     : isLine(c)  ? c.id!==id
     : (c.a.id!==id && !(c.b && c.b.id===id)));
   // Dropping vertices can leave a line short of the two joints it needs, and dropping
@@ -376,7 +376,8 @@ function dropBodyFromConstraints(id){
   // run to a fixed point rather than once each.
   for(let pass=0; pass<constraints.length+1; pass++){
     const dead = constraints.filter(c => isLine(c) && lineJoints(c).length<2).map(c=>c.id);
-    const orphan = constraints.filter(c => isVertex(c) && !vertexOns(c).some(e=>!isLineOn(e)));
+    const orphan = constraints.filter(c => isVertex(c)
+      && !vertexRide(c) && !vertexOns(c).some(e=>!isLineOn(e)));
     if(!dead.length && !orphan.length) break;
     for(const c of constraints)
       if(isVertex(c)) c.on = vertexOns(c).filter(e => !dead.includes(e.id));
@@ -415,15 +416,13 @@ function dropBodyFromConstraints(id){
 // in two places at once. The background included -- it is one body.
 const vertexOns = v => v.on || (v.on=[]);
 const isVertex = con => con && con.type==='vertex';
-// Which incidence speaks for the vertex's position. The BACKGROUND first, because it
-// is the one that does not move; then a real body. (Phase 2 adds lines, which come
-// last: a line's own frame is derived from vertices, and this order is what keeps
-// that derivation acyclic -- VERTEX.md §X.3.)
-// A LINE is never a locator: its own frame is derived from the vertices on it, so a
-// vertex located by a line would be defined in terms of something defined in terms of
-// it (VERTEX.md §X.3, §X.5). A vertex whose only joined incidence is a line is
-// therefore not located at all -- it is a point on a rail with nothing saying where
-// along it, which is not a state the rows can do anything with.
+// What GROUNDS a vertex: the joined incidence whose frame has coordinates of its own.
+// The BACKGROUND first, because it is the one that does not move; then a real body.
+// A LINE is never one of these, and that is what keeps the whole thing acyclic: a
+// line's own frame is read off the vertices on it (§06.2f lineFrame), so those
+// vertices must be placed by something that is not the line. This is therefore also
+// exactly what the rows resolve a vertex through, and what `lineJoints` demands of a
+// joint before it will let it help place the bar.
 const incidenceRank = e => e.id==null ? 0 : 1;
 const isLineOn = e => e.kind==='line';
 function vertexPrimary(v){
@@ -434,31 +433,80 @@ function vertexPrimary(v){
   }
   return best;
 }
-// ...and where the vertex IS. Its primary incidence's world point; failing that, its
-// BACKGROUND incidence, which is the vertex's own world coordinates and the one frame
-// that cannot move out from under it.
+// ...and a line CARRIES a vertex that nothing grounds. It does not place the bar --
+// it is not in `lineJoints` and it builds no rows -- it simply rides it, at the
+// station it holds, like a mark painted on the bar. That is not a second kind of
+// locator sneaking past the rule above: the line's frame is derived without ever
+// consulting this vertex, so the definition still bottoms out.
 //
-// An incidence on a BODY that the vertex is not JOINED to never locates it, and that
-// is the whole of the rule: dragging a body must not carry along a point it is not
-// holding. An unjoined incidence marks a material spot on that body -- it says where
-// the vertex was, not where it now is -- so reading a position out of it would make
-// letting go of a body silently equivalent to still being held by it. The trailing
-// `find` is the legacy path: a hand-written file whose only incidence is such a mark
-// still has to resolve to something, and that mark is all there is.
+// Which is what the physics of it says too. A bare vertex has no mass and no forces
+// on it, so nothing can drive it along its slot; whether the joint is ticked to slide
+// makes no difference until something with mass is joined at it, and then it slides
+// freely. So a vertex joined to a line moves with the line, as a joint that could not
+// slide would -- and the moment a body is joined at it, it becomes an ordinary joint
+// on the bar and the `slide` tick starts to mean what it says.
+//
+// The station is the one thing that has to be remembered: a point on a rail with
+// nothing saying where along it is not a position, so a line with no station for this
+// vertex carries nothing and the fallbacks below take over.
+function vertexRide(v){
+  if(vertexPrimary(v)) return null;
+  for(const e of vertexOns(v)){
+    if(!e.join || !isLineOn(e) || e.s===undefined) continue;
+    if(lineById(e.id)) return e;
+  }
+  return null;
+}
+// ...and where the vertex IS, which is one question with one answer, in this order:
+//
+//   what GROUNDS it   a joined body, or the background
+//   what CARRIES it   a line it is joined to, at its station
+//   its own mark      the background incidence, which is simply its world coordinates
+//
+// A JOINED incidence always wins, which is the whole of the rule the first two lines
+// state: joined to a body, the vertex moves with the body; joined only to a line, it
+// moves with the line. An incidence on a body the vertex is NOT joined to never
+// locates it -- it marks a material spot, saying where the vertex was rather than
+// where it now is, so reading a position out of it would make letting go of a body
+// silently the same as still being held by it. The trailing `find` is the legacy path:
+// a hand-written file whose only incidence is such a mark still has to resolve to
+// something, and that mark is all there is.
 function vertexWorld(v){
   const ons=vertexOns(v);
-  const e = vertexPrimary(v) || ons.find(x=>x.id==null) || ons.find(x=>!isLineOn(x));
+  const P = vertexPrimary(v);
+  if(P){ const [wx,wy]=epWorld(P); return [wx,wy]; }   // epWorld's trailing arm vector is a rod's business
+  const R = vertexRide(v);
+  if(R){ const p=lineStationPoint(lineById(R.id), R.s); if(p) return p; }
+  const e = ons.find(x=>x.id==null) || ons.find(x=>!isLineOn(x));
   if(!e) return [0,0];
   const [wx,wy]=epWorld(e);
-  return [wx,wy];          // just the point: epWorld's trailing arm vector is a rod's business
+  return [wx,wy];
 }
-// A vertex has to know where it is, and the background is the only frame that cannot
-// move. So whenever nothing JOINED locates it any more, its background incidence
-// does: made if there is none, and re-read at the point the vertex was already at, so
-// letting go of a body never moves the point. Called wherever a join is released.
-function groundVertex(v, wx, wy){
-  if(vertexPrimary(v)) return;
-  const bg = vertexOns(v).find(e=>e.id==null);
+// Settle which of those three says where the vertex is, after anything that changes
+// what it is joined to. Exactly one of them does, so this both picks it and makes sure
+// it CAN: a carrying line needs a station, and an ungrounded, uncarried vertex needs
+// its background mark. `wx,wy` is where the vertex stood BEFORE the change, so every
+// path here holds the pose it found -- the discipline every capture toggle follows.
+//
+// The one place it does move the point is a vertex the line has just taken over: it
+// goes onto the bar, because that is what riding the bar means and it was only ever
+// within a glyph's width of it. Nothing else moves, and it carries no rows either way.
+function settleVertex(v, wx, wy){
+  const ons=vertexOns(v);
+  if(vertexPrimary(v)){
+    // Grounded: its line joints are ordinary joints again, and a SLIDING one owns no
+    // station -- leaving a stale one behind would be a number the file keeps and
+    // nothing reads.
+    for(const e of ons) if(isLineOn(e) && e.join && e.slide) delete e.s;
+    return;
+  }
+  for(const e of ons){
+    if(!e.join || !isLineOn(e)) continue;
+    const line=lineById(e.id); if(!line) continue;
+    e.s = lineStationAt(line, wx, wy);
+    return;
+  }
+  const bg = ons.find(e=>e.id==null);
   if(!bg) makeVertexOn(v, {id:null, off:[wx,wy]}, {join:false});
   else if(!bg.join) bg.off=[wx,wy];
 }
@@ -502,7 +550,9 @@ function makeVertexOn(v, ep, opts){
   ons.push(e);
   // Pushed BEFORE the captures: a station is read off the line's own live frame, and
   // the frame is built from the joints, so this joint has to be one of them first.
-  if(line && e.join && !e.slide){
+  // A SLIDING joint takes a station only from the file, and only a vertex the line
+  // carries is written with one -- a slider that something grounds owns none.
+  if(line && e.join && (!e.slide || o.s!==undefined)){
     // The file's captured station, or -- for a freshly placed joint -- the one the
     // live geometry shows, taken against the origin this joint may itself have just
     // become (recaptureLineStations settles the rest of them either way).
@@ -530,19 +580,20 @@ function lineAngle(line){
 function setVertexJoin(v, e, val){
   if(!!val === !!e.join) return;
   if(val){
+    const [wx,wy]=vertexWorld(v);                // where it stood, before the tick
     e.join = true;
     if(isLineOn(e)){ const line=lineById(e.id);
       if(line){ if(!e.slide) e.s = captureLineStation(line, v); recaptureLineStations(line); } }
     else {
-      const [wx,wy]=vertexWorld(v);
       e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
     }
+    settleVertex(v, wx, wy);
   } else {
     // Where it is BEFORE letting go, so the release holds the pose it found -- the
     // same discipline every capture toggle here follows.
     const [wx,wy]=vertexWorld(v);
     e.join=false; e.weld=false; delete e.restAng; delete e.s;
-    groundVertex(v, wx, wy);
+    settleVertex(v, wx, wy);
   }
 }
 function setVertexWeld(v, e, val){
@@ -551,14 +602,22 @@ function setVertexWeld(v, e, val){
   if(e.weld) e.restAng = isLineOn(e) ? lineAngle(lineById(e.id)) : incidenceAngle(e);
   else delete e.restAng;
 }
-// A joint that stops sliding captures the station it is at, so the tick never snaps
-// it along the bar; one that starts sliding has no station to hold.
+// A joint that stops sliding captures the station it is at, so the tick never snaps it
+// along the bar; one that starts sliding has no station to hold -- unless the line is
+// what CARRIES the vertex, in which case the station is not a constraint at all but
+// the record of where on the bar the point rides, and it stays whichever way the tick
+// goes. (While the vertex is bare that tick changes nothing anyway: nothing pushes a
+// point with no mass along its slot. It starts meaning something the moment a body is
+// joined at the vertex, and settleVertex drops the station then.)
 function setVertexSlide(v, e, val){
   if(!isLineOn(e)) return;
+  const [wx,wy]=vertexWorld(v);
+  const line=lineById(e.id);
   e.slide = !!val;
   if(e.slide) delete e.s;
-  else { const line=lineById(e.id); e.s = line ? captureLineStation(line, v) : 0; }
-  const line=lineById(e.id); if(line) recaptureLineStations(line);
+  else e.s = line ? captureLineStation(line, v) : 0;
+  if(line) recaptureLineStations(line);
+  settleVertex(v, wx, wy);
 }
 // Re-read every weld's rest angle off the live pose -- recaptureConAngles' vertex
 // counterpart, called from the same places (a hand move, a scaled selection box).
@@ -569,7 +628,7 @@ function recaptureVertex(v){
       const line=lineById(e.id); if(!line) continue;
       line._phiRef=undefined;                    // see recaptureConAngles
       if(e.weld) e.restAng = lineAngle(line);
-      if(!e.slide) e.s = captureLineStation(line, v);
+      if(!e.slide || e===vertexRide(v)) e.s = captureLineStation(line, v);
     } else if(e.weld) e.restAng = incidenceAngle(e);
   }
 }
@@ -587,6 +646,11 @@ function setVertexWorld(v, wx, wy){
     if(!e.join) continue;
     e.off = epOffOf(bodies[bodyIndex(e.id)], wx, wy);
   }
+  // A vertex the line CARRIES has no offset anywhere that says where it is -- its
+  // station does. Moving it therefore moves it ALONG the bar, to the station nearest
+  // the point asked for, which is the only place on the bar there is to put it.
+  const R=vertexRide(v);
+  if(R) R.s = lineStationAt(lineById(R.id), wx, wy);
 }
 // Every vertex touching a body, and every body a vertex touches -- the one relation,
 // read from either side. This is the INCIDENCE relation, which is what the rows, the
@@ -860,10 +924,12 @@ const lineIsBar = line => { const J=lineJoints(line); return J.length>=2 && J.ev
 // The station a joint currently sits at, measured from the line's origin -- what
 // makeVertexOn captures when a joint stops sliding, and what the segment distances
 // the inspector lists are differences of.
+// A joint's own world point IS the vertex's, so this is `lineStationAt` read off the
+// vertex rather than off the joint list -- which is also what makes it work for a
+// vertex the line CARRIES, which is not in the joint list at all (§06.2e vertexRide).
 function captureLineStation(line, v){
-  const f=lineFrame(line); if(!f || !f.O) return 0;
-  const K=f.J.find(x=>x.v===v); if(!K) return 0;
-  return K.du - f.O.du;
+  const [wx,wy]=vertexWorld(v);
+  return lineStationAt(line, wx, wy);
 }
 // The station a world POINT sits at -- the same measure, read off the geometry rather
 // than off the joint list, so a vertex that merely LIES on the line has one too and
@@ -899,8 +965,20 @@ function lineSegments(line){
 // it holds the pose it finds: a bar recaptured at a pose it already satisfies is
 // unchanged, and one recaptured after a hand edit holds the new pose instead.
 function recaptureLineStations(line){
+  // The riders' stations are measured from the same origin, so a move of the origin
+  // would silently shift them too -- and unlike a joint's, a rider's station IS its
+  // position, so that shift would visibly slide it along the bar. Their world points
+  // are read first and their stations put back from those afterwards, which leaves
+  // them exactly where they were whatever the origin does (§06.2e vertexRide).
+  const riders=[];
+  for(const c of constraints){
+    if(!isVertex(c)) continue;
+    const R=vertexRide(c);
+    if(R && R.id===line.id) riders.push([R, vertexWorld(c)]);
+  }
   const f=lineFrame(line); if(!f || !f.O) return;
   for(const K of f.J) if(!K.e.slide) K.e.s = K.du - f.O.du;
+  for(const [R,[wx,wy]] of riders) R.s = lineStationAt(line, wx, wy);
 }
 // A posable line releases for a pose drag exactly as a posable rod did (§06.2d):
 // while the player drags a body it touches, every joint slides and nothing is welded,

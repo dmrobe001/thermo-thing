@@ -577,14 +577,33 @@ or not work depending on how far you had scrolled.
 - *The background selected*: reachable from the empty-bench panel, listing every
   vertex pinned to ground.
 
-A vertex is located by its **joined** incidences, and by the background when none of
-them locate it: an incidence on a body the vertex is not joined to marks a material
-spot -- where the vertex *was* -- and reading a position out of that would make
-letting go of a body silently the same as still being held by it. So releasing the
-last join grounds the vertex where it stood, and a completely unjoined vertex has its
-coordinates in the background frame, which is the one frame that cannot move out from
-under it. A vertex whose only join is a line is not a joint at all (`§X.3` -- a line
-is never a locator), and its panel says so rather than drawing one.
+**Where a vertex is** is one question with one answer, and the answer is whichever of
+these comes first:
+
+| | |
+|---|---|
+| what **grounds** it | a joined body, or the background |
+| what **carries** it | a line it is joined to, at its station |
+| its own mark | the background incidence, which is simply its world coordinates |
+
+A *joined* incidence always wins, which is the whole of it: joined to a body, the
+vertex moves with the body; joined only to a line, it moves with the line. An
+incidence on a body the vertex is **not** joined to never locates it -- that marks a
+material spot, saying where the vertex *was* -- so releasing the last join grounds the
+vertex where it stood, and a completely unjoined vertex has its coordinates in the
+background frame, the one frame that cannot move out from under it.
+
+A line **carrying** a vertex is not a second locator sneaking past `§X.3`. It does not
+place the bar -- it is not in `lineJoints` and it builds no rows -- so the line's own
+frame is still derived without ever consulting it, and the definition bottoms out.
+Which is what the physics says too: a bare vertex has no mass and no forces on it, so
+nothing can drive it along its slot. Whether the joint is ticked to `slide` makes no
+difference until something with mass is joined at it, and then it slides freely. So a
+vertex joined to a line moves with the line exactly as a joint that could not slide
+would. The one thing that has to be remembered is its **station** -- a point on a rail
+with nothing saying where along it is not a position -- and that station is written to
+the file whether or not the joint is `fix`ed, because for a rider it is not the
+constraint `fix` names but the whole of what says where the point is.
 
 **Every coordinate in one of those rows is editable, and committing one is a solve
 attempt.** Where an incidence holds the vertex there, the number *is* the anchor, so
