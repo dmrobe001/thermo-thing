@@ -233,10 +233,11 @@ its incidences' welds, held by the vertices they sit at (`§X.5`). The four name
 one row collapse to zero names.
 
 **The segment distances.** Consecutive non-sliding joints have a fixed distance
-between them -- `station(k) - station(k-1)` -- and that is what the inspector lists
-and what the file writes. Stations are relative, so `O` is station 0 by definition
-and the segments give the rest. Editing a segment shifts every station after it. A
-rod's `len` is the one-segment case of this.
+between them -- `station(k) - station(k-1)` -- and that is what the inspector lists.
+Stations are relative, so `O` is station 0 by definition and the segments give the
+rest. Editing a segment shifts every station after it. A rod's `len` is the
+one-segment case of this. The *file* writes the stations rather than the segments
+(`§X.10`): the number belongs to the joint, and a segment is a difference of two.
 
 **The line's own angle.** `phi`, the `P -> Q` heading, unwrapped against `_phiRef`
 exactly as `twoPointFrame` does today (§06.1) and for exactly the same reason.
@@ -432,17 +433,18 @@ that did the freezing as today, and release everything a `posable` line touches
 during a pose drag as today. What is new is that "two ground pins hold a body still"
 is now recognized, which is both obvious and currently missed.
 
-None of this landed with phase 1, deliberately. Freezing is an OPTIMIZATION, not the
-physics (`SCENE.md` §S.8): an arrangement the rules do not recognize is held exactly
-as it always was, at the cost of the rows and the island split. So a body held by two
-ground-pinned vertices works today and is simply not compiled away, and the rules
-above can arrive with phase 2, when the line gives them the vocabulary they are
-written in.
+**Still not landed.** Freezing is an OPTIMIZATION, not the physics (`SCENE.md` §S.8):
+an arrangement the rules do not recognize is held exactly as it always was, at the
+cost of the rows and the island split. Phase 1 left this alone deliberately, and
+phase 2 -- which was meant to bring it, the line being the vocabulary it is written
+in -- **ported** the two old rod rules into line terms instead (`lineGrounds`,
+`lineLocksLength`). So the restatement above is outstanding work rather than a
+decision against it, and a body held by two ground-pinned vertices still works and is
+still not compiled away.
 
 `posable` ports directly: while a body a posable line touches is dragged, every
 joint on that line becomes a sliding, unwelded rider, and the line re-reads its
-stations, segments and rest angles from the pose the drag left (§06.2d
-`recapturePosable`).
+stations and rest angles from the pose the drag left (§06.2d `recapturePosable`).
 
 ---
 
@@ -454,7 +456,7 @@ half, which is version 5.
 
 ```
 vertex <label> on=<incidence> on=<incidence> ...     [version 4, built]
-line   <label> [soft=<num>] [posable] [seg=<num> ...] [mesh=<body> ...]
+line   <label> [soft=<num>] [posable] [mesh=<body> ...]
 ```
 
 The grammar is untouched -- one object per line, `#` comments, `key=value`, every
@@ -474,14 +476,20 @@ on=5/join/weld/restAng=1.5708   a weld, with its captured rest angle
 ```
 
 The word is `fix`, not `slide`, because sliding is the default (`§X.4`) and the
-format writes what differs from the default. `seg=` is repeatable and gives the
-distances between consecutive non-sliding joints, in station order -- the same list
-the inspector shows, and absent entirely on a line that has fewer than two of them.
-`mesh=` is repeatable and names the disks meshing with the line, replacing
-`pt=<body>/pinion`.
+format writes what differs from the default. `mesh=` is repeatable and names the
+disks meshing with the line, replacing `pt=<body>/pinion`.
+
+> **As built, the distances live on the joints, not on the line.** This section
+> planned a repeatable `seg=` on the `line` giving the distance between each
+> consecutive pair of held joints. What shipped writes each held joint's own
+> **station** instead, as `s=` inside its `on=` token, and a segment is the
+> difference of two of them -- which is what the inspector shows and what a segment
+> edit shifts. One number per joint rather than one per gap: the joint is where the
+> number belongs, because a joint added or released changes what its own station is
+> measured from and changes no one else's.
 
 Classification, in `SCENE.md` §S.3's terms: an incidence's `off`, `join`, `weld` and
-`fix` are **authored**; `restAng` and `seg` are **captured** (`always:true`, written
+`fix` are **authored**; `restAng` and `s` are **captured** (`always:true`, written
 every time -- they are read off the geometry at creation and the pose no longer
 implies them); a line's frame, its joint order, its extent, its stations, every world
 position and every rest length derived from a segment are **derived** and never
@@ -506,12 +514,14 @@ sim gravity=on
 cam x=0 y=2.6 scale=64
 
 # bodies
-disk 1 x=2.6 y=4.4 r=0.38
-line 2 seg=2.6
+body 1 x=2.6 y=4.4 r=0.38
+
+# lines
+line 2
 
 # vertices
-vertex A on=bg(0,4.4)/join on=2/join/fix
-vertex B on=1/join on=2/join/fix
+vertex A on=bg(0,4.4)/join on=2/join/fix/s=0
+vertex B on=1/join on=2/join/fix/s=-2.6
 ```
 
 and the slider-crank's rail, which the version-3 file had to place ten metres out to
@@ -521,11 +531,17 @@ background vertices fix the rail's heading outright, so nothing is holding a raw
 option at all:
 
 ```
-line 6                                  # the rail -- no seg=, nothing is fixed to it
+line 6                                  # the rail -- nothing is fixed to it
 vertex D on=bg(-4,2.4)/join on=6/join
 vertex E on=bg(4,2.4)/join  on=6/join
 vertex C on=2/join/weld     on=6/join/weld    # the piston, riding it, angle held
 ```
+
+> **Not taken.** The bundled `crank` still carries the version-3 arrangement, a
+> single background vertex welded to the rail ten metres out, because the migration
+> reproduced the old world field for field and nothing has rebuilt it since. The
+> two-background-vertex form above is available and is the better scene; swapping it
+> in is a change to the example, not to the model.
 
 ---
 
@@ -648,8 +664,8 @@ still "every body an element names must be in the selection", with a vertex comi
 along when every body it is *joined* to is in the selection, and a line coming along
 when all its joints do. A background incidence does not disqualify anything and
 travels with the box, exactly as `SCENE.md` §S.9 already says. What a scaled box
-re-reads gains two entries -- a line's segments and its joints' stations -- and loses
-one, since rest angles now live on incidences.
+re-reads gains one entry -- its joints' stations, which is what a line's segments are
+differences of -- and loses one, since rest angles now live on incidences.
 
 ---
 
@@ -714,9 +730,9 @@ produce COLUMNS. Its joints are the vertices naming it, and it holds only a
 compliance, a `posable` flag and its meshing disks -- its frame, its extent, its
 origin and its stations are all derived. Rod, slot, rack and the linear spring are
 retired into it, along with the whole extra-control-point machinery of §06.2c, which
-was what a joint needed before its joints were objects. `refreshFrozen` is restated
-per `§X.9`, `posable` moved from the rod to the line, and format version 5 is the
-`line` line plus `on=`'s line-joint options.
+was what a joint needed before its joints were objects. `refreshFrozen` is **ported**
+to the line rather than restated per `§X.9`, `posable` moved from the rod to the
+line, and format version 5 is the `line` line plus `on=`'s line-joint options.
 
 Body and line **labels** landed with it after all, and the endpoint conversion did
 not: rod/slot/rack/spring are gone, so there are no `{id, off}` endpoints left to

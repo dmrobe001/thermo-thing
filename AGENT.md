@@ -106,9 +106,12 @@ does not list. Two rules follow, and they are what keep the bench honest:
 
 **No coordinate is frozen by assertion.** `static` and `lenLock` still exist, but as
 *derived* fields recomputed every substep from the constraints present
-(`constraints.js` §06.2b `refreshFrozen`): a body is pinned by a rod welded at both
-ends to fixed ground (or to an already-pinned body), and a vessel's length is locked
-by a rod between two of its own material planes. Zeroing an inverse mass is an
+(`constraints.js` §06.2b `refreshFrozen`): a body is pinned by a **line** welded at
+both of its two held joints between it and fixed ground (or an already-pinned body),
+and a vessel's length is locked by a line whose two held joints ride two of its own
+material planes. Those two are the rod's rules ported into the line's vocabulary, not
+`VERTEX.md` §X.9's general restatement -- so arrangements they miss, a body on two
+ground pins among them, are held exactly and simply not compiled away. Zeroing an inverse mass is an
 optimization -- it removes the coordinate from the system and lets islands split
 there -- and the constraint that earned it is compiled away (`_compiled`) rather than
 left as a row of zeros. Nothing may set either flag: not a tool, not the inspector,
@@ -152,7 +155,7 @@ Give new code a home in an existing section (and register it in that section's s
 | `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` (reads a multiplier by its row's `role`, not by counting row order) |
 | `js/loop.js` | §10 | `frame` -- fixed-step accumulator, calls `substep` -> `render` -> `updateHUD` |
 | `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawVessel`, `drawVertex`/`drawLabel`, `drawConstraint` (incl. the line: a bar between its extremes, a rail across the viewport), `drawCable`, `drawRotSpring`, §11.4c `drawInteraction`, `drawReaction`, ... |
-| `js/hud.js` | §12 | `energy` (incl. spring PE, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
+| `js/hud.js` | §12 | `energy` (incl. a compliant line's and a rotational spring's strain energy, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
 | `js/tools.js` | §13 | `TOOLS` (incl. the vertex and line tools and the heat/mass interaction tools), `setTool`/`setLineMode`, `pickBody`, `pickVertexAt`, `joinVertexToLine`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
 | `js/inspector.js` | §14 | §14.0 `numRow`/`numVal`/`wireNumIns` (one editable number: arithmetic in, a number committed, the arrow keys stepping the value); `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel, the vertex panel and the vertex list a body shows), §14.2b `renderVesselInspector`, §14.2c the incidence row (`incidenceRow`/`wireIncidenceRows`/`setIncidenceJoin`/`commitIncidenceOff`/`commitIncidenceStation`) -- the one row a vertex's panel, a body's and a line's are all built out of, `updateInspectorLive` |
 | `js/examples.js` | §15 | `SCENES` -- every prebuilt machine as scene-file text, with its own reasoning as `#` comments; `loadExample` is `importScene` and nothing else |

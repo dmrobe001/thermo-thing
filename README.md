@@ -22,7 +22,7 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
-Nothing in a scene is fixed by a checkbox. A body is held still by a rod welded at both ends to fixed ground; a vessel's length is held by a rod between two of its own caps. The engine still freezes those coordinates internally -- that is what makes a fixed body a wall that islands split at -- but it *derives* which ones from the constraints you placed, so deleting the rod frees the body. See `SCENE.md` §S.8.
+Nothing in a scene is fixed by a checkbox. A body is held still by a line welded at both of its held joints between it and fixed ground; a vessel's length is held by a line between two of its own caps. The engine still freezes those coordinates internally -- that is what makes a fixed body a wall that islands split at -- but it *derives* which ones from the constraints you placed, so deleting the line frees the body. See `SCENE.md` §S.8.
 
 Points where things meet are **vertices**, and they are objects in their own right.
 Pick the vertex tool (3) and tap a body to plant one; tap the same spot again and the
@@ -38,13 +38,20 @@ and tap vertices in turn; the first two place the line and every tap after joins
 another vertex to it, bringing it onto the line if it is not there already. Every
 joint starts out **sliding**, so a fresh line is a drawn guide that asks the solver
 for nothing -- untick *slide* on two joints and the distance between them is held, and
-that is a rod. A line with a slider on it is a rail, drawn across the viewport; one
+that is a bar. A line with a slider on it is a rail, drawn across the viewport; one
 with nothing sliding is a bar, drawn between its ends. Give it a **compliance** and
 the held distances become springs instead of constraints. The panel lists its joints
 in order along it, and the distance between each consecutive held pair.
 
 Vertices, bodies and lines all carry editable **labels**, drawn beside them -- letters
-for vertices, numbers for bodies and lines. See `VERTEX.md`.
+for vertices, numbers for bodies and lines.
+
+A body, a vertex and a line are objects of **equal standing**, and a constraint
+between them says something *about* them rather than holding them in existence. So
+deleting one takes the relations that named it and nothing else: delete a disk and the
+vertex at its centre stays exactly where it was, and the line running through it stays
+too, holding nothing until you say otherwise. Nothing you did not select disappears.
+See `VERTEX.md`.
 
 Numbers can be typed as arithmetic, in the inspector fields and in a scene file
 alike: `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`, `b3.x+b3.r` -- the constants, the usual

@@ -20,6 +20,13 @@ discipline.
 
 ## S.1 Audit: what the examples do today that the editor cannot
 
+> **This section is the version-1 audit**, kept because it is what motivated the
+> rest of the note, and it names objects that no longer exist. `pin`, `rod`, `slot`,
+> `rack` and `spring` were retired into the **vertex** and the **line** in versions 4
+> and 5 (`VERTEX.md`), and `static` and `lenLock` became derived in version 2 (§S.8).
+> The findings all survive the translation; the vocabulary does not. Everything from
+> §S.2 on describes the format as built.
+
 Before designing anything, here is the actual divergence between `js/examples.js`
 (§15) and what the tool rail (§13) plus the inspector (§14) can produce. This is
 narrower than expected, which is good news for the plan.
@@ -80,7 +87,8 @@ This is only sufficient if a second property holds:
 > **The format's vocabulary and the editor's capabilities are one list, kept one
 > by a single table** (§S.4). The importer builds exclusively by calling the same
 > constructors the tools call -- `makeBody`, `makeRectBody`, `makeVessel`,
-> `makeRodCon`, `makeSlotCon`, `makeSpringCon`, `makeRotSpringCon` -- and then
+> `makeVertex`, `makeVertexOn`, `makeLine`, `makeBeltCon`, `makeCvtCon`,
+> `makeKnifeCon`, `makeCableCon`, `makeRotSpringCon`, `makeInteraction` -- and then
 > applies only fields the table lists, rejecting anything else as a parse error.
 
 An importer that ends with a generic `Object.assign(body, parsed)` gives the whole
@@ -111,29 +119,45 @@ Writing any of these out invites a file whose derived fields disagree with its
 authored ones, and then the importer has to decide which one is the truth.
 
 **Authored -- serialize.** Pose and velocity (`x, y, th, vx, vy, w`, and a vessel's
-`len, vlen`); shape parameters (`r`, `hw`, `hh`, `bore`); `mass` for an ordinary
-body and `mShell` for a vessel; `static`; `lenLock`; gas `gamma` and any two of
-(P, T, m) -- **write T and mass**, since that is the pair `setVesselGasMT` takes
-and it makes a hand-edited temperature do the obvious thing; every stiffness and
-conductivity (`spring.k`, `rotspring.k`, `interaction.k`); every weld/prismatic
-flag; every endpoint `{id, off}`; `sim` parameters; the camera.
+`len, vlen`); shape parameters (`r`, `width`, `height`, `bore`); `mass` for an
+ordinary body and `mShell` for a vessel; gas `gamma` and any two of (P, T, m) --
+**write T and mass**, since that is the pair `setVesselGasMT` takes and it makes a
+hand-edited temperature do the obvious thing; every stiffness, compliance and
+conductivity (`line.soft`, `rotspring.k`, `interaction.k`); `line.posable`; a
+label, wherever it is not simply the object's own id; every incidence's `off`,
+`join`, `weld` and `fix` (`constraints.js` §06.2e); `sim` parameters; the camera.
+
+`static` and `lenLock` are **not** in that list, and have not been since version 2:
+they are derived from the constraints present (§S.8), which is the whole point of
+that section.
 
 **Captured -- serialize, and this is the subtle class.** These are quantities read
 off the geometry *at the moment the object was created or a lock was toggled*, and
 never recomputed since. The pose no longer implies them:
 
-- `rod.len` and `spring.restLen` -- the length at creation. Move a body afterward
-  and the rod is under load; that load is the scene.
-- `rod.restAngA` / `restAngB`, `slot.restAngA` / `restAngB` -- captured by
-  `captureRestAngle` on creation and on each lock toggle. Dragging a welded body
-  does not recapture, so a welded rod's rest angle is genuinely independent of the
-  exported pose -- with two deliberate exceptions, both of them rods that are being
-  moved *by hand* through geometry the solver is no longer holding: a **grounded**
-  body's anchors (`recaptureGrounding`, whose rows are compiled away, §S.8) and a
-  **posable** rod's own length, welds and stations, re-read after each step of a
-  pose drag that reached it -- because for that step the rod was released and held
-  none of them (`constraints.js` §06.2d). Both are the editor writing the scene, which is what
-  an editor is for; neither happens while the sim runs.
+- an incidence's **station** on a line, `s` -- where along the bar the joint sits,
+  read off the live geometry when the joint stopped sliding. The distance between
+  two held joints is the difference of their stations, so this is what a rod's
+  `len` became: move a body afterward and the bar is under load, and that load is
+  the scene. It is written for a **held** joint, whose station is a constraint, and
+  for a joint a line **carries**, whose station is the whole of what says where the
+  point is (§06.2e).
+- an incidence's **rest angle**, `restAng` -- the body's (or the line's) own
+  absolute angle at the moment its weld went on. Each capture is independent of
+  every other, so which incidence happens to be the reference cannot matter.
+  Dragging a welded body does not recapture, so a weld's rest angle is genuinely
+  independent of the exported pose -- with two deliberate exceptions, both of them
+  joints being moved *by hand* through geometry the solver is no longer holding: a
+  **grounded** body's anchors (`recaptureGrounding`, whose rows are compiled away,
+  §S.8) and a **posable** line's own stations and rest angles, re-read after each
+  step of a pose drag that reached it, because for that step the line was released
+  and held none of them (`constraints.js` §06.2d). Both are the editor writing the
+  scene, which is what an editor is for; neither happens while the sim runs.
+- a vertex's **background mark** -- an unjoined `on=bg(x,y)`, planted at the place
+  the vertex was already standing when the relation that had been placing it went
+  away. It is what lets a vertex outlive every body it ever touched, so it is a
+  capture in exactly the sense of this list: read off the geometry at the moment
+  the structure changed, and never recomputed since (`VERTEX.md` §X.15).
 - `belt.restPhase`, `belt.rA`, `belt.rB`, `belt.sense`.
 - `rotspring.restAngle`.
 - `cable.Ltot`, `cable.localAngle`, `cable.spoolAngle`.
@@ -163,25 +187,47 @@ scene-object kind; each row names its constructor, its authored keys with defaul
 its captured keys, and the refresh call to run after loading. Export walks it.
 Import walks it. The schema section of this note is generated from reading it.
 
-Sketched:
+As built, each row is `{kind, list, fields, build, finish, state}` and each field is
+`{t, def|always, get, set}` -- the type says how the token is read and written, the
+default says whether it is written at all, and `get`/`set` are the only two places
+that touch the object:
 
 ```js
-const SCENE_SCHEMA = {
-  body:   { make:(f)=>makeBody(f.x,f.y,f.r,f.static),
-            keys:{ x:0, y:0, r:0.38, mass:null, static:false,
-                   th:0, vx:0, vy:0, w:0 },
-            after:refreshInertia },
-  rect:   { ... hw, hh ... },
-  vessel: { make:(f)=>makeVessel(f.x,f.y,f.bore,f.len,f.static),
-            keys:{ ..., mShell:null, lenLock:false, gamma:1.4, T:293.15, gm:null,
-                   vlen:0 },
-            after:refreshVessel },
-  rod:    { make:(f)=>makeRodCon(f.a,f.b,f.weldA,f.weldB,f.posable),
-            keys:{ weldA:false, weldB:false, posable:false },
-            captured:{ len:null, restAngA:null, restAngB:null } },
-  // slot, pin, belt, cvt, knife, cable, spring, rotspring, heat, flow
-};
+const SCENE_SCHEMA = [
+  { kind:'body', list:'bodies', id:true, match:b=>b.shape==='circle',
+    fields:{ label:LABEL_FIELD,
+             x:{t:'num', always:true, get:b=>b.x},
+             y:{t:'num', always:true, get:b=>b.y},
+             r:{t:'num', always:true, get:b=>b.r},
+             mass:{t:'num', def:q=>Math.PI*q('r')*q('r'),      // density 1
+                   get:b=>b.mass, set:(b,v)=>setBodyMass(b,v)},
+             ...F_POSE() },
+    build:q=>makeBody(q('x'), q('y'), q('r')),
+    finish:o=>refreshInertia(o),
+    state:S_POSE() },
+
+  { kind:'line', list:'constraints', id:true, pass:1, match:c=>c.type==='line',
+    fields:{ label:LABEL_FIELD,
+             soft:{t:'num', def:0, get:c=>c.soft, set:(c,v)=>{c.soft=v;}},
+             posable:{t:'flag', def:false, get:c=>!!c.posable, set:(c,v)=>{c.posable=!!v;}},
+             mesh:{t:'refs', def:[], get:c=>c.mesh||[], set:(c,a)=>{c.mesh=a.slice();}} },
+    build:()=>makeLine() },
+
+  { kind:'vertex', list:'constraints', label:true, match:c=>c.type==='vertex',
+    fields:{ on:{t:'ons', always:true, get:c=>vertexOns(c),
+                 set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
+    build:()=>makeVertex(null), validate:... },
+  // rect, vessel, belt, cvt, knife, cable, rotspring, heat, flow
+];
 ```
+
+Two things the shape shows. A **line** owns almost nothing -- its frame, its extent,
+its origin and its joints' stations are all derived from the vertices naming it -- so
+its row is three fields and a constructor. A **vertex** owns nothing but `on=`, the
+repeatable incidence key, because everything a vertex has to say is said about the
+things it touches. Both live in `constraints` because that is the list of objects
+that produce rows; the `pass` on the line is only build order, so a vertex naming a
+line can find it (§17.4).
 
 Two payoffs beyond export/import.
 
@@ -225,43 +271,69 @@ the parser proves annoying.
 `heatpair`, exactly as the exporter writes it:
 
 ```
-scene 1
+scene 5
 
 sim gravity=off
 cam x=0 y=2.6 scale=64
 
 # bodies
-rect 1 x=0 y=2.6 width=2.5 height=0.24 static
-vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=276513.730172 T=800 lenlock
+rect 1 x=0 y=2.6 width=2.5 height=0.24
+vessel 2 x=-1.25 y=2.6 bore=0.55 len=1.8 P=276513.730172 T=800
 vessel 3 x=1.15 y=2.6 bore=0.9 len=0.9 P=101325 T=293.15
 
-# constraints
-rod bg(1.15,1.75) -- 3 len=0.85 weld=both restAngA=1.57079632679 restAngB=1.57079632679
+# lines
+line 6
+line 7
+line 8
+
+# vertices
+vertex A on=bg(0,2.15)/join/weld/restAng=0 on=6/join/fix/s=0/weld/restAng=-1.57079632679
+vertex B on=1/join/weld/restAng=0 on=6/join/fix/s=-0.45/weld/restAng=-1.57079632679
+vertex C on=2@(0,-0.5)/join on=7/join/fix/s=0
+vertex D on=2@(0,0.5)/join on=7/join/fix/s=-1.8
+vertex E on=bg(1.15,1.75)/join/weld/restAng=0 on=8/join/fix/s=0/weld/restAng=-1.57079632679
+vertex F on=3/join/weld/restAng=0 on=8/join/fix/s=-0.85/weld/restAng=-1.57079632679
 
 # interactions
 heat body=1 vessel=2 k=2000
 heat body=1 vessel=3 k=2000
 ```
 
+Everything the version-1 sketch of this file asserted, this one derives. There is no
+`static` on the plate and no `lenlock` on the reservoir. Line 6 is welded at both of
+its held joints, between the background and the plate, which grounds the plate; line
+8 does the same between the background and vessel 3; and line 7's two held joints ride
+vessel 2's own two caps, `f = -1/2` and `f = +1/2`, which locks its length and leaves
+its pose alone (§S.8). Not one of the three says which of those it is doing -- what a
+line *is*, and what it freezes, is read off the vertices naming it.
+
 Grammar notes:
 
-- `<kind> [<id>] [<endpoints>] <field>=<value> ...`; bare words are boolean flags
-  (`crossed`, `posable`, and -- in the version-1 sketch above -- `static`, `lenlock`). Only **bodies** carry an id, because they are the
-  only things anything refers to -- nouns are named, relations are anonymous, which
-  is the data model exactly. Body ids are preserved literally (they are what the
-  inspector shows) and `uid` resumes at `max + 1`.
+- `<kind> [<id>|<label>] [<endpoints>] <field>=<value> ...`; bare words are boolean
+  flags (`crossed`, `posable`). **Bodies and lines** carry an id, from one allocator,
+  because those are what an incidence names -- `on=7` says "line 7" or "body 7" and
+  the reader tells them apart by what the id actually names. **Vertices** carry a
+  label instead (`A`, `B`, ... `Z`, `AA`), which is what the canvas draws beside the
+  point. Everything else is anonymous, which is the data model exactly: nouns are
+  named, relations are not. Ids are preserved literally (they are what the inspector
+  shows) and `uid` resumes at `max + 1`.
 - Endpoints: `7` for body 7 at its centre, `7@(0.1,-0.2)` for a body-local offset (a
   *material* label on a vessel, so the second number is a fraction of the length),
   `bg(x,y)` for the fixed background, `--` between the two ends. No spaces inside
   the parentheses -- a line tokenizes on whitespace.
-- **`pt` is the one repeatable key.** A pin, rod, slot or rack may carry extra
-  control points beyond its two named ends (`js/constraints.js` §06.2c), and a line
-  writes one `pt=` per point, in order. Each token is a whole point in one word --
-  the endpoint syntax above, then slash-separated options: `s=` its captured station
-  along the line, `lock` plus `restAng=` its rotation lock, or the bare word `pinion`
-  on a rack. Which of those a token may say depends on the kind it sits on, and
-  saying anything else is a load error, exactly as an unknown key on the line itself
-  is: `pt=3/pinion` on a slot and `pt=3/s=0.5` on a pin are both refused.
+- **`on` is the repeatable key**, one token per body a vertex touches, and `mesh` is
+  the other, one token per disk meshing with a line. Each `on=` is a whole incidence
+  in one word -- the endpoint syntax above, then slash-separated options: `join`
+  (held to the vertex, rather than merely marking a spot), `weld` plus `restAng=`
+  (held to the vertex's *frame* as well), and on a line joint `fix` plus `s=` (held
+  at a station along the bar, sliding being the default). Which of those a token may
+  say depends on what the id names, and saying anything else is a load error, exactly
+  as an unknown key on the line itself is: `fix` on a body incidence and `weld` on
+  an incidence with no `join` are both refused.
+
+  Version 3's `pt=` -- extra control points on a pin, rod, slot or rack -- was
+  retired with those kinds. It was what a joint needed before its joints were
+  objects; the objects are vertices now, and they carry their own line.
 - **Every number is an expression** (§S.10): `r=0.25*2`, `len=hypot(3,4)`,
   `P=bg.P/2`, `x=b3.x+b3.r`. A line tokenizes on whitespace, so an expression in a
   file carries none. What is stored is the number it works out to; the exporter
@@ -295,11 +367,11 @@ Grammar notes:
   ```
 
   A **vertex** is a named point and the list of bodies it touches, one `on=` per body
-  -- the second repeatable key, on the same pattern as `pt=`. A pin is what it looks
-  like with two joined incidences and nothing welded, so the pin was absorbed rather
-  than translated. Two things it could not say came with it: a point pinned to the
-  background with its rotation left free, and a body merely MARKED at a vertex rather
-  than held there.
+  -- the repeatable key, on the pattern version 3's `pt=` established. A pin is what
+  it looks like with two joined incidences and nothing welded, so the pin was
+  absorbed rather than translated. Two things it could not say came with it: a point
+  pinned to the background with its rotation left free, and a body merely MARKED at a
+  vertex rather than held there.
 
   It always has somewhere it is, and the format says so with an ordinary incidence
   rather than a new key: a vertex nothing else places carries an **unjoined background
@@ -409,9 +481,9 @@ scenes is byte-identical to what the old imperative `loadExample` produced.
 
 The invariant now holds and is stated in `AGENT.md`: *outside the constructors in
 `js/geometry.js` and `js/constraints.js`, only the tool dispatch (§13.5) and the
-scene reader (§17.4) push onto `bodies`, `constraints`, `cables`, `springs`,
-`rotSprings` or `interactions`.* Every kind of scene object has exactly one
-constructor, and it is called from exactly those two places.
+scene reader (§17.4) push onto `bodies`, `constraints`, `cables`, `rotSprings` or
+`interactions`.* Every kind of scene object has exactly one constructor, and it is
+called from exactly those two places.
 
 **Phase 4 -- fold in `saveState`. `[done]`** `transport.js` §16.1 is now four lines
 of `snapshotState()` / `applyState()` (§17.6) plus the transient-clearing that is
@@ -472,21 +544,38 @@ recomputed every substep from the constraints actually present (`constraints.js`
 
 ### The two patterns
 
-- **A rod welded at both ends grounds its far end.** Both ends welded pins distance,
-  direction and orientation, so applied between fixed ground and a body it removes
-  all three of that body's coordinates. Transitively: a body double-welded to an
-  already-grounded body is grounded too.
-- **A rod with both ends on the same vessel locks its length.** Its two ends ride
-  different material planes, so its pose columns cancel exactly (which is also why
-  the same rod on a *rigid* body is degenerate, and why the tool refuses it there)
-  and what it holds is `len`. A reservoir is a vessel with a strut inside it.
+Both are stated over the **line** and its joints (`constraints.js` §06.2f), which is
+what the rod and the slot became; both were the rod's rules first and are the same
+rules, in the vocabulary that replaced it.
+
+- **A line welded at both ends grounds its far end.** A line with exactly two joints,
+  both **held** (not sliding) and both **welded**, whose vertices each also carry a
+  welded body incidence, pins distance, direction and orientation between those two
+  bodies. With one of them the background -- or a body already grounded -- that
+  removes all three of the far body's coordinates. Transitively: a body double-welded
+  to an already-grounded body is grounded too. (`lineGrounds`.)
+- **A line with both held joints on the same vessel locks its length.** Its two
+  joints are located at different material fractions of one vessel, so its pose
+  columns cancel exactly -- which is also why the same line on a *rigid* body is
+  degenerate -- and what it holds is `len`. A reservoir is a vessel with a strut
+  inside it. (`lineLocksLength`; no weld is needed, only two held joints.)
 
 Both are **structural**: they depend on what is attached, never on the current
 configuration. Nothing freezes or thaws as a mechanism swings through a pose.
 
-The one thing that suspends either is a rod marked **posable**, and what suspends it
+> **Not yet the general restatement.** `VERTEX.md` §X.9 sets out broader rules the
+> line's vocabulary makes sayable -- a vertex is fixed if it is joined to the
+> background, a body is grounded if two of its joined vertices are fixed and distinct
+> in its own frame, and so on -- which would recognize arrangements these two miss,
+> among them the obvious one of a body held by two ground pins. Phase 2 **ported** the
+> two rules above rather than restating them, so those arrangements are still held
+> exactly and simply not compiled away. That is the safe direction to be wrong in
+> (`What is not recognized`, below), and the restatement is outstanding work rather
+> than a decision against it.
+
+The one thing that suspends either is a line marked **posable**, and what suspends it
 is the *gesture*, never the configuration: while the player drags a body with the sim
-paused, a posable rod jointed to that body is released to a bare rail and holds
+paused, a posable line jointed to that body is released to a bare rail and holds
 nothing -- so it grounds nothing and locks no length either (`constraints.js` §06.2d).
 It is rigid again, and freezing again, the moment the drag step is over, at the
 geometry the drag reached. A posable ground strut whose body stayed frozen would be a
@@ -495,7 +584,7 @@ contradiction: the whole point of marking it is to slide that body along it.
 ### Freezing is per coordinate, and a vessel is where that shows
 
 A vessel's fourth coordinate moves its own material: a point at material fraction
-`f` sits `f*len` from the centre. So a double-welded ground rod pins a vessel's pose
+`f` sits `f*len` from the centre. So a double-welded ground line pins a vessel's pose
 only at the **mid-plane**, `f = 0`, whose world position has no length dependence.
 Welded to a cap, it fixes the cap and not the body -- the centre still rides the
 length, which is the entire mechanism of the gas spring.
@@ -530,9 +619,11 @@ Two consequences worth stating plainly:
 
 ### What is not recognized
 
-Other arrangements genuinely pin a body -- three pin-ended rods to the ground, or one
-pin-ended rod and one weld. They are simply not optimized: the solver holds them
-exactly as it always has, at the cost of the rows and the island split.
+Other arrangements genuinely pin a body -- two ground pins on it, three unwelded
+ground bars, or one ground pin and one weld. They are simply not optimized: the
+solver holds them exactly as it always has, at the cost of the rows and the island
+split. The first of those is the one `VERTEX.md` §X.9 would recognize and this
+version does not.
 
 Recognizing the general case means asking which coordinates lie outside the nullspace
 of the constraint Jacobian, which is a rank computation over the whole system every
@@ -547,13 +638,13 @@ bottleneck. The structural rules above cost one pass over the constraint list.
 
 `tools/posable-check.js` covers the suspension: that a posable ground strut is frozen
 until a drag on its own body starts, free inside that posing scope, and frozen again
--- at the posed geometry -- as soon as it ends, while a posable rod the drag never
+-- at the posed geometry -- as soon as it ends, while a posable line the drag never
 reached is never released at all.
 
 `tools/scene-roundtrip.js` §4 checks each rule and each case that separates them --
 the mid-wall weld that pins a pose and leaves a length free, the cap weld that pins
 neither, the strut that locks a length without pinning a pose, the one-ended weld
-that pins nothing, transitivity, compilation, and that deleting the rod thaws the
+that pins nothing, transitivity, compilation, and that deleting the line thaws the
 body again. The migration was checked against the behaviour it replaced: nine of the
 eleven examples are bit-identical over three seconds of substeps, and the two that
 differ are the vessels that became pose-frozen, where the freeze is *more* exact than
@@ -601,30 +692,41 @@ renumbers -- each body takes a fresh id from `uid`, and every reference follows
 reader's own dangling-id check already walks, which is why that check and the remap
 are the same short list rather than two lists that could disagree.
 
-Everything else is carried literally, captured fields included. A rod's rest length
-travels with the rod; a belt's phase travels with the belt. A pasted widget is the
+Everything else is carried literally, captured fields included. A joint's station
+travels with its line; a belt's phase travels with the belt. A pasted widget is the
 part as it was, not the part as its new pose would imply -- which is the same rule
 `always:true` states for a file (§S.3), applied to a piece of one.
 
 ### What comes with the bodies
 
 A selection is a set of BODIES. Which couplings travel with them is derived, by one
-rule: **a constraint, cable, spring or interaction belongs to the selection when
-every body it names is in it.** A background anchor does not disqualify anything --
+rule: **a constraint, cable, rotational spring or interaction belongs to the
+selection when every body it names is in it.** A vertex names the bodies it is
+incident on; a line names the bodies its joints are grounded by, plus its meshing
+disks (`conEndpoints`). A background anchor does not disqualify anything --
 the background is not a body, it is a point, and that point travels with the widget.
 
 The narrower reading considered first was "at least two of its bodies are in the
 selection", which is what this rule reduces to for anything that names no background.
 The two part ways on exactly the elements anchored to ground -- and those are the ones
-that matter most, because in this engine a rod welded at both ends to the background
-is *the* way anything is pinned (§S.8). Under the narrower rule, stashing a pendulum
-would hand you back a loose disk. Under this one you get the pendulum, hanging from a
+that matter most, because in this engine a vertex joined to the background, or a line
+welded at both ends with one of them on it, is how anything is pinned (§S.8). Under
+the narrower rule, stashing a pendulum would hand you back a loose disk. Under this one you get the pendulum, hanging from a
 ground point that moved with it.
 
 The cost is that a selection can move a "pinned" body by moving what pins it. That is
 the same thing the single-body pose drag already does (it moves the body and
-recaptures its grounding rod, `constraints.js` §06.2b), and it is what makes a
+recaptures its grounding line, `constraints.js` §06.2b), and it is what makes a
 grounded machine placeable at all.
+
+> **A vertex or a line on its own cannot be selected.** `lassoSelect` catches bodies
+> by their centres, `selectGroup` takes body ids, and `groupBounds` returns null with
+> no body in the set -- so a box around a vertex and the line between two of them
+> catches nothing, and a fragment with no bodies is refused on paste. That is the one
+> place left where a disk is a higher-class citizen than the two objects that replaced
+> the joint library (`VERTEX.md` §X.15), and it is outstanding work rather than a
+> decision: the membership rule above already reads a vertex and a line correctly, and
+> what is missing is a way to pick them in the first place.
 
 ### The transform, and what it re-reads
 
@@ -643,8 +745,8 @@ they live:
 | the transform | what happens to captured fields |
 |---|---|
 | translate | nothing. Every distance and relative angle between the points a member names is invariant, because they all moved together. |
-| rotate | invariant too, with two exceptions that measure against the fixed world rather than against the selection: a belt's phase (`rA*thA - sense*rB*thB`, an angle sum with unequal weights) and a background-referenced rotational spring's rest angle. Both shift analytically from the capture, so an authored stress survives. The rest angles of welds and prismatic locks are re-read -- not because their value changes, but because they are measured against a raw `atan2` whose branch the turn may have crossed, and the re-read re-seeds both sides of that comparison together. |
-| scale | every joint's geometry is re-read from the live pose: a rod's length, a control point's station, every rotation lock's rest angle. The new value the geometry shows is the only correct one, and it is exactly what building the joint there would have captured -- which is what keeps a scaled mechanism assembled instead of snapping the moment it runs. A spring's rest length and a cable's paid-out length are the opposite case: lengths the *element* owns rather than distances the pose implies, so they scale, and an authored stretch or slack survives. |
+| rotate | invariant too, with two exceptions that measure against the fixed world rather than against the selection: a belt's phase (`rA*thA - sense*rB*thB`, an angle sum with unequal weights) and a background-referenced rotational spring's rest angle. Both shift analytically from the capture, so an authored stress survives. Every weld's rest angle is re-read -- not because its value changes, but because it is measured against a raw `atan2` whose branch the turn may have crossed, and the re-read re-seeds both sides of that comparison together. |
+| scale | every joint's geometry is re-read from the live pose: every station along a line, every weld's rest angle. The new value the geometry shows is the only correct one, and it is exactly what building the joint there would have captured -- which is what keeps a scaled mechanism assembled instead of snapping the moment it runs. A **compliant** line's stations and a cable's paid-out length are the opposite case: lengths the *element* owns rather than distances the pose implies, so they scale, and an authored pre-stretch or slack survives. |
 
 Two consequences worth stating plainly, because both are choices and not accidents:
 
@@ -664,8 +766,8 @@ becoming the reset baseline, exactly as any other unsatisfied edit does (§16.1)
 
 ### Verified
 
-`tools/select-check.js` covers the membership rule (including the grounding rod that
-comes along and the rod that does not), the lasso's centre test, a rigid transform
+`tools/select-check.js` covers the membership rule (including the grounding line that
+comes along and the one that does not), the lasso's centre test, a rigid transform
 that turns every body by the box's delta and leaves every member exactly as stressed
 as it was, a scale that spreads without resizing and leaves the machine assembled, the
 frame's reversibility, and the copy/paste round trip -- congruent, freshly numbered,
@@ -684,7 +786,7 @@ about two hundred lines, no dependency -- and the names it can see are bound in
 ### The problem it solves, and the one it does not
 
 Declaring geometry precisely is a different job from keeping it consistent, and the
-bench already does the second one. A crank at exactly 30 degrees, a rod exactly
+bench already does the second one. A crank at exactly 30 degrees, a bar exactly
 `sqrt(2)` long, a vessel charged to exactly half the ambient: writing those as
 `0.5235987755982988`, `1.4142135623730951` and `50662.5` is not the same statement --
 it is that statement rounded, and the rounding is invisible in the file afterwards.
@@ -721,7 +823,15 @@ abs sign floor ceil round pow mod clamp min max hypot
 A body's properties are exactly the numeric fields its ledger row lists -- a disk
 has `x y r mass th vx vy w` because those are the fields the format gives a disk --
 so the vocabulary cannot drift from the format, and a field added to the ledger is
-a name the moment it exists. Ask for one that is not there and the error says what
+a name the moment it exists.
+
+`bN.` reaches **bodies only**, though: a line shares the id space but is not in
+`bodies`, so `b2.soft` on a line is "there is no body 2 on the bench", and a vertex
+is named by a label rather than an id and answers nothing at all. `VERTEX.md` §X.8
+wants both changed -- a vertex row exposing `x` and `y` should make `A.x` a name the
+moment the vertex exists, and `line 5 -- 2` becoming readable as `A -- B` is most of
+why labels are worth having. Neither is built; the vocabulary is still exactly the
+`bodies` half of the ledger. Ask for one that is not there and the error says what
 the kind does have. `log` is base 10 and `ln` is natural; angles are radians.
 
 ### A file resolves its own names
