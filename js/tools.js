@@ -705,6 +705,9 @@ function joinVertexToLine(line, v){
   // A vertex nothing grounds is now CARRIED by this line, which needs the station to
   // carry it by (constraints.js §06.2e). One that something grounds is unaffected.
   settleVertex(v, wx, wy);
+  // ...and a bar down to one grounded joint holds the heading it has right now
+  // (§06.2f captureLineHeading), which is the geometry this tap just placed.
+  captureLineHeading(line);
   projectPositions(12);
   return true;
 }

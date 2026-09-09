@@ -387,8 +387,12 @@ function dropBodyFromConstraints(id){
     if(isVertex(c)){
       if(vertexOns(c).some(e => e.id===id)){
         const [wx,wy]=vertexWorld(c);
+        const lines=linesAt(c);
         c.on = vertexOns(c).filter(e => e.id!==id);
         settleVertex(c, wx, wy);
+        // A line this vertex was grounding may be down to one joint now, and a bar
+        // that rides one joint holds the heading it was left with (§06.2f).
+        for(const L of lines) captureLineHeading(L);
       }
     }
     else if(isLine(c)) c.mesh = (c.mesh||[]).filter(m => m!==id);
@@ -610,6 +614,11 @@ function makeVertexOn(v, ep, opts){
   if(e.join && o.weld){ e.weld=true;
     e.restAng = o.restAng!==undefined ? o.restAng
               : (line ? lineAngle(line) : incidenceAngle(e)); }
+  // No heading is captured here, and that is deliberate: this is the reader's own
+  // constructor (scene.js §17.4), which builds a vertex's incidences one at a time, so
+  // every intermediate state would look like a bar with one joint and overwrite the
+  // heading the FILE just gave it with one read off half-built geometry. The gestures
+  // that make a joint capture it themselves (tools.js §13.5, inspector.js §14.2c).
   return e;
 }
 // A line's own frame angle, for a weld captured against it -- the RAW segment angle,
@@ -636,12 +645,19 @@ function setVertexJoin(v, e, val){
       e.off = e.id==null ? [wx,wy] : epOffOf(bodies[bodyIndex(e.id)], wx, wy);
     }
     settleVertex(v, wx, wy);
+    for(const L of linesAt(v)) captureLineHeading(L);
   } else {
     // Where it is BEFORE letting go, so the release holds the pose it found -- the
     // same discipline every capture toggle here follows.
     const [wx,wy]=vertexWorld(v);
+    const lines=linesAt(v);
     e.join=false; e.weld=false; delete e.restAng; delete e.s;
     settleVertex(v, wx, wy);
+    // Letting go of the last thing that grounded this vertex can leave a line riding
+    // a single joint, and that is the moment its heading has to be taken: the marks
+    // still say which way the bar was pointing, and nothing else will (§06.2f).
+    for(const L of lines) captureLineHeading(L);
+    if(isLineOn(e)) captureLineHeading(lineById(e.id));
   }
 }
 function setVertexWeld(v, e, val){
@@ -666,6 +682,7 @@ function setVertexSlide(v, e, val){
   else e.s = line ? captureLineStation(line, v) : 0;
   if(line) recaptureLineStations(line);
   settleVertex(v, wx, wy);
+  if(line) captureLineHeading(line);
 }
 // Re-read every weld's rest angle off the live pose -- recaptureConAngles' vertex
 // counterpart, called from the same places (a hand move, a scaled selection box).
@@ -718,15 +735,30 @@ function setVertexWorld(v, wx, wy){
     e.off = epOffOf(b, wx, wy);
   }
   // A vertex the line CARRIES has no offset anywhere that says where it is -- its
-  // station does. Moving it therefore moves it ALONG the bar, to the station nearest
-  // the point asked for, which is the only place on the bar there is to put it. A HELD
-  // joint's station is not re-read here, because this is also the path a TYPED
-  // coordinate commits through, and a typed number is a solve attempt the bar may
-  // refuse (VERTEX.md §X.11). A drag is the other thing -- the hand sets the length --
-  // and it re-reads the stations itself, off the geometry the gesture left
+  // station does. A HELD joint's station is not re-read here, because this is also the
+  // path a TYPED coordinate commits through, and a typed number is a solve attempt the
+  // bar may refuse (VERTEX.md §X.11). A drag is the other thing -- the hand sets the
+  // length -- and it re-reads the stations itself, off the geometry the gesture left
   // (tools.js §13.3, recaptureLineStations).
   const R=vertexRide(v);
-  if(R) R.s = lineStationAt(lineById(R.id), wx, wy);
+  if(!R) return;
+  const line=lineById(R.id);
+  const A=lineAnchors(line);
+  if(A.length===1 && A[0].e.s!==undefined && A[0].v!==v){
+    // Nothing else places this bar, so this point IS its free end, and moving it says
+    // two things at once: which way the bar points and how far along it the point is.
+    // Both are the point's to say -- there is nothing else on the bar to disagree, and
+    // no row anywhere to refuse it -- so the bar swings to the place asked for and the
+    // station is the distance to it (§06.2f lineRiddenPlacement).
+    line.ang = Math.atan2(wy-A[0].wy, wx-A[0].wx) - anchorFrameAngle(A[0].v);
+    R.s = A[0].e.s + Math.hypot(wx-A[0].wx, wy-A[0].wy);
+    rebaseLineStations(line);             // back onto the origin's own scale (§06.2f)
+    return;
+  }
+  // On a bar something else places, the station is all there is to move: the point
+  // runs ALONG the bar, to the station nearest the point asked for, which is the only
+  // place on the bar there is to put it.
+  R.s = lineStationAt(line, wx, wy);
 }
 // Every vertex touching a body, and every body a vertex touches -- the one relation,
 // read from either side. This is the INCIDENCE relation, which is what the rows, the
@@ -1018,6 +1050,88 @@ function lineJointsAll(line){
   }
   return out;
 }
+// ---- a line with one joint left RIDES it (VERTEX.md §X.15) ----
+// The frame a heading is measured in: the body that grounds a joint's vertex, or the
+// world where the background does -- and the world, too, where nothing does, a mark
+// being a point that cannot turn.
+const anchorFrameAngle = v => { const P=vertexPrimary(v);
+  if(!P || P.id==null) return 0;
+  const b=bodies[bodyIndex(P.id)]; return b ? b.th : 0; };
+// The joints something still GROUNDS -- the ones that can place the bar. Two or more
+// and the bar is derived as it always was; exactly one and it rides that one; none
+// and all it has left are the marks its vertices are standing on.
+const lineAnchors = line => lineJointsAll(line).filter(K => vertexPrimary(K.v));
+// ...and the state that has a heading to hold, which is what the file writes it for
+// (scene.js §17.1): derived geometry needs no capture, and none at all cannot use one.
+const lineRidesOne = line => lineAnchors(line).length===1;
+// The heading the bar points RIGHT NOW, read off its joints' anchors with the marks
+// included -- because this is read at the moment a joint has just stopped grounding
+// it, and a mark is the last thing still saying which way the bar was pointing.
+function lineHeadingNow(line){
+  const J=lineJointsAll(line);
+  let P=null,Q=null,best=-1;
+  for(let i=0;i<J.length;i++) for(let j=i+1;j<J.length;j++){
+    const d=(J[i].wx-J[j].wx)**2+(J[i].wy-J[j].wy)**2;
+    if(d>best){ best=d; P=J[i]; Q=J[j]; } }
+  return best>1e-18 ? Math.atan2(P.wy-Q.wy, P.wx-Q.wx) : null;
+}
+// ...captured in the frame of the joint that is left, which is what the bar then
+// rides. Called wherever a join or a joint set changes (§06.2e), AFTER the change: the
+// classification has flipped by then but the geometry has not, which is exactly the
+// pair of facts this needs. A line that is still derived holds no heading -- it has
+// one, from its joints, and a captured one would only go stale behind it.
+function captureLineHeading(line){
+  if(!isLine(line)) return;
+  const A=lineAnchors(line);
+  if(A.length!==1){ delete line.ang; return; }
+  const phi=lineHeadingNow(line);
+  if(phi===null) return;
+  line.ang = phi - anchorFrameAngle(A[0].v);
+}
+// Every line a vertex is joined to, for the callers that have just changed one.
+const linesAt = v => vertexOns(v).filter(e=>e.join && isLineOn(e))
+  .map(e=>lineById(e.id)).filter(Boolean);
+// The placement of a bar that one joint still grounds: it hangs off that joint's
+// frame at the heading it was left with, and everything else on it rides at its
+// station. Nothing outside the assembly is consulted, which is the point -- a mark
+// left behind on the background is where the point WAS, and reading the bar's
+// direction out of it made that stale point a pin nobody authored, one the bar
+// pivoted about while the body it hangs from walked away.
+//
+// It holds no rows either way (`lineFrame` is null here and stays null): a bar with
+// one joint has nothing to hold, and a loose end has no mass to hold it with. This is
+// the geometry of an under-determined object, which is a state and not a failure.
+function lineRiddenPlacement(line, A, J){
+  if(line.ang===undefined) captureLineHeading(line);
+  if(line.ang===undefined) return null;
+  if(A.e.s===undefined) return null;      // a sliding sole joint leaves the bar free
+                                          // along itself too, which one number cannot say
+  const phi=anchorFrameAngle(A.v) + line.ang;
+  const ux=Math.cos(phi), uy=Math.sin(phi);
+  const out=[];
+  for(const K of J){
+    if(K===A){ out.push({K, wx:A.wx, wy:A.wy}); continue; }
+    if(K.e.s===undefined) continue;       // nothing says where along the bar it is
+    const d=K.e.s - A.e.s;
+    out.push({K, wx:A.wx+ux*d, wy:A.wy+uy*d});
+  }
+  if(out.length<2) return null;
+  for(const o of out){ o.K.wx=o.wx; o.K.wy=o.wy; }
+  return out.map(o=>o.K);
+}
+// A station is a distance from the ORIGIN, so the origin's own station is zero and
+// every reading of the geometry counts on it (`lineStationPoint` adds the origin back).
+// A station written DIRECTLY -- the aim below (§06.2e setVertexWorld), which measures
+// from the joint the bar hangs off rather than from the origin -- therefore has to be
+// re-based afterwards, or the origin's offset is counted twice and the point lands
+// that much further along the bar. Pure arithmetic on the stored numbers: the geometry
+// is built from their DIFFERENCES, so shifting them all leaves it exactly where it is.
+function rebaseLineStations(line){
+  const f=linePlacement(line);
+  const s0 = f && f.O && f.O.e.s;
+  if(!s0) return;
+  for(const K of lineJointsAll(line)) if(K.e.s!==undefined) K.e.s -= s0;
+}
 // The line's PLACEMENT: the kinematic frame wherever there is one -- so the canvas,
 // the picker and the panel agree with the solver in every ordinary case -- and a
 // geometry-only stand-in built the same way out of the joints' anchors where there is
@@ -1027,7 +1141,13 @@ function lineJointsAll(line){
 // holding nothing has no rows.
 function linePlacement(line){
   const f=lineFrame(line); if(f) return f;
-  const J=lineJointsAll(line);
+  let J=lineJointsAll(line);
+  // One joint still grounded: the bar rides it rather than the marks (above). Where
+  // that cannot be said, the marks are all there is and the old reading stands -- two
+  // vertices on their own marks with a line between them is the bench a deleted body
+  // leaves, and nothing there moves for a stale point to lie about.
+  const A=J.filter(K=>vertexPrimary(K.v));
+  if(A.length===1) J = lineRiddenPlacement(line, A[0], J) || lineJointsAll(line);
   if(J.length<2) return null;
   let P=null, Q=null, best=-1;
   for(let i=0;i<J.length;i++) for(let j=i+1;j<J.length;j++){

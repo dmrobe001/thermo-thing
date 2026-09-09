@@ -687,6 +687,32 @@ having gone somewhere else. A vertex the line merely *carries* keeps its station
 through all of it: for a rider the station is not a length being set but its
 position, so it rides the bar wherever the drag takes it.
 
+**A bar with one joint left rides it.** Under-determined is a state, not a failure
+(`§X.15`), and the state a line is in when only one of its joints is still grounded
+has an answer: it keeps the **heading** it was left with, measured in that joint's
+frame, and everything else on it rides at its station. So the body it hangs off
+carries the whole arm, turning and all, and nothing outside the assembly is consulted
+-- which is the point. What it used to consult was the *mark* the loose end left
+behind, and a mark is where a point **was**: the bar pivoted about a spot on the
+background that nothing held, that no panel listed, and that the body walked away
+from. That is the same rule as `§X.3`'s, one level up: a mark never locates anything,
+and a line placed by one is a line located by a point nothing holds.
+
+The heading is a **capture**, exactly like a weld's rest angle: taken at the moment
+the joint set changes and holds what it finds. A line two joints still place holds
+none -- it derives one, and a capture kept beside a derivation only goes stale behind
+it -- and a line with nothing grounding it has no frame to hold one in, so there the
+marks are all there is and the old reading stands. Only the middle state writes it to
+the file (`ang=`, `§X.10`), because only there can nothing else work it out.
+
+It builds no rows either way. A bar with one joint has nothing to hold, and a loose
+end has no mass to hold it with -- which is the same reason a vertex a line carries
+asks nothing of the bar. **Dragging that loose end aims the bar**: nothing else places
+it, so the point is its free end and the drag says both things at once -- which way
+the bar points, and how far along it the point sits. On a bar something else places,
+a carried point still runs *along* it, because there the bar's own place is not the
+point's to set.
+
 Dragging the vertex is the *only* gesture that sets a station, and the case that says
 so is a **body** drag. A body a line grounds is pinned -- that is what grounding is,
 and `§X.9`'s arrangement leaves it no freedom at all -- so the hand moves it nowhere

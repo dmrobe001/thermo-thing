@@ -362,9 +362,20 @@ Grammar notes:
   ```
   line 6
   line 7 soft=0.02 posable mesh=5
+  line 8 ang=1.8925
   vertex A on=bg(0,4.4)/join on=6/join/fix/s=0
   vertex B on=1/join on=6/join/fix/s=-2.6 on=7/join
   ```
+
+  `ang` is the one field a line holds that its joints do not derive, and it appears
+  only in the one state where they cannot: a bar with a single joint still grounded
+  **rides** that joint, keeping the heading it was left with in that joint's own frame
+  (`VERTEX.md` §X.15, `constraints.js` §06.2f). It is written there always, zero
+  included -- a capture, so the pose does not imply it -- and never anywhere else,
+  since a bar two joints place derives its heading and one with nothing grounding it
+  has no frame to measure one in. Absent, it is read off the marks the vertices are
+  standing on, which is what an old file and a hand-written one both leave to be
+  worked out.
 
   A **vertex** is a named point and the list of bodies it touches, one `on=` per body
   -- the repeatable key, on the pattern version 3's `pt=` established. A pin is what

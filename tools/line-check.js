@@ -23,6 +23,11 @@
 //      it thaws them again.
 //   7. the file and the tool: a line round-trips with its joints, and the tool's two
 //      modes build one.
+//   8. a bar with ONE joint left rides it: it keeps the heading it was left with,
+//      measured in that joint's frame, so the body it hangs off carries it -- turning
+//      and all -- instead of the bar pivoting about a mark left behind on the
+//      background. Dragging its loose end aims it, since nothing else places it, and
+//      the heading goes into the file because nothing else can work it out.
 const fs=require('fs'), path=require('path'), vm=require('vm');
 const ROOT=path.join(__dirname,'..');
 const stubEl = () => new Proxy({}, { get:(t,k)=>
@@ -273,6 +278,95 @@ run(`(()=>{ setLineMode(true); pending=null;
 run(`runToolClick(3,3)`);
 ok('EXTEND joins a further vertex to the line it started on',
    run('constraints.filter(isLine).length')===1 && run('lineJoints(theLine()).length')===4);
+
+console.log('\n8. a bar with one joint left rides it');
+// Ground -- BAR -- body, both joints held: an anchored arm. Then let the ground go,
+// which is the gesture that leaves the bar with one joint. What used to happen is
+// that the mark the loose end left behind went on placing the bar, so it pivoted
+// about a point on the background that nothing held and that no panel listed.
+const ARM = `(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  const b=makeBody(1,0,0.3); bodies.push(b);
+  const A=makeVertex(null); makeVertexOn(A,{id:null,off:[0,0]},{join:true}); constraints.push(A);
+  const B=makeVertex(null); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
+  const L=makeLine(); constraints.push(L);
+  makeVertexOn(A,{id:L.id},{join:true,slide:false});
+  makeVertexOn(B,{id:L.id},{join:true,slide:false});
+  refreshFrozen(); })()`;
+const loose='constraints.filter(isVertex)[0]', held='constraints.filter(isVertex)[1]';
+const arm = () => { const a=J(`vertexWorld(${loose})`), b=J(`vertexWorld(${held})`);
+  return { len:Math.hypot(a[0]-b[0],a[1]-b[1]), ang:Math.atan2(a[1]-b[1],a[0]-b[0]), at:a }; };
+// Headings compare modulo a whole turn: atan2 has a branch cut and a swing may cross it.
+const angNear=(a,b,tol)=>{ let d=(a-b)%(2*Math.PI);
+  if(d> Math.PI) d-=2*Math.PI;
+  if(d<-Math.PI) d+=2*Math.PI;
+  return Math.abs(d)<=tol; };
+run(ARM);
+run(`setIncidenceJoin(${loose}, null, false)`);
+ok('letting the ground go leaves the bar placed, and holding nothing',
+   J(`!!linePlacement(theLine())`)===true && J(`!!lineFrame(theLine())`)===false
+     && J(`rowsFor(theLine()).length`)===0);
+ok('...with the loose end carried by the bar', J(`!!vertexRide(${loose})`)===true);
+{
+  const before=arm();
+  run(`bodies[0].x += 1; bodies[0].y += 1;`);
+  const after=arm();
+  ok('moving the body carries the whole arm with it',
+     near(after.len, before.len, 1e-9) && angNear(after.ang, before.ang, 1e-9)
+       && near(after.at[0], before.at[0]+1, 1e-9) && near(after.at[1], before.at[1]+1, 1e-9),
+     JSON.stringify([before, after]));
+  ok('...and the mark it left on the background is no longer a pin',
+     Math.hypot(after.at[0], after.at[1])>1e-6,
+     'the bar used to pivot about the point the ground pin was at');
+}
+{
+  // ...and TURNING the body turns the arm, which is the half a stale world point can
+  // never do: the heading is held in the body's frame, not the world's.
+  const before=arm();
+  run(`bodies[0].th += Math.PI/2;`);
+  const after=arm();
+  ok('turning the body swings the arm with it',
+     near(after.len, before.len, 1e-9) && angNear(after.ang, before.ang+Math.PI/2, 1e-9),
+     JSON.stringify([before.ang, after.ang]));
+  run(`bodies[0].th -= Math.PI/2;`);
+}
+{
+  // Dragging the loose end: nothing else places this bar, so the point IS its free
+  // end and the drag says both things at once -- which way the bar points, and how
+  // far along it the point sits.
+  run(ARM);
+  run(`setIncidenceJoin(${loose}, null, false)`);
+  const at=J(`vertexWorld(${loose})`);
+  run(`(()=>{ const h=pickHandle(${at[0]}, ${at[1]}); if(!h) throw new Error('no handle');
+    applyHandle(h, 1.6, 1.2); })()`);
+  const now=J(`vertexWorld(${loose})`);
+  ok('dragging the loose end puts it exactly where the hand asked',
+     near(now[0],1.6,1e-9) && near(now[1],1.2,1e-9), JSON.stringify(now));
+  ok('...which is an aim and a length, both, since both are the point\'s to say',
+     near(arm().len, Math.hypot(1.6-1, 1.2), 1e-9), String(arm().len));
+  const before=arm();
+  run(`bodies[0].th += 0.4;`);
+  ok('...and the aim rides the body from then on',
+     angNear(arm().ang, before.ang+0.4, 1e-9), JSON.stringify([before.ang, arm().ang]));
+}
+{
+  // The file. Nothing else can work the heading out -- the marks the loose ends stand
+  // on are where they WERE, and the body has moved since -- so the bar writes it.
+  const txt=run(`exportScene()`);
+  ok('a bar riding one joint writes its heading', /^line \d+ ang=/m.test(txt),
+     txt.split('\n').filter(l=>l.startsWith('line')).join(' | '));
+  const was=arm();
+  run(`importScene(${JSON.stringify('')} + ${JSON.stringify(txt)})`);
+  const back=arm();
+  ok('...and comes back with the arm exactly where it was',
+     near(back.at[0], was.at[0], 1e-9) && near(back.at[1], was.at[1], 1e-9)
+       && near(back.len, was.len, 1e-9), JSON.stringify([was.at, back.at]));
+  ok('...byte for byte', run(`exportScene()`)===txt);
+  // ...and a bar its joints still derive holds no heading, so it writes none: a
+  // capture nothing reads is a number the file would have to keep honest for nothing.
+  run(ARM);
+  ok('a bar two joints still place writes none', !/ang=/.test(run(`exportScene()`)),
+     run(`exportScene()`).split('\n').filter(l=>l.startsWith('line')).join(' | '));
+}
 
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

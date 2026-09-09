@@ -354,8 +354,10 @@ function setIncidenceJoin(v, id, want){
   if(!makeVertexOn(v, {id, off}, {join:true, slide:true})) return;
   // Which of the vertex's frames now says where it is may have just changed -- ticking
   // a line onto a vertex nothing grounds hands the point to that line, and the line
-  // needs its station to carry it (constraints.js §06.2e).
+  // needs its station to carry it (constraints.js §06.2e). A bar left with one
+  // grounded joint holds the heading it has here, too (§06.2f).
   settleVertex(v, wx, wy);
+  for(const L of linesAt(v)) captureLineHeading(L);
   projectPositions(12);
 }
 // The two commits a row's coordinates make, lifted out of the handlers so the panel
