@@ -613,9 +613,13 @@ Two consequences worth stating plainly:
   body with a single anchor, the anchor carries exactly the net of everything else
   acting on it, which the substep already computes -- but that is not built. The
   affected joints are exactly the ground welds and vessel struts.
-- **A frozen body moved by hand needs its anchors recaptured.** Nothing in the solver
-  will pull them back, because the rows that would have are gone. `recaptureGrounding`
-  (§06.2b) does it, called from the drag path and the inspector's pose fields.
+- **A frozen body whose pose is typed needs its anchors recaptured.** Nothing in the
+  solver will pull them back, because the rows that would have are gone.
+  `recaptureGrounding` (§06.2b) does it, called from the inspector's pose fields. A
+  *drag* on such a body is the case this no longer covers, because it no longer moves
+  it: a body a line grounds is pinned, so the hand moves it nowhere and the bar
+  holding it keeps its length (code §13.6). Posing one is what the line's `posable`
+  tick is for, and unticking a weld or a `slide` is the other way to say it.
 
 ### What is not recognized
 

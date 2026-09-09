@@ -274,10 +274,16 @@ function refreshFrozen(){
 // its length is still a live channel between whatever is attached to it.
 const frozenSolid = b => b.static && (b.shape!=='vessel' || b.lenLock);
 
-// After a frozen body is moved by hand -- dragged, or its pose typed into the
-// inspector -- nothing in the solver will pull its anchors back into agreement,
-// because the rows that would have done so are compiled away. Recapture them from
-// the new pose instead, exactly as creating the rod would have.
+// After a frozen body's pose is TYPED into the inspector, nothing in the solver will
+// pull its anchors back into agreement, because the rows that would have done so are
+// compiled away. Recapture them from the new pose instead, exactly as creating the
+// rod would have.
+//
+// A typed pose only, since a DRAG on such a body no longer moves it (tools.js §13.6):
+// a body a line grounds is pinned, and moving it anyway would have restretched the
+// bar holding it, which is not what dragging a body is for. Typing a pose is the
+// other thing -- a coordinate stated outright, on a body whose rows are not there to
+// argue with it -- so it is the one place this is still what a hand move means.
 function recaptureGrounding(b){
   for(const con of constraints){
     if(lineGrounds(con)!==b && lineLocksLength(con)!==b) continue;

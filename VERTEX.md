@@ -687,6 +687,15 @@ having gone somewhere else. A vertex the line merely *carries* keeps its station
 through all of it: for a rider the station is not a length being set but its
 position, so it rides the bar wherever the drag takes it.
 
+Dragging the vertex is the *only* gesture that sets a station, and the case that says
+so is a **body** drag. A body a line grounds is pinned -- that is what grounding is,
+and `§X.9`'s arrangement leaves it no freedom at all -- so the hand moves it nowhere
+rather than moving it and restretching the bar behind it, which is what re-reading
+the bar's own captures after a kinematic move used to come to. Posing such a
+mechanism is what the line's `posable` tick is for (`§X.6`), and unticking a weld or
+a `slide` is the other way to say the same thing. Every other body drag is solved
+rather than assumed, so the bars hold their lengths through it already.
+
 **Canvas.** Vertices draw as dots -- one dot per joint, not the stack of coincident
 endpoints the pin draws today -- filled when joined, hollow when merely marking a
 spot, with a square tick when welded. Labels top-right. Lines draw as they do now,

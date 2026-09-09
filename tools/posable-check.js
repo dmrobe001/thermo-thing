@@ -15,7 +15,10 @@
 //      never released at all.
 //   4. a posable bar GROUNDING a body releases that body for the drag and grounds it
 //      again where it lands -- a ground strut that still pinned the body it is meant
-//      to slide along would be a contradiction.
+//      to slide along would be a contradiction. And the other half of that: one that
+//      is NOT posable pins it, so the hand moves nothing and restretches nothing. A
+//      grounded body has no freedom left, and a drag on it is not how a bar's length
+//      gets set -- dragging the VERTEX is (code §13.3).
 //   5. between drag steps the bar is rigid, so nothing reads as violated: the pose
 //      the drag leaves is a satisfied one, and becomes the reset baseline.
 //   6. none of it reaches the running physics: a posable bar and a plain one integrate
@@ -138,6 +141,31 @@ run(`poseTo(0, 2.5, 0)`);
 // exactly on it; what matters is that it moved there and is pinned again.
 ok('...and grounded again where it lands', run('bodies[0].static')===true
    && near(+run('bodies[0].x'), 2.5, 2e-2), run('JSON.stringify([bodies[0].static,bodies[0].x])'));
+
+// ...and the same strut without the tick. `posable` is what makes a grounded body
+// posable, which is the whole of what the word says: with it off the body is pinned,
+// the hand moves it nowhere, and -- the case this exists for -- the bar it hangs on
+// keeps the length it was authored at rather than being quietly restretched to
+// wherever the cursor went.
+console.log('\n4b. ...and one that is not posable pins it, hand and all');
+run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  const b=makeBody(1,0,0.2); bodies.push(b);
+  bar([[{id:null,off:[0,0]},{slide:false,weld:true}],
+       [{id:b.id,off:[0,0]},{slide:false,weld:true}]], false); })()`);
+ok('grounded before the drag', run('bodies[0].static')===true);
+ok('...and grounded INSIDE it too, nothing having been released',
+   run(`(()=>{ drag={bi:0,off:[0,0]}; beginPosing(bodies[0].id);
+     const st = withPosing(()=>{ refreshFrozen(); return bodies[0].static; });
+     endPosing(); drag=null; refreshFrozen(); return st; })()`)===true);
+run(`poseTo(0, 2.5, 0)`);
+ok('the hand moves a pinned body nowhere', near(+run('bodies[0].x'), 1, 1e-12)
+   && near(+run('bodies[0].y'), 0, 1e-12), run('JSON.stringify([bodies[0].x,bodies[0].y])'));
+ok('...and the bar it hangs on keeps the length it was authored at',
+   near(+run('span()'), 1, 1e-12) && near(+run('lineSegments(theLine())[0].len'), 1, 1e-12),
+   run('String(span())'));
+ok('...station and all, no joint having travelled along it',
+   run('JSON.stringify(lineFrame(theLine()).J.map(K=>K.e.s))')==='[0,-1]',
+   run('JSON.stringify(lineFrame(theLine()).J.map(K=>K.e.s))'));
 
 console.log('\n5. the pose it leaves is a satisfied one');
 ok('nothing reads as violated after a drag', near(+run('Math.max(...constraints.map(conMaxC))'), 0, 1e-6),
