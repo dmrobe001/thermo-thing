@@ -294,6 +294,24 @@ function applyHandle(ad, wx, wy){
     const s=snapAnchor(wx,wy, vertexOns(con).map(e=>e.id).filter(id=>id!=null));
     lastSnap=s; const P=s?s.wp:[wx,wy];
     setVertexWorld(con, P[0], P[1]);
+    // ...and every station on every line it is joined to follows the hand. A station
+    // is where a joint sits along the bar, so dragging the joint is what SETS it --
+    // the rod's endpoint drag, which redefined the rod's length, said in the line's
+    // vocabulary. The drag is where that belongs and a typed coordinate is not: a
+    // number committed in the panel is a solve ATTEMPT the mechanism may refuse
+    // (VERTEX.md §X.11), while a hand on the bar is the geometry the gesture left,
+    // which is the rule every pose drag and every scaled box already follows
+    // (constraints.js §06.2b recaptureConPose).
+    //
+    // Every station, not just this joint's, because a station is a distance from the
+    // ORIGIN: drag the origin joint -- the one at station 0 -- and it stays at 0 while
+    // every other station on the bar moves, the origin having gone somewhere else.
+    // recaptureLineStations re-reads them all off the live geometry, which is the one
+    // answer to both cases, and it leaves any vertex the line CARRIES where it is.
+    for(const e of vertexOns(con)){
+      if(!isLineOn(e) || !e.join) continue;
+      const line=lineById(e.id); if(line) recaptureLineStations(line);
+    }
   }
   else if(con.type==='knife'){
     const A=bodies[bodyIndex(con.a.id)];
@@ -687,6 +705,9 @@ function joinVertexToLine(line, v){
   // A vertex nothing grounds is now CARRIED by this line, which needs the station to
   // carry it by (constraints.js §06.2e). One that something grounds is unaffected.
   settleVertex(v, wx, wy);
+  // ...and a bar down to one grounded joint holds the heading it has right now
+  // (§06.2f captureLineHeading), which is the geometry this tap just placed.
+  captureLineHeading(line);
   projectPositions(12);
   return true;
 }
@@ -1009,37 +1030,40 @@ function poseDragTo(wx,wy){
     refreshFrozen();
     const G=bodies[drag.bi];
     if(G.static){
-      // move the root kinematically; the island follows it. The pose is captured
-      // BEFORE that move and handed to the projection as its baseline, so a
-      // rolling row sees the kinematic displacement as slip to take up (a rack
-      // welded to a dragged frozen body still turns its pinion) rather than
-      // missing it for having happened outside the solve -- projection.js §09.1.
-      const q0=poseSnapshot();
-      const [gx,gy]=epWorldPt(G,drag.off); G.x+=wx-gx; G.y+=wy-gy;
-      // Its grounding rod's rows are compiled away, so nothing in the solver will
-      // pull the anchor back into agreement -- recapture it from the new pose
-      // instead, exactly as creating the rod would have (§06.2b).
-      recaptureGrounding(G);
-      projectPositions(8, null, q0);
-    } else {
-      // pull the grabbed point toward the cursor; the island articulates to comply.
-      // The goal is capped by screen-space distance (§05.4 saturatingPull), not
-      // set to the raw cursor position: a hard pin straight to the cursor is one
-      // more rigid row demanding exact coincidence, and when the drag has any
-      // component the body's real constraints can't satisfy (dragging a rod
-      // welded to the background, or a slider, off its rail), that extra row
-      // fights the real ones for the same few DOF and shows up as a violation
-      // on them even though the reachable part of the drag is perfectly posable.
-      // Capping how far the goal itself can get from the body's current point
-      // keeps that tug bounded instead of ever-growing, so the real constraints
-      // stay solved and only the unreachable sliver of the drag goes unmet.
-      // 'dragpin' is an internal-only row type (§06.5) -- never added to
-      // `constraints`, just fed through projectPositions as a transient goal.
-      const [gx,gy]=epWorldPt(G,drag.off);
-      const [px,py]=saturatingPull(gx,gy,wx,wy,DRAG_CAP_PX);
-      const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[gx+px,gy+py]};
-      projectPositions(8,[temp]);
+      // PINNED, so the hand moves it nowhere. A body is frozen only when a line
+      // grounds it (constraints.js §06.2b lineGrounds), and that takes two joints
+      // both held AND welded between it and fixed ground -- which leaves the body no
+      // freedom at all. Moving it anyway would mean re-authoring something nobody
+      // asked to change: the bar's own held distance, since its ground end cannot
+      // follow. Dragging a body is not how a bar's length is set -- dragging the
+      // VERTEX is (§13.3) -- so the drag stops here rather than quietly restretching
+      // the mechanism it is holding.
+      //
+      // The way to pose one is to say so, and there are three: tick the line
+      // `posable`, which releases it for exactly this gesture (§06.2d -- which is why
+      // `G.static` is read INSIDE the posing scope, so a released line has already
+      // stopped grounding by the time we get here), untick a weld, or let a joint
+      // slide. Each of them is a statement about the mechanism, which is what the
+      // freedom to move it is.
+      return;
     }
+    // pull the grabbed point toward the cursor; the island articulates to comply.
+    // The goal is capped by screen-space distance (§05.4 saturatingPull), not
+    // set to the raw cursor position: a hard pin straight to the cursor is one
+    // more rigid row demanding exact coincidence, and when the drag has any
+    // component the body's real constraints can't satisfy (dragging a rod
+    // welded to the background, or a slider, off its rail), that extra row
+    // fights the real ones for the same few DOF and shows up as a violation
+    // on them even though the reachable part of the drag is perfectly posable.
+    // Capping how far the goal itself can get from the body's current point
+    // keeps that tug bounded instead of ever-growing, so the real constraints
+    // stay solved and only the unreachable sliver of the drag goes unmet.
+    // 'dragpin' is an internal-only row type (§06.5) -- never added to
+    // `constraints`, just fed through projectPositions as a transient goal.
+    const [gx,gy]=epWorldPt(G,drag.off);
+    const [px,py]=saturatingPull(gx,gy,wx,wy,DRAG_CAP_PX);
+    const temp={type:'dragpin', a:{id:G.id, off:drag.off}, world:[gx+px,gy+py]};
+    projectPositions(8,[temp]);
   });
   // Outside the scope again, so the rod is rigid from here on -- and it holds the
   // pose the drag just reached rather than the one it was authored at. The second

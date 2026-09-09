@@ -28,10 +28,10 @@
 // in one jump. That is inherent to rolling, not to this implementation: where the
 // pinion ends up genuinely depends on the route the rack took to get there.
 //
-// `baseline` lets a caller that MOVED something itself before projecting (the
-// kinematic drag of a frozen body, tools.js §13.6) hand in the pose from before
-// its own move, so that motion counts toward the slip too. Omitted, the baseline
-// is simply the pose on entry.
+// `baseline` lets a caller that MOVED something itself before projecting (a typed
+// pose, inspector.js §14.2; a committed vertex coordinate, §14.2c) hand in the pose
+// from before its own move, so that motion counts toward the slip too. Omitted, the
+// baseline is simply the pose on entry.
 // Extra compliance folded into a `soft` row's own diagonal term (relative to
 // its own weight, so it scales with whatever body/mass it happens to touch --
 // see the dragpin row in constraints.js). Sized so a soft row alone (nothing

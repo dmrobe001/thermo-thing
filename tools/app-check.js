@@ -197,5 +197,58 @@ tries('...and the scene card writes its own text', `sceneCardText().length>0 || 
 tries('a lasso selection opens the group panel',
   `loadExample('fourbar'); selectGroup(bodies.map(b=>b.id)); render(); renderInspector(); clearSelection();`);
 
+console.log('\n4. the panel follows a dragged vertex, field by field');
+// The one gesture that moves a POINT rather than a body, driven through the handle
+// path a pointer drag uses (§13.3), with the vertex's own panel open. Every frame the
+// point sits in has a row on that panel, and each row has to end the drag saying where
+// the point now is -- which is a §14.3 job, since a drag draws frames without ever
+// rebuilding the panel. Two overlapping disks: one HOLDS the point, one merely has it
+// inside, and the background carries its mark.
+const openBench = `(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  const a=makeBody(0,0,1.0);   bodies.push(a);
+  const b=makeBody(0.5,0,0.8); bodies.push(b);
+  const v=makeVertex(null);
+  makeVertexOn(v,{id:null,off:[0.45,0.3]},{join:false});
+  makeVertexOn(v,{id:a.id,off:[0.45,0.3]},{join:false});
+  makeVertexOn(v,{id:b.id,off:[-0.05,0.3]},{join:true});
+  constraints.push(v); refreshFrozen();
+  selectConstraint(constraints.indexOf(v)); render(); renderInspector(); })()`;
+// What the panel is SHOWING: one entry per row on screen, read out of the fields the
+// markup actually wrote, not out of the model behind them.
+const shown = () => JSON.parse(run(`JSON.stringify(incRows.map((R,k)=>{
+  const x=document.getElementById('inc_x'+k), y=document.getElementById('inc_y'+k);
+  return [R.id, x?x.value:null, y?y.value:null]; }))`));
+// One drag step, and the frame that follows it: the handle under the cursor, moved,
+// then the canvas and the HUD, which is what refreshes the panel (§12).
+const dragVertex = (fx,fy,tx,ty) =>
+  run(`(()=>{ const h=pickHandle(${fx},${fy}); if(!h) throw new Error('no handle at the point');
+     applyHandle(h, ${tx}, ${ty}); render(); updateHUD(); })()`);
+
+run(openBench);
+dragVertex(0.45, 0.3, 0.2, -0.4);
+ok('every row on the panel reads the place the drag left the point',
+   JSON.stringify(shown())===JSON.stringify([[null,'0.200','-0.400'],[1,'0.200','-0.400'],[2,'-0.300','-0.400']]),
+   JSON.stringify(shown()));
+// ...and out of the disk that only marks it, which is a row GONE. A value refresh
+// cannot say that, so the panel is rebuilt -- and `incRows` is what a rebuild rewrites,
+// so its own list is the evidence that one happened.
+dragVertex(0.2, -0.4, -2, -2);
+ok('a row the point has left disappears, panel and all',
+   JSON.stringify(JSON.parse(run('JSON.stringify(incRows.map(R=>R.id))')))==='[null,2]',
+   run('JSON.stringify(incRows.map(R=>R.id))'));
+// ...and back in is the same thing the other way: the disk covers the point again, so
+// it is listed again, holding nothing and reading live.
+dragVertex(-2, -2, 0.2, -0.4);
+ok('...and comes back when the point is inside it again',
+   JSON.stringify(shown())===JSON.stringify([[null,'0.200','-0.400'],[1,'0.200','-0.400'],[2,'-0.300','-0.400']]),
+   JSON.stringify(shown()));
+// The same rows from the other side: a BODY's panel lists the vertices inside it, and
+// a drag moves them on that panel too (§14.2c -- one relation, two readings).
+run(`selectBody(0); render(); renderInspector();`);
+dragVertex(0.2, -0.4, 0.5, 0.2);
+ok('a body\'s panel follows the same drag',
+   JSON.stringify(shown())===JSON.stringify([[1,'0.500','0.200']]), JSON.stringify(shown()));
+run(`clearSelection(); setTool('select');`);
+
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

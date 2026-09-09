@@ -119,6 +119,18 @@ body", and the vertex is simply not tied to it yet. Ticking `join` on recaptures
 offset from the live geometry first, so the tick never snaps anything -- the same
 discipline `captureRestAngle` and `setConPointLock` already follow (§06.1, §06.2c).
 
+The two directions are not symmetric, and the asymmetry is the whole of what "not
+held" means. Move the **body** and the spot is material: it goes with the body and
+leaves the vertex standing, which is why an unjoined incidence never locates the
+point. Move the **point** and every incidence re-reads its offset, this one included
+-- the spot it names is *where the point is on that body*, and the point is now
+somewhere else. A move that carries the point out of the body's extent ends the
+incidence outright: there is nothing left for it to say, neither list will show it
+(`§X.11`), and leaving it stored would be a coordinate in the file that no panel can
+reach. A **joined** incidence is never dropped that way -- it is what holds the
+vertex, and holding it from beyond its own outline is what a rod end at arm's length
+always was.
+
 **`weld`** is the one that repays the most. Today it appears as `weldA`, `weldB`,
 `prismaticA`, `prismaticB` and `pt.lock`; here it is one flag with one meaning:
 
@@ -639,18 +651,79 @@ constraint `fix` names but the whole of what says where the point is.
 
 **Every coordinate in one of those rows is editable, and committing one is a solve
 attempt.** Where an incidence holds the vertex there, the number *is* the anchor, so
-the anchor moves and the assembly has to follow; where nothing holds it, there is no
-anchor to move, so the vertex goes to the point named and its own joins are re-read
--- the same edit its own x/y field makes, said in another body's frame. A line's
-coordinate is its station: a held joint owns one, so the number is stored and the bar
-rearranges around it, while a slider -- or a vertex with no joint at all -- owns
-none, so the number says where along the bar to put the point. Either way it ends in
+the anchor moves and the assembly has to follow; where nothing holds it -- a body
+merely listed, and a body *marked* but not joined alike, since a mark holds nothing
+either -- there is no anchor to move, so the vertex goes to the point named and its
+own joins are re-read -- the same edit its own x/y field makes, said in another
+body's frame. A line's coordinate is its station: a held joint owns one, so the
+number is stored and the bar rearranges around it, while a slider -- or a vertex
+with no joint at all -- owns none, so the number says where along the bar to put the
+point. Either way it ends in
 `projectPositions`, which is an *attempt*: a distance the mechanism cannot take
 leaves the bench wherever the solver could get to, exactly as typing a body's pose
 does. Ticking `joined` on ends in the same projection. The tick itself is exact where
 it stands, so on its own that is a no-op; what it is for is the rows the tick has just
 brought to life, so that ticking a line and a body at one vertex lands on the same
 assembled bench in either order.
+
+**A row reads the point, not the editing history.** Move the vertex -- drag its
+handle, type a coordinate, commit one in any of these frames -- and every row on
+every panel that lists it says the new place, at once and while the gesture is still
+going on. That is one point read in several frames, so any two rows disagreeing would
+be one of them having stopped keeping up. Three things make it hold: a move re-reads
+each frame's own coordinate (`§X.3`), a row with no anchor behind it is read live off
+the geometry, and rows that *appear* and *disappear* -- the point dragged into a
+disk's outline, or out of it -- rebuild the panel, since a refreshed number cannot add
+a row. A **station** is included in that, and the drag is where it is *set*: a
+station is where a joint sits along the bar, so dragging the joint by its handle
+re-reads it and the bar takes the length the hand left -- which is the rod's endpoint
+drag said in the line's vocabulary, and the same "the geometry the gesture left is
+the geometry to hold" rule a pose drag and a scaled box already follow. A number
+*typed* into the panel is the other thing and stays the other thing: a solve attempt
+the mechanism may refuse. And every station on that line is re-read, not just the
+dragged joint's, because a station is a distance from the **origin** -- drag the
+joint at station 0 and it stays at 0 while every other station moves, the origin
+having gone somewhere else. A vertex the line merely *carries* keeps its station
+through all of it: for a rider the station is not a length being set but its
+position, so it rides the bar wherever the drag takes it.
+
+**A bar with one joint left rides it.** Under-determined is a state, not a failure
+(`§X.15`), and the state a line is in when only one of its joints is still grounded
+has an answer: it keeps the **heading** it was left with, measured in that joint's
+frame, and everything else on it rides at its station. So the body it hangs off
+carries the whole arm, turning and all, and nothing outside the assembly is consulted
+-- which is the point. What it used to consult was the *mark* the loose end left
+behind, and a mark is where a point **was**: the bar pivoted about a spot on the
+background that nothing held, that no panel listed, and that the body walked away
+from. That is the same rule as `§X.3`'s, one level up: a mark never locates anything,
+and a line placed by one is a line located by a point nothing holds.
+
+The heading is a **capture**, exactly like a weld's rest angle: taken at the moment
+the joint set changes and holds what it finds. A line two joints still place holds
+none -- it derives one, and a capture kept beside a derivation only goes stale behind
+it -- and a line with nothing grounding it has no frame to hold one in, so there the
+marks are all there is and the old reading stands. Only the middle state writes it to
+the file (`ang=`, `§X.10`), because only there can nothing else work it out.
+
+It builds no rows either way. A bar with one joint has nothing to hold, and a loose
+end has no mass to hold it with -- which is the same reason a vertex a line carries
+asks nothing of the bar. **Dragging that loose end aims the bar**: nothing else places
+it, so the point is its free end and the drag says both things at once -- which way
+the bar points, and how far along it the point sits. What it does not say is which
+**side** of the held joint the point is on: everything else on the bar has a station
+too, and a point taken across the joint the bar hangs from would swing all of them
+through half a turn to follow it. So the arm turns about that joint and the rest of
+it keeps its place along the bar. On a bar something else places, a carried point
+still runs *along* it, because there the bar's own place is not the point's to set.
+
+Dragging the vertex is the *only* gesture that sets a station, and the case that says
+so is a **body** drag. A body a line grounds is pinned -- that is what grounding is,
+and `§X.9`'s arrangement leaves it no freedom at all -- so the hand moves it nowhere
+rather than moving it and restretching the bar behind it, which is what re-reading
+the bar's own captures after a kinematic move used to come to. Posing such a
+mechanism is what the line's `posable` tick is for (`§X.6`), and unticking a weld or
+a `slide` is the other way to say the same thing. Every other body drag is solved
+rather than assumed, so the bars hold their lengths through it already.
 
 **Canvas.** Vertices draw as dots -- one dot per joint, not the stack of coincident
 endpoints the pin draws today -- filled when joined, hollow when merely marking a

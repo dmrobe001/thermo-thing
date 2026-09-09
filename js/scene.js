@@ -222,6 +222,15 @@ const SCENE_SCHEMA = [
       soft:{t:'num', def:0, get:c=>c.soft, set:(c,v)=>{c.soft=v;}},
       posable:{t:'flag', def:false, get:c=>!!c.posable, set:(c,v)=>{c.posable=!!v;}},
       mesh:{t:'refs', def:[], get:c=>c.mesh||[], set:(c,a)=>{c.mesh=a.slice();}},
+      // The heading a bar holds while ONE joint still grounds it, measured in that
+      // joint's frame (constraints.js §06.2f). Written only in that state and always
+      // written there, zero included: it is a capture, so the geometry does not imply
+      // it -- a determined bar derives its heading from its joints and holds none, and
+      // a bar with nothing grounding it has no frame to hold one in. Absent, it is
+      // read off the marks the vertices are standing on, which is what an old file and
+      // a hand-written one both leave to be worked out.
+      ang:{t:'num', always:true, when:c=>lineRidesOne(c),
+           get:c=>c.ang||0, set:(c,v)=>{c.ang=v;}},
     },
     build:()=>makeLine() },
 

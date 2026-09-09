@@ -620,5 +620,190 @@ const V='constraints[constraints.length-1]';
          && Math.abs(vertexWorld(v)[0]-w[0])<1e-9 && Math.abs(vertexWorld(v)[1]-w[1])<1e-9; })()`)===true);
 }
 
+console.log('\n12. a dragged vertex is at a new place in every frame at once');
+// Two overlapping disks: the point is JOINED to the one on top, merely INSIDE the one
+// underneath, and carries its own background mark -- which is one point wearing three
+// frames' coordinates, and the arrangement both panels are about. Dragging it is the
+// one gesture that moves the point rather than a body, so every one of those
+// coordinates has to be re-read, the mark included: it names the spot the point is at,
+// and the point is now somewhere else (constraints.js §06.2e setVertexWorld).
+const THREE_FRAMES = `(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  const a=makeBody(0,0,1.0);   bodies.push(a);          // underneath
+  const b=makeBody(0.5,0,0.8); bodies.push(b);          // on top, and holding it
+  const v=makeVertex(null);
+  makeVertexOn(v,{id:null,off:[0.45,0.3]},{join:false});
+  makeVertexOn(v,{id:a.id,off:[0.45,0.3]},{join:false});
+  makeVertexOn(v,{id:b.id,off:[-0.05,0.3]},{join:true});
+  constraints.push(v); refreshFrozen(); return v; })()`;
+run(THREE_FRAMES);
+run(`setVertexWorld(constraints[0], 0.2, -0.4)`);
+{
+  const w=J('vertexOns(constraints[0]).map(e=>epWorld(e).slice(0,2))');
+  ok('every frame reads the point back at the place it was dragged to',
+     w.every(q=>near(q[0],0.2,1e-12) && near(q[1],-0.4,1e-12)), JSON.stringify(w));
+  const mark=J('vertexOns(constraints[0]).find(e=>e.id===1).off');
+  ok('...the unjoined one included, which is the coordinate that used to stand still',
+     near(mark[0],0.2,1e-12) && near(mark[1],-0.4,1e-12), JSON.stringify(mark));
+  ok('...and the bodies did not move, which is what re-reading the anchors is for',
+     near(J('bodies[1].x'),0.5,1e-12) && run('conMaxC(constraints[0])')<1e-12);
+}
+{
+  // The same numbers, read the way the panels read them (inspector.js §14.2c): one row
+  // per site, each saying where the point is in that frame.
+  const back=J(`vertexSites(constraints[0]).map(s=>{
+    const off=incidenceOff(constraints[0], s.id);
+    return s.id==null ? off : epWorldPt(bodies[bodyIndex(s.id)], off).slice(0,2); })`);
+  ok('and every row the panel draws says the same place',
+     back.length===3 && back.every(q=>near(q[0],0.2,1e-9) && near(q[1],-0.4,1e-9)),
+     JSON.stringify(back));
+}
+{
+  // Out of the top disk, which HOLDS it: a join is never dropped, and where it holds
+  // the point from is its own business -- an anchor outside its own outline is what a
+  // rod end at arm's length always was.
+  run(`setVertexWorld(constraints[0], -0.5, -0.5)`);
+  const sites=J('vertexSites(constraints[0]).map(s=>s.id)');
+  ok('dragged outside a body that HOLDS it, the row stays', JSON.stringify(sites)==='[null,1,2]',
+     JSON.stringify(sites));
+  const mark=J('vertexOns(constraints[0]).find(e=>e.id===1).off');
+  ok('...and the mark on the disk it is still inside kept up',
+     near(mark[0],-0.5,1e-12) && near(mark[1],-0.5,1e-12), JSON.stringify(mark));
+}
+{
+  // ...and out of the one that merely marks it, which is where the relation ends. The
+  // row goes because there is nothing left for it to say, and the incidence goes with
+  // it rather than sitting in the file where no panel can reach it.
+  run(`setVertexWorld(constraints[0], -2, -2)`);
+  const sites=J('vertexSites(constraints[0]).map(s=>s.id)');
+  ok('dragged out of a body that only MARKS it, the row disappears',
+     JSON.stringify(sites)==='[null,2]', JSON.stringify(sites));
+  ok('...and so does the incidence behind it',
+     J('vertexOns(constraints[0]).some(e=>e.id===1)')===false);
+  ok('...read from the body\'s side too', JSON.stringify(J('verticesInExtent(1).map(v=>v.label)'))==='[]');
+  ok('...while the join is untouched, and still holds the point where it is',
+     J('vertexOns(constraints[0]).some(e=>e.id===2 && e.join)')===true
+       && run('conMaxC(constraints[0])')<1e-12);
+}
+{
+  // A point with nothing but a mark is the case that could lose its place: drag it off
+  // the body and the last thing saying where it is has just gone. The background takes
+  // it over at the point, which is the same bottom of the chain settleVertex plants.
+  run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+    bodies.push(makeBody(0,0,0.5));
+    const v=makeVertex(null); makeVertexOn(v,{id:1,off:[0.2,0.1]},{join:false});
+    constraints.push(v); })()`);
+  run(`setVertexWorld(constraints[0], 3, 1)`);
+  const w=J('vertexWorld(constraints[0])');
+  ok('a point whose only mark is dragged off its body is still somewhere',
+     near(w[0],3,1e-12) && near(w[1],1,1e-12), JSON.stringify(w));
+  ok('...in the background frame, which is the one that cannot move out from under it',
+     JSON.stringify(J('vertexOns(constraints[0]).map(e=>[e.id,e.join])'))==='[[null,false]]');
+}
+{
+  // The other direction is unchanged, and the panel is what makes the difference
+  // visible: a mark is MATERIAL, so a body walking away takes its mark with it and
+  // leaves the vertex standing. What the row then shows is where the point is in that
+  // body's frame -- read live, because nothing is holding the two together to store.
+  run(THREE_FRAMES);
+  const before=J('vertexWorld(constraints[0])');
+  run(`bodies[0].x = 4`);
+  const after=J('vertexWorld(constraints[0])');
+  ok('a body walking off does not drag the vertex along by its mark',
+     near(before[0],after[0],1e-12) && near(before[1],after[1],1e-12), JSON.stringify([before,after]));
+  const row=J('incidenceOff(constraints[0], 1)');
+  ok('...and its row reads where the point is in that frame, not the number left behind',
+     near(row[0],after[0]-4,1e-9) && near(row[1],after[1],1e-9), JSON.stringify(row));
+}
+{
+  // Which is the same rule the commit follows: an unjoined incidence holds nothing, so
+  // there is no anchor to move and the number says where to put the VERTEX -- exactly
+  // as it does for a body carrying no incidence at all (§9 above).
+  run(THREE_FRAMES);
+  run(`commitIncidenceOff(constraints[0], 1, 0.4, -0.2)`);
+  const w=J('vertexWorld(constraints[0])');
+  ok('editing a marked body\'s coordinates moves the vertex there',
+     near(w[0],0.4,1e-9) && near(w[1],-0.2,1e-9), JSON.stringify(w));
+}
+
+console.log('\n13. dragging a joint sets the bar: the stations follow the hand');
+// A line with two joined, non-sliding vertices is a BAR, and its held distance is the
+// difference of two stations. Dragging one of those joints by its handle is what the
+// rod's endpoint drag was: the hand sets the length, so the station is re-read at the
+// geometry the gesture left rather than fought by it (a typed coordinate is the one
+// that is fought -- VERTEX.md §X.11).
+const BAR2 = `(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  const a=makeBody(-1,0,0.3); bodies.push(a);
+  const b=makeBody( 1,0,0.3); bodies.push(b);
+  const A=makeVertex(null); makeVertexOn(A,{id:a.id,off:[0,0]},{join:true}); constraints.push(A);
+  const B=makeVertex(null); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
+  const L=makeLine(); constraints.push(L);
+  makeVertexOn(A,{id:L.id},{join:true,slide:false});
+  makeVertexOn(B,{id:L.id},{join:true,slide:false});
+  refreshFrozen(); return L; })()`;
+const LINE='constraints.find(isLine)';
+// The station every other station is measured from, and the joint sitting at it.
+const originLabel = () => J(`lineFrame(${LINE}).O.v.label`);
+const byLabel = lab => `constraints.find(c=>isVertex(c)&&c.label==='${lab}')`;
+const stationOf = lab => J(`vertexOns(${byLabel(lab)}).find(e=>e.kind==='line').s`);
+const vertexAt = lab => J(`vertexWorld(${byLabel(lab)})`);
+const drag = (fx,fy,tx,ty) => run(`(()=>{ const h=pickHandle(${fx},${fy});
+  if(!h) throw new Error('no handle at ('+${fx}+','+${fy}+')');
+  applyHandle(h, ${tx}, ${ty}); })()`);
+run(BAR2);
+ok('a bar of two held joints starts at the length it was built with',
+   near(J(`lineSegments(${LINE})[0].len`), 2, 1e-12), String(J(`lineSegments(${LINE})[0].len`)));
+{
+  const O=originLabel();                       // 'A' or 'B' -- whichever the frame ranks first
+  const moved = O==='A' ? 'B' : 'A';           // drag the one that is NOT the origin
+  const at = vertexAt(moved);
+  drag(at[0], at[1], 1, 1);
+  ok('dragging a joint re-reads its own station',
+     near(Math.abs(stationOf(moved) - stationOf(O)), Math.hypot(2,1), 1e-9),
+     JSON.stringify([stationOf(O), stationOf(moved)]));
+  ok('...so the held distance is the one the hand left',
+     near(J(`lineSegments(${LINE})[0].len`), Math.hypot(2,1), 1e-9),
+     String(J(`lineSegments(${LINE})[0].len`)));
+  ok('...and the bar is assembled at it rather than violated by it',
+     run(`conMaxC(${LINE})`)<1e-9, String(run(`conMaxC(${LINE})`)));
+  ok('...with the origin still at station 0, which is what an origin is',
+     stationOf(O)===0, String(stationOf(O)));
+}
+{
+  // The other half of it: drag the joint AT station 0. Its own station cannot move --
+  // it is the origin -- so what moves is every OTHER station on the bar.
+  run(BAR2);
+  const O=originLabel(), other = O==='A' ? 'B' : 'A';
+  const before=stationOf(other);
+  const at=vertexAt(O);
+  drag(at[0], at[1], -2, 0.5);
+  const after=stationOf(other);
+  ok('dragging the joint at station 0 moves the OTHER stations instead',
+     stationOf(O)===0 && Math.abs(after-before)>1e-6
+       && near(Math.abs(after), Math.hypot(3,0.5), 1e-9),
+     JSON.stringify([before, after, stationOf(O)]));
+  ok('...and the bar is again assembled at what the drag left',
+     near(J(`lineSegments(${LINE})[0].len`), Math.hypot(3,0.5), 1e-9)
+       && run(`conMaxC(${LINE})`)<1e-9,
+     String(J(`lineSegments(${LINE})[0].len`)));
+}
+{
+  // A vertex the line CARRIES is measured from that same origin, and it is not a
+  // length being set -- it is a position. So it keeps its station and rides the bar
+  // wherever the drag takes it, exactly as swinging the bar by a body already does.
+  run(BAR2);
+  run(`(()=>{ const r=makeVertex(null); makeVertexOn(r,{id:null,off:[0,0]},{join:false});
+    constraints.push(r); joinVertexToLine(${LINE}, r); })()`);
+  const rider = 'constraints[constraints.length-1]';
+  const s0=J(`vertexOns(${rider}).find(e=>e.kind==='line').s`);
+  const O=originLabel();
+  const at=vertexAt(O);
+  drag(at[0], at[1], -2, 0.5);
+  ok('a carried vertex keeps its station while the bar is restretched under it',
+     near(J(`vertexOns(${rider}).find(e=>e.kind==='line').s`), s0, 1e-9),
+     JSON.stringify([s0, J(`vertexOns(${rider}).find(e=>e.kind==='line').s`)]));
+  ok('...and is still on the bar it rides',
+     run(`conMaxC(${LINE})`)<1e-9, String(run(`conMaxC(${LINE})`)));
+}
+
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);
