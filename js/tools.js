@@ -294,6 +294,24 @@ function applyHandle(ad, wx, wy){
     const s=snapAnchor(wx,wy, vertexOns(con).map(e=>e.id).filter(id=>id!=null));
     lastSnap=s; const P=s?s.wp:[wx,wy];
     setVertexWorld(con, P[0], P[1]);
+    // ...and every station on every line it is joined to follows the hand. A station
+    // is where a joint sits along the bar, so dragging the joint is what SETS it --
+    // the rod's endpoint drag, which redefined the rod's length, said in the line's
+    // vocabulary. The drag is where that belongs and a typed coordinate is not: a
+    // number committed in the panel is a solve ATTEMPT the mechanism may refuse
+    // (VERTEX.md §X.11), while a hand on the bar is the geometry the gesture left,
+    // which is the rule every pose drag and every scaled box already follows
+    // (constraints.js §06.2b recaptureConPose).
+    //
+    // Every station, not just this joint's, because a station is a distance from the
+    // ORIGIN: drag the origin joint -- the one at station 0 -- and it stays at 0 while
+    // every other station on the bar moves, the origin having gone somewhere else.
+    // recaptureLineStations re-reads them all off the live geometry, which is the one
+    // answer to both cases, and it leaves any vertex the line CARRIES where it is.
+    for(const e of vertexOns(con)){
+      if(!isLineOn(e) || !e.join) continue;
+      const line=lineById(e.id); if(line) recaptureLineStations(line);
+    }
   }
   else if(con.type==='knife'){
     const A=bodies[bodyIndex(con.a.id)];

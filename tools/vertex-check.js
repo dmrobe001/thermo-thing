@@ -725,5 +725,85 @@ run(`setVertexWorld(constraints[0], 0.2, -0.4)`);
      near(w[0],0.4,1e-9) && near(w[1],-0.2,1e-9), JSON.stringify(w));
 }
 
+console.log('\n13. dragging a joint sets the bar: the stations follow the hand');
+// A line with two joined, non-sliding vertices is a BAR, and its held distance is the
+// difference of two stations. Dragging one of those joints by its handle is what the
+// rod's endpoint drag was: the hand sets the length, so the station is re-read at the
+// geometry the gesture left rather than fought by it (a typed coordinate is the one
+// that is fought -- VERTEX.md §X.11).
+const BAR2 = `(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+  const a=makeBody(-1,0,0.3); bodies.push(a);
+  const b=makeBody( 1,0,0.3); bodies.push(b);
+  const A=makeVertex(null); makeVertexOn(A,{id:a.id,off:[0,0]},{join:true}); constraints.push(A);
+  const B=makeVertex(null); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
+  const L=makeLine(); constraints.push(L);
+  makeVertexOn(A,{id:L.id},{join:true,slide:false});
+  makeVertexOn(B,{id:L.id},{join:true,slide:false});
+  refreshFrozen(); return L; })()`;
+const LINE='constraints.find(isLine)';
+// The station every other station is measured from, and the joint sitting at it.
+const originLabel = () => J(`lineFrame(${LINE}).O.v.label`);
+const byLabel = lab => `constraints.find(c=>isVertex(c)&&c.label==='${lab}')`;
+const stationOf = lab => J(`vertexOns(${byLabel(lab)}).find(e=>e.kind==='line').s`);
+const vertexAt = lab => J(`vertexWorld(${byLabel(lab)})`);
+const drag = (fx,fy,tx,ty) => run(`(()=>{ const h=pickHandle(${fx},${fy});
+  if(!h) throw new Error('no handle at ('+${fx}+','+${fy}+')');
+  applyHandle(h, ${tx}, ${ty}); })()`);
+run(BAR2);
+ok('a bar of two held joints starts at the length it was built with',
+   near(J(`lineSegments(${LINE})[0].len`), 2, 1e-12), String(J(`lineSegments(${LINE})[0].len`)));
+{
+  const O=originLabel();                       // 'A' or 'B' -- whichever the frame ranks first
+  const moved = O==='A' ? 'B' : 'A';           // drag the one that is NOT the origin
+  const at = vertexAt(moved);
+  drag(at[0], at[1], 1, 1);
+  ok('dragging a joint re-reads its own station',
+     near(Math.abs(stationOf(moved) - stationOf(O)), Math.hypot(2,1), 1e-9),
+     JSON.stringify([stationOf(O), stationOf(moved)]));
+  ok('...so the held distance is the one the hand left',
+     near(J(`lineSegments(${LINE})[0].len`), Math.hypot(2,1), 1e-9),
+     String(J(`lineSegments(${LINE})[0].len`)));
+  ok('...and the bar is assembled at it rather than violated by it',
+     run(`conMaxC(${LINE})`)<1e-9, String(run(`conMaxC(${LINE})`)));
+  ok('...with the origin still at station 0, which is what an origin is',
+     stationOf(O)===0, String(stationOf(O)));
+}
+{
+  // The other half of it: drag the joint AT station 0. Its own station cannot move --
+  // it is the origin -- so what moves is every OTHER station on the bar.
+  run(BAR2);
+  const O=originLabel(), other = O==='A' ? 'B' : 'A';
+  const before=stationOf(other);
+  const at=vertexAt(O);
+  drag(at[0], at[1], -2, 0.5);
+  const after=stationOf(other);
+  ok('dragging the joint at station 0 moves the OTHER stations instead',
+     stationOf(O)===0 && Math.abs(after-before)>1e-6
+       && near(Math.abs(after), Math.hypot(3,0.5), 1e-9),
+     JSON.stringify([before, after, stationOf(O)]));
+  ok('...and the bar is again assembled at what the drag left',
+     near(J(`lineSegments(${LINE})[0].len`), Math.hypot(3,0.5), 1e-9)
+       && run(`conMaxC(${LINE})`)<1e-9,
+     String(J(`lineSegments(${LINE})[0].len`)));
+}
+{
+  // A vertex the line CARRIES is measured from that same origin, and it is not a
+  // length being set -- it is a position. So it keeps its station and rides the bar
+  // wherever the drag takes it, exactly as swinging the bar by a body already does.
+  run(BAR2);
+  run(`(()=>{ const r=makeVertex(null); makeVertexOn(r,{id:null,off:[0,0]},{join:false});
+    constraints.push(r); joinVertexToLine(${LINE}, r); })()`);
+  const rider = 'constraints[constraints.length-1]';
+  const s0=J(`vertexOns(${rider}).find(e=>e.kind==='line').s`);
+  const O=originLabel();
+  const at=vertexAt(O);
+  drag(at[0], at[1], -2, 0.5);
+  ok('a carried vertex keeps its station while the bar is restretched under it',
+     near(J(`vertexOns(${rider}).find(e=>e.kind==='line').s`), s0, 1e-9),
+     JSON.stringify([s0, J(`vertexOns(${rider}).find(e=>e.kind==='line').s`)]));
+  ok('...and is still on the bar it rides',
+     run(`conMaxC(${LINE})`)<1e-9, String(run(`conMaxC(${LINE})`)));
+}
+
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

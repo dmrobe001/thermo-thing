@@ -674,9 +674,18 @@ be one of them having stopped keeping up. Three things make it hold: a move re-r
 each frame's own coordinate (`§X.3`), a row with no anchor behind it is read live off
 the geometry, and rows that *appear* and *disappear* -- the point dragged into a
 disk's outline, or out of it -- rebuild the panel, since a refreshed number cannot add
-a row. A held joint's **station** is the one number a move leaves alone: it is the
-bar's own length to the next held joint, and re-reading it would let a drag silently
-restretch the bar instead of asking the mechanism to take the move.
+a row. A **station** is included in that, and the drag is where it is *set*: a
+station is where a joint sits along the bar, so dragging the joint by its handle
+re-reads it and the bar takes the length the hand left -- which is the rod's endpoint
+drag said in the line's vocabulary, and the same "the geometry the gesture left is
+the geometry to hold" rule a pose drag and a scaled box already follow. A number
+*typed* into the panel is the other thing and stays the other thing: a solve attempt
+the mechanism may refuse. And every station on that line is re-read, not just the
+dragged joint's, because a station is a distance from the **origin** -- drag the
+joint at station 0 and it stays at 0 while every other station moves, the origin
+having gone somewhere else. A vertex the line merely *carries* keeps its station
+through all of it: for a rider the station is not a length being set but its
+position, so it rides the bar wherever the drag takes it.
 
 **Canvas.** Vertices draw as dots -- one dot per joint, not the stack of coincident
 endpoints the pin draws today -- filled when joined, hollow when merely marking a

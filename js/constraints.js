@@ -714,9 +714,11 @@ function setVertexWorld(v, wx, wy){
   // A vertex the line CARRIES has no offset anywhere that says where it is -- its
   // station does. Moving it therefore moves it ALONG the bar, to the station nearest
   // the point asked for, which is the only place on the bar there is to put it. A HELD
-  // joint's station is not re-read with the offsets above: it is the bar's own length
-  // to the next held joint, so re-reading it would let a drag silently restretch the
-  // bar instead of asking the mechanism to take the move (VERTEX.md §X.11).
+  // joint's station is not re-read here, because this is also the path a TYPED
+  // coordinate commits through, and a typed number is a solve attempt the bar may
+  // refuse (VERTEX.md §X.11). A drag is the other thing -- the hand sets the length --
+  // and it re-reads the stations itself, off the geometry the gesture left
+  // (tools.js §13.3, recaptureLineStations).
   const R=vertexRide(v);
   if(R) R.s = lineStationAt(lineById(R.id), wx, wy);
 }
