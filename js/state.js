@@ -2,7 +2,7 @@
 //  §04 · WORLD STATE & GLOBALS
 //  The single source of truth the rest of the file reads and mutates.
 //    §04.1  canvas / context handles
-//    §04.2  world arrays (bodies, constraints, cables, springs)
+//    §04.2  world arrays (bodies, constraints, cables)
 //    §04.3  sim parameters & camera
 // ============================================================================
 
@@ -14,9 +14,12 @@ const sctx = spark.getContext('2d');
 
 // ---- §04.2 · world arrays ----
 let bodies = [];        // {x,y,th, vx,vy,w, mass, I, invM, invI, r, static, sel}
+// `constraints` holds every COUPLING -- the things that produce rows rather than
+// columns: vertices and lines (constraints.js §06.2e/§06.2f) alongside belt, cvt,
+// knife. A line is a body to anything naming one, but it has no coordinates, so it
+// does not live in `bodies`.
 let constraints = [];   // typed; see makers below
 let cables = [];        // radial-ratchet cable elements (unilateral)
-let springs = [];       // linear (Hookean) spring force elements, see constraints.js §06.6
 let rotSprings = [];    // rotational (torsional) spring force elements, see constraints.js §06.6
 let interactions = []; // heat & mass exchange couplings, see physics.js §08.0b
 let uid = 1;

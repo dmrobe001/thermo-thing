@@ -6,7 +6,7 @@
 //    §11.2  background        (drawGrid, drawAxes)
 //    §11.3  bodies            (drawBody, drawVessel, jointDot)
 //    §11.4  cable              (drawCable)
-//    §11.4b springs           (drawSpring, drawRotSpring, drawSpiral -- force elements)
+//    §11.4b rotational springs (drawRotSpring, drawSpiral, drawCoil -- force elements)
 //    §11.4c interactions      (drawInteraction -- heat & mass exchange couplings)
 //    §11.5  constraints       (drawConstraint + drawRim, beltTangents)
 //    §11.6  reaction vectors  (drawReaction -- the lambda arrows)
@@ -32,7 +32,6 @@ function render(){
   // creation order, which pick/hit-testing still relies on).
   for(const b of [...bodies].sort((p,q)=>bodyExtentR(q)-bodyExtentR(p))) drawBody(b);
   for(const cb of cables) drawCable(cb);
-  for(const sp of springs) drawSpring(sp);
   for(const rs of rotSprings) drawRotSpring(rs);
   for(const con of constraints) drawConstraint(con);
   for(const it of interactions) drawInteraction(it);
@@ -204,24 +203,6 @@ function jointDot(x,y,col){ const [sx,sy]=w2s(x,y);
   ctx.fillStyle='#13161c';ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.fill();
   ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.arc(sx,sy,4.5,0,Math.PI*2);ctx.stroke(); }
 
-// One endpoint of a rod or slot: a ground hatch if it's background-anchored,
-// plus a square (locked -- rotation-locked to the other endpoint's line, i.e.
-// rod's "weld" or slot's "prismatic") or a round joint dot (pinned -- free to
-// rotate).
-function drawEndMarker(x,y,locked,isBackground,col){
-  const [sx,sy]=w2s(x,y);
-  if(isBackground){
-    ctx.strokeStyle=col;ctx.lineWidth=1.5;
-    ctx.beginPath();ctx.moveTo(sx,sy+4);ctx.lineTo(sx-7,sy+14);ctx.lineTo(sx+7,sy+14);ctx.closePath();ctx.stroke();
-    for(let i=-7;i<=7;i+=4){ctx.beginPath();ctx.moveTo(sx+i,sy+14);ctx.lineTo(sx+i-4,sy+19);ctx.stroke();}
-  }
-  if(locked){
-    ctx.fillStyle='#13161c';ctx.strokeStyle=col;ctx.lineWidth=2;
-    ctx.beginPath();ctx.rect(sx-5,sy-5,10,10);ctx.fill();ctx.stroke();
-  } else {
-    jointDot(x,y,col);
-  }
-}
 
 // ---- §11.4 · cable (drawCable) ----
 function drawCable(cb){
@@ -258,9 +239,10 @@ function drawCable(cb){
     ctx.strokeStyle=handleHover?'#8fd0ff':col; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(ax2,ay2,rad,0,Math.PI*2); ctx.stroke();
   }
 }
-// ---- §11.4b · springs (drawSpring, drawRotSpring, drawSpiral) ----
-// Force elements, not constraints (constraints.js §06.6) -- drawn in their own
-// pass alongside the cable, before drawConstraint's rigid-joint pass.
+// ---- §11.4b · rotational springs and the coil glyph ----
+// Force elements, not constraints -- drawn in their own pass alongside the cable,
+// before drawConstraint's rigid-joint pass. drawCoil is shared with the COMPLIANT
+// line (constraints.js §06.2f), which is a force element wearing a bar's shape.
 // Zigzag/coil line for a linear spring's body, between two world points, with
 // short straight leads at each end (the standard spring glyph). Amplitude and
 // lead length are fixed in screen pixels (like the tol/off constants
@@ -288,40 +270,6 @@ function drawCoil(wax,way,wbx,wby){
   const [s2x,s2y]=w2s(p2x,p2y); ctx.lineTo(s2x,s2y);
   const [s3x,s3y]=w2s(wbx,wby); ctx.lineTo(s3x,s3y);
   ctx.stroke();
-}
-// The rest-length indicator, shown only while the spring is selected: a
-// dimension-style capped line parallel to the spring, centred on it
-// (springRestHandlePos/constraints.js §06.6 places the draggable end of this
-// same line -- drawn here, picked/dragged via conHandles/applyHandle,
-// tools.js §13.3).
-function drawSpringRestLine(con,col){
-  const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-  const dx=wbx-wax, dy=wby-way, L=Math.hypot(dx,dy)||1e-9;
-  const ux=dx/L, uy=dy/L, nx=-uy, ny=ux;
-  const off=SPRING_LINE_OFFSET_PX/cam.scale;
-  const cx=(wax+wbx)/2+nx*off, cy=(way+wby)/2+ny*off;
-  const hx=ux*con.restLen/2, hy=uy*con.restLen/2;
-  const p1=[cx-hx,cy-hy], p2=[cx+hx,cy+hy];
-  const cap=6/cam.scale;
-  ctx.strokeStyle=col; ctx.lineWidth=1.5; ctx.setLineDash([4,3]);
-  const [s1x,s1y]=w2s(p1[0],p1[1]), [s2x,s2y]=w2s(p2[0],p2[1]);
-  ctx.beginPath();ctx.moveTo(s1x,s1y);ctx.lineTo(s2x,s2y);ctx.stroke();
-  ctx.setLineDash([]);
-  for(const p of [p1,p2]){
-    const a=[p[0]-nx*cap,p[1]-ny*cap], b=[p[0]+nx*cap,p[1]+ny*cap];
-    const [ax,ay]=w2s(a[0],a[1]), [bx,by]=w2s(b[0],b[1]);
-    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-  }
-}
-function drawSpring(sp){
-  const sel=sp.sel, hoverOn=!sel && hover===sp;
-  const col = sel?'#5aa9f0':hoverOn?'#8fc4f7':'#8a94a6';
-  const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
-  ctx.strokeStyle=col; ctx.lineWidth=sel?2.5:2;
-  drawCoil(wax,way,wbx,wby);
-  drawEndMarker(wax,way,false,sp.a.id==null,col);
-  drawEndMarker(wbx,wby,false,sp.b.id==null,col);
-  if(sel) drawSpringRestLine(sp,col);
 }
 // An Archimedean-style spiral: radius sweeps linearly from outerR to innerR
 // over `sweep` (signed) radians starting at angle0 -- the rotational spring's
@@ -399,6 +347,51 @@ function drawInteraction(it){
   ctx.restore();
 }
 
+// A VERTEX (constraints.js §06.2e): the point itself, one ring per body JOINED to it
+// beyond the first, and the label to its upper right. The rings are how a three-armed
+// hinge is told from a two-armed one on a canvas where every arm is in the same
+// place. A body merely MARKED at the vertex, joined to nothing, adds no ring -- it is
+// not being held there -- and a vertex that holds nothing at all is drawn hollow.
+// A welded vertex takes a square instead of a circle -- the shorthand for rigid.
+function drawVertex(con,col){
+  const [wx,wy]=vertexWorld(con);
+  const [sx,sy]=w2s(wx,wy);
+  const joined=vertexOns(con).filter(e=>e.join).length;
+  const rigid=vertexOns(con).filter(e=>e.join&&e.weld).length>=2;
+  ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=1.5;
+  ctx.beginPath();
+  if(rigid) ctx.rect(sx-3.5,sy-3.5,7,7); else ctx.arc(sx,sy,3.5,0,Math.PI*2);
+  if(joined) ctx.fill(); else ctx.stroke();
+  for(let k=1;k<joined;k++){
+    ctx.beginPath(); ctx.arc(sx,sy,4.5+k*3.5,0,Math.PI*2); ctx.stroke();
+  }
+  drawLabel(con.label, sx, sy, col);
+}
+// A line's label goes where the line leaves the viewport, top-right-most: an
+// infinite object has nowhere else to put one, and a bar reads the same way.
+function drawLineLabel(con,f,col){
+  if(!con.label) return;
+  const [ax,ay]=w2s(f.wax,f.way);
+  const dx=f.ux*cam.scale, dy=-f.uy*cam.scale;      // screen y is down
+  // Walk to whichever end of the on-screen segment is further up and to the right.
+  const W=cv.width/(window.devicePixelRatio||1), H=cv.height/(window.devicePixelRatio||1);
+  const span=Math.hypot(W,H);
+  const cand=[[ax+dx*span, ay+dy*span],[ax-dx*span, ay-dy*span]]
+    .map(([x,y])=>[Math.max(14,Math.min(W-24,x)), Math.max(16,Math.min(H-10,y))]);
+  const pick = (cand[0][0]-cand[0][1] >= cand[1][0]-cand[1][1]) ? cand[0] : cand[1];
+  drawLabel(con.label, pick[0], pick[1], col);
+}
+// A label, up and to the right of what it names -- vertices now, bodies and lines
+// when they get their own (VERTEX.md §X.8).
+function drawLabel(text, sx, sy, col){
+  if(!text) return;
+  ctx.save();
+  ctx.fillStyle=col; ctx.font='11px ui-monospace, Menlo, Consolas, monospace';
+  ctx.textAlign='left'; ctx.textBaseline='bottom';
+  ctx.fillText(text, sx+7, sy-6);
+  ctx.restore();
+}
+
 // ---- §11.5 · constraints (drawConstraint + drawRim, beltTangents) ----
 // Branches by con.type, mirroring §06.5; search e.g. type==='belt' to reach one.
 function drawConstraint(con){
@@ -406,76 +399,44 @@ function drawConstraint(con){
   if(viol) violCount++;
   const sel = con.sel; const hoverOn = !sel && hover===con;
   const col = viol ? '#ec5b52' : (sel? '#5aa9f0': hoverOn? '#8fc4f7':'#8a94a6');
-  if(con.type==='rod'){
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    const [ax,ay]=w2s(wax,way), [bx,by]=w2s(wbx,wby);
-    ctx.strokeStyle=col;ctx.lineWidth=sel?2.5:2;
-    ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.stroke();
-    // A rod RELEASED by the pose drag in progress (constraints.js §06.2d) is drawn
-    // with the slot's own track motif flanking the bar -- two thin parallel lines --
-    // because for the length of that gesture it is a rail. Bounded to the rod's own
-    // span, where a slot's rail spans the viewport, since the rod is still a rod
-    // between its two ends and not an infinite line.
-    //
-    // Only while it is released: a posable rod nobody is dragging holds its length
-    // and its welds exactly as any other rod does, so it must look like one. The flag
-    // is a property, and the panel that sets it is where a property belongs.
-    if(rodPosing(con)){
-      const L=Math.hypot(bx-ax,by-ay)||1;
-      const nx=-(by-ay)/L, ny=(bx-ax)/L, off=4;
-      ctx.lineWidth=1;
-      for(const side of [-1,1]){
-        ctx.beginPath();
-        ctx.moveTo(ax+nx*off*side, ay+ny*off*side);
-        ctx.lineTo(bx+nx*off*side, by+ny*off*side);
-        ctx.stroke();
-      }
+  // A LINE (constraints.js §06.2f). A BAR -- every joint held at a station -- is drawn
+  // between its extreme joints, because that is the extent of it. A RAIL -- anything
+  // with a slider on it -- is drawn across the viewport, because a slider may run
+  // anywhere along it and nothing stops it at either end. Both derived: what a line
+  // IS is what its joints do (VERTEX.md §X.4).
+  if(con.type==='vertex'){ drawVertex(con,col); return; }
+  if(con.type==='line'){
+    // linePlacement, not lineFrame: a line whose joints no longer have bodies under
+    // them still has a place, and an object that stops being DRAWN when a neighbour
+    // is deleted is only a slower way of deleting it (constraints.js §06.2f).
+    const f=linePlacement(con); if(!f) return;
+    const released=linePosing(con);
+    const bar=lineIsBar(con) && !released;
+    ctx.strokeStyle=col; ctx.lineWidth=bar?3:1.5;
+    if(released) ctx.setLineDash([6,5]);
+    let x1,y1,x2,y2;
+    if(bar){ [x1,y1]=w2s(f.wax,f.way); [x2,y2]=w2s(f.wbx,f.wby); }
+    else { const span=(cv.width+cv.height)/cam.scale;   // past any viewport at any zoom
+      [x1,y1]=w2s(f.wax-f.ux*span, f.way-f.uy*span);
+      [x2,y2]=w2s(f.wax+f.ux*span, f.way+f.uy*span); }
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.setLineDash([]);
+    // A COMPLIANT line carries a force, not a constraint, so it gets the spring's own
+    // coil rather than a bar's stroke -- the two must not look alike.
+    if(con.soft>0 && bar) drawCoil(f.wax,f.way,f.wbx,f.wby);
+    // Each meshing disk's pitch circle, the dashed ring the rack drew.
+    for(const id of (con.mesh||[])){
+      const B=bodies[bodyIndex(id)]; if(!B) continue;
+      const rho=(B.x-f.wax)*f.nx + (B.y-f.way)*f.ny;
+      const [cx,cy]=w2s(B.x,B.y);
+      ctx.save(); ctx.setLineDash([4,4]); ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(cx,cy,Math.abs(rho)*cam.scale,0,Math.PI*2); ctx.stroke(); ctx.restore();
     }
-    drawEndMarker(wax,way,con.weldA,con.a.id==null,col);
-    drawEndMarker(wbx,wby,con.weldB,con.b.id==null,col);
-    drawConPoints(con,col);
+    drawLineLabel(con,f,col);
     return;
   }
-  if(con.type==='slot'){
-    // The rail itself: two parallel lines (a track motif) spanning the
-    // viewport, through the midpoint of the two endpoints, in the current
-    // rail direction (§06.1 slotRailAngle -- tracked via whichever end is
-    // locked, or just the live segment direction if neither is).
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    const railAngle=slotRailAngle(con);
-    const rdx=Math.cos(railAngle), rdy=Math.sin(railAngle);
-    const rnx=-rdy, rny=rdx;
-    const midx=(wax+wbx)/2, midy=(way+wby)/2;
-    const [vx0,vy0]=s2w(0,0), [vx1,vy1]=s2w(W(),H());
-    const span=Math.hypot(vx1-vx0,vy1-vy0);
-    const off=3.5/cam.scale;
-    ctx.strokeStyle=col; ctx.lineWidth=sel?2:1.5;
-    for(const side of [-1,1]){
-      const px=midx+rnx*off*side, py=midy+rny*off*side;
-      const [x1,y1]=w2s(px-rdx*span, py-rdy*span);
-      const [x2,y2]=w2s(px+rdx*span, py+rdy*span);
-      ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-    }
-    drawEndMarker(wax,way,con.prismaticA,con.a.id==null,col);
-    drawEndMarker(wbx,wby,con.prismaticB,con.b.id==null,col);
-    drawConPoints(con,col);
-    return;
-  }
-  if(con.type==='pin'){
-    // Every endpoint coincides by construction -- the base pair and any extra
-    // control points alike -- so drawing con.a's alone is enough. A pin carrying
-    // extra ends gets a second ring around the dot to say so, since the ends
-    // themselves are all in the same place and cannot be counted on the canvas.
-    const [wax,way]=epWorld(con.a);
-    jointDot(wax,way,col);
-    if(conPoints(con).length){
-      const [sx,sy]=w2s(wax,way);
-      ctx.strokeStyle=col;ctx.lineWidth=1.5;
-      ctx.beginPath();ctx.arc(sx,sy,8,0,Math.PI*2);ctx.stroke();
-    }
-    return;
-  }
-  if(con.type==='rack'){ drawRackConstraint(con,col,sel); return; }
+  // Belt, knife and CVT all name a real body as their `a` end and draw from its
+  // anchor point, so the three of them share this one resolve.
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return;
   const [wax,way]=con.a.off?epWorldPt(A,con.a.off):[A.x,A.y];
   if(con.type==='belt'){
@@ -502,42 +463,6 @@ function drawConstraint(con){
     const rB=Math.max(d-A.r,0);                        // current contact radius on B, the disk
     drawRim(A.x,A.y,A.r,col,A.th);                      // wheel: fixed perimeter
     drawRim(B.x,B.y,rB,col,B.th);                       // disk: current contact radius
-  }
-}
-// A rack and pinion (constraints.js §06.2/§06.5). The rack is a dashed line spanning
-// the viewport -- infinite, as the constraint treats it, and the same viewport-
-// spanning motif slot's rail uses -- through its two pins, each drawn with the same
-// end marker a rod's ends get (a square where the pin is welded to the rack's
-// heading, a joint dot where it turns freely). Every pinion's pitch circle is a
-// dashed rim, its dash phase tied to that pinion's own spin exactly as drawRim
-// already does for a CVT's rims; every jointed point is an end marker on the line.
-function drawRackConstraint(con,col,sel){
-  const f=rackFrame(con);
-  const [vx0,vy0]=s2w(0,0), [vx1,vy1]=s2w(W(),H());
-  const span=Math.hypot(vx1-vx0,vy1-vy0);
-  ctx.strokeStyle=col; ctx.lineWidth=sel?2:1.5; ctx.setLineDash([8,6]);
-  const [x1,y1]=w2s(f.px-f.ux*span, f.py-f.uy*span);
-  const [x2,y2]=w2s(f.px+f.ux*span, f.py+f.uy*span);
-  ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-  ctx.setLineDash([]);
-  for(const pt of conPoints(con)){
-    if(pt.kind!=='pinion') continue;
-    const g=rackPitch(f, pt); if(!g) continue;
-    drawRim(g.B.x,g.B.y,Math.abs(g.rho),col,g.B.th);
-  }
-  drawEndMarker(f.wax,f.way,con.weldA,con.a.id==null,col);
-  drawEndMarker(f.wbx,f.wby,con.weldB,con.b.id==null,col);
-  drawConPoints(con,col);
-}
-// The extra control points a line constraint carries (constraints.js §06.2c), each
-// with the same marker its base ends wear -- a square for a rotation-locked point, a
-// joint dot for a free one, over a ground hatch where it rides the background. A
-// pinion is not drawn here: its pitch circle already says where it is.
-function drawConPoints(con,col){
-  for(const pt of conPoints(con)){
-    if(pt.kind==='pinion') continue;
-    const [x,y]=epWorld(pt.ep);
-    drawEndMarker(x,y,pt.lock,pt.ep.id==null,col);
   }
 }
 // Dotted circle whose dash phase is tied to `ang` (the owning body's rotation),
@@ -567,7 +492,6 @@ function beltTangents(ax,ay,ra, bx,by,rb, sense){
       segs.push([[ax+ra*Math.cos(a),ay+ra*Math.sin(a)],[bx-rb*Math.cos(a),by-rb*Math.sin(a)]]); } }
   return segs;
 }
-
 // ---- §11.6 · reaction vectors (the lambda arrows) ----
 function drawReaction(con){
   const r=reactionOf(con); if(!r || r.fx===undefined)return;
@@ -592,6 +516,13 @@ function drawReaction(con){
 // because drawPending visualises it, but §13 is what writes and consumes it.
 let pending=null;      // first pick of a two-step constraint tool
 function drawPending(){
+  // A pending pick without a world point has no dot to draw -- and reaching into one
+  // that is not there would throw, which in here is fatal: an exception inside
+  // render() kills the rAF chain in §10 outright and the bench never repaints again
+  // (the panel and the scene box keep working, which is what makes it look like a
+  // freeze rather than a crash). Every two-step tool carries `wp`; this is the guard
+  // that keeps a tool that forgets to from taking the page down with it.
+  if(!pending || !pending.wp) return;
   const [sx,sy]=w2s(pending.wp[0],pending.wp[1]);
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=2;ctx.setLineDash([4,4]);
   ctx.beginPath();ctx.arc(sx,sy,7,0,Math.PI*2);ctx.stroke();
@@ -649,7 +580,6 @@ function drawHandles(){
   // Springs (constraints.js §06.6) carry their own handles (endpoints, plus
   // the rest-length control point once selected) via the same conHandles/
   // pickHandle/applyHandle machinery -- they just live in a separate array.
-  for(const sp of springs){ if(!sp.sel) continue; for(const h of conHandles(sp)) drawOne(sp,h); }
 }
 // The freehand loop, while it is being drawn (tools.js §13.5/§13.6 write `lasso`,
 // select.js §18.3 consumes it). Drawn closed from the first move, because the closed

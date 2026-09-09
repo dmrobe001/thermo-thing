@@ -9,13 +9,13 @@
 //    §12.3  drawSpark  (total-energy trace)
 // ============================================================================
 // ---- §12.1 · energy ----
-// island is an optional {bodyIdx,springs,rotSprings} scope (see physics.js
+// island is an optional {bodyIdx,rotSprings,lines} scope (see physics.js
 // §08.0/§08.6) restricting the totals to one momentum-island instead of the
 // whole world; omit it for the HUD's whole-scene reading.
 function energy(island){
   const bs = island ? island.bodyIdx.map(i=>bodies[i]) : bodies;
-  const sps = island ? island.springs : springs;
   const rss = island ? island.rotSprings : rotSprings;
+  const lns = island ? island.lines : constraints.filter(c=>isLine(c) && c.soft>0);
   let ke=0, pe=0, U=0, WA=0;
   for(const b of bs){
     // A vessel's gas internal energy and the atmosphere's own P*V are read even for
@@ -33,13 +33,25 @@ function energy(island){
     if(b.shape==='vessel') ke+=0.5*b.mu*b.vlen*b.vlen;
     if(sim.gravity) pe+=b.mass*sim.g*b.y;
   }
-  // spring potential energy: 0.5*k*deviation^2 for each linear (length) and
-  // rotational (angle) spring, so §08.6's rescale sees them as a legitimate
-  // KE<->PE channel rather than a discrepancy to erase (see physics.js §08.6).
+  // Stored elastic energy, so §08.6's rescale sees it as a legitimate KE<->PE
+  // channel rather than a discrepancy to erase: a rotational spring's 0.5*k*dev^2,
+  // and a compliant line's, one stretch at a time.
   let SPE=0;
-  for(const sp of sps){ const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
-    const L=Math.hypot(wax-wbx,way-wby); SPE += 0.5*sp.k*(L-sp.restLen)*(L-sp.restLen); }
   for(const rs of rss){ const dev=rotSpringRelAngle(rs)-rs.restAngle; SPE += 0.5*rs.k*dev*dev; }
+  // A COMPLIANT line (constraints.js §06.2f) stores strain in each stretch between
+  // consecutive non-sliding joints, at k = 1/soft. Without this the per-island
+  // rescale of §08.6 would read that store appearing and disappearing as a leak and
+  // "correct" it, which is the same reason the two spring kinds are here.
+  for(const line of lns){
+    const f=lineFrame(line); if(!f) continue;
+    const held=f.J.filter(K=>!K.e.slide);
+    for(let i=1;i<held.length;i++){
+      const A=held[i-1], B=held[i];
+      const rest=Math.abs((B.e.s||0)-(A.e.s||0));
+      const L=Math.hypot(A.ep.wx-B.ep.wx, A.ep.wy-B.ep.wy);
+      SPE += 0.5*(L-rest)*(L-rest)/line.soft;
+    }
+  }
   return {ke,pe,SPE,U,WA,tot:ke+pe+SPE+U+WA};
 }
 // ---- §12.1b · bathTotal ----
@@ -69,7 +81,7 @@ function updateHUD(){
     `${sim.running?'running':'paused'} · ${bodies.length} bodies · ${constraints.length} constraints`
     + (!sim.running && violCount ? ` · [!] ${violCount} unsatisfied` : '');
   if(sim.running){ eHist.push(tot); if(eHist.length>200) eHist.shift(); drawSpark(); }
-  if(selGroup||selBody||selConstraint||selCable||selSpring||selRotSpring||selInteraction) updateInspectorLive();
+  if(selGroup||selBody||selConstraint||selCable||selRotSpring||selInteraction) updateInspectorLive();
 }
 // ---- §12.3 · drawSpark ----
 function drawSpark(){

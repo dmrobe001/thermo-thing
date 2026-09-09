@@ -40,17 +40,17 @@ function restoreState(){
   if(!saved) return;
   applyState(saved);
   interactions.forEach(it=>{ it._rate=0; });
-  // _phiRef is the rod/slot continuity anchor twoPointFrame unwraps phi
+  // _phiRef is the LINE's continuity anchor lineFrame unwraps phi
   // against (constraints.js). Bodies just snapped back to the saved rest
   // pose, so a reference accumulated across possibly many turns of prior
   // rotation is stale and, left in place, would unwrap the restored geometry's
   // angle onto the wrong winding -- a huge, permanent Baumgarte bias (same
   // failure this fixes at the horizontal crossing, but constant instead of
-  // one-step). Clearing it makes the next twoPointFrame call re-seed from the
+  // one-step). Clearing it makes the next lineFrame call re-seed from the
   // restored geometry's raw atan2, matching how restAngA/B were themselves
   // captured from a fresh, un-accumulated angle. Mirrors cables' _spoolAngle
   // reset below.
-  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._phiRef=undefined; });
+  constraints.forEach(c=>{ c._lam=[]; c._rows=[]; c._roles=[]; c._phiRef=undefined; });
   cables.forEach(c=>{
     c._lam=[]; c._rows=[]; c._active=false; c._C=0; c._cols=null;
     c._Lallow=null; c._spoolAngle=undefined;
@@ -82,6 +82,7 @@ function setRunning(r){ sim.running=r; btnPlay.textContent=r?'Pause':'Play'; btn
   if(r){ if(!saved) saveState(); projectPositions(20); sim.forceRef=1; last=performance.now(); acc=0; hover=null; hoverHandle=null; hoverSnap=null; } }
 btnPlay.onclick=()=>setRunning(!sim.running);
 document.getElementById('btnStep').onclick=()=>{ if(sim.running)return; if(!saved)saveState(); projectPositions(20); substep(sim.h); };
+document.getElementById('lineMode').onclick=()=>setLineMode(!lineExtendMode);
 document.getElementById('btnReset').onclick=()=>{ setRunning(false); restoreState(); eHist.length=0; };
 
 // ---- §16.3 · toggles (forces / grid / gravity) ----
@@ -109,12 +110,10 @@ window.addEventListener('keydown',e=>{
   else if(e.key==='Delete'||e.key==='Backspace'){ if(selGroup){ deleteGroup(); }
       else if(selBody){const id=selBody.id;
       dropBodyFromConstraints(id);
-      springs=springs.filter(s=>s.a.id!==id&&!(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id&&s.b.id!==id);
       dropInteractionsOn(id);
       bodies=bodies.filter(b=>b!==selBody); clearSelection(); saveState();}
-      else if(selConstraint){ constraints=constraints.filter(c=>c!==selConstraint); clearSelection(); saveState(); }
-      else if(selSpring){ springs=springs.filter(s=>s!==selSpring); clearSelection(); saveState(); }
+      else if(selConstraint){ deleteConstraint(selConstraint); clearSelection(); saveState(); }
       else if(selRotSpring){ rotSprings=rotSprings.filter(s=>s!==selRotSpring); clearSelection(); saveState(); }
       else if(selInteraction){ interactions=interactions.filter(x=>x!==selInteraction); clearSelection(); saveState(); } }
   else { const t=TOOLS.find(t=>t.key===e.key); if(t) setTool(t.id); }

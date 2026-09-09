@@ -104,62 +104,76 @@ function constraintsSatisfied(){
   return true;
 }
 // ---- §09.3 · reactionOf ----
+// Each multiplier is the impulse its row carried this substep; divided by h it is
+// the force (or torque) the joint is holding. Which multiplier is which used to be
+// worked out by counting: every branch below re-derived rowsFor's row ORDER from the
+// joint's own flags -- weldA? then weldB? then two per control point, three if it is
+// locked -- which is the same arithmetic written four times, in a second file, that
+// nothing checks against the rows it is describing. Adding a row to a kind silently
+// moved every readout after it.
+//
+// Rows now carry their own role (constraints.js §06.5), captured beside the
+// multipliers in physics.js §08.3, so a readout ASKS for the row it wants:
+//
+//   online   a joint held on a line       station  a joint held at its place along it
+//   weld     an angle lock                 mesh     a disk's rolling contact
+//   pin      a coincidence row at a vertex
+//   belt / cvt / knife                    the one row each of those carries
+//
+// `at` distinguishes several rows of one role on the same joint -- a vertex's label
+// on a line's rows, the disk's id on a mesh row. Omitted, the first row of that role
+// is what a readout reports, which is the rule every branch below follows.
+function lamAll(con, role, at){
+  const roles=con._roles, l=con._lam, out=[];
+  if(!roles || !l) return out;
+  for(let i=0;i<roles.length;i++){
+    if(roles[i][0]!==role) continue;
+    if(at!==undefined && roles[i][1]!==at) continue;
+    out.push(l[i]);
+  }
+  return out;
+}
+const lamAt = (con, role, at) => lamAll(con, role, at)[0];
 function reactionOf(con){
   const l=con._lam; const h=sim.h; if(!l||!l.length) return null;
-  if(con.type==='belt'){ return {belt:true, val:l[0]/h}; }
+  const lam = (role,at)=>{ const v=lamAt(con,role,at); return v===undefined?undefined:v/h; };
+  // The torque reported alongside a force is the first angle lock the joint holds.
+  const tau = lam('weld');
+  if(con.type==='belt'){ return {belt:true, val:lam('belt')||0}; }
   if(con.type==='cvt'){ const A=bodies[bodyIndex(con.a.id)], B=bodies[bodyIndex(con.b.id)];
     let rvx=B.x-A.x, rvy=B.y-A.y, d=Math.hypot(rvx,rvy)||1e-6; const ux=rvx/d,uy=rvy/d; const tx=-uy, ty=ux;
-    return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*(l[0]/h), fy:ty*(l[0]/h)}; }
-  if(con.type==='rack'){
-    // Row order mirrors rowsFor: weldA?, weldB?, then one block per control point.
-    // The readout is the FIRST pinion's mesh force -- the foot of the perpendicular
-    // from its centre to the rack line, the same Q the row itself acts through, with
-    // the force along the rack exactly like the CVT's. A rack's welded pins also
-    // carry a torque, and it is the first one's that is reported, as a rod's is.
-    const f=rackFrame(con);
-    let idx=0, tau;
-    if(con.weldA){ tau=l[idx]; idx++; }
-    if(con.weldB){ if(tau===undefined) tau=l[idx]; idx++; }
-    for(const pt of conPoints(con)){
-      if(pt.kind==='pinion'){
-        const g=rackPitch(f, pt);
-        if(g && l[idx]!==undefined)
-          return {x:g.B.x-g.rho*f.nx, y:g.B.y-g.rho*f.ny,
-                  fx:f.ux*(l[idx]/h), fy:f.uy*(l[idx]/h), tau: tau!==undefined?tau/h:undefined};
-        idx++; continue;
-      }
-      idx += 2 + (pt.lock?1:0);
+    const t=lam('cvt')||0;
+    return {x:A.x+ux*A.r, y:A.y+uy*A.r, fx:tx*t, fy:ty*t}; }
+  if(con.type==='line'){
+    // A line reports the AXIAL force in its first held stretch, at the origin those
+    // stations are measured from and along the bar -- which on a two-joint bar is
+    // exactly the tension the rod used to report. A line that holds no stretch but
+    // drives a disk reports the rolling force instead, at the foot of the
+    // perpendicular from that disk's centre, exactly as the rack's did.
+    const f=lineFrame(con); if(!f) return null;
+    const t=lam('station');
+    if(t!==undefined) return {x:f.wax, y:f.way, fx:f.ux*t, fy:f.uy*t, tau};
+    for(const id of (con.mesh||[])){
+      const m=lam('mesh',id); if(m===undefined) continue;
+      const B=bodies[bodyIndex(id)]; if(!B) continue;
+      const rho=(B.x-f.wax)*f.nx + (B.y-f.way)*f.ny;
+      return {x:B.x-rho*f.nx, y:B.y-rho*f.ny, fx:f.ux*m, fy:f.uy*m, tau};
     }
-    return {x:f.px, y:f.py, fx:0, fy:0, tau: tau!==undefined?tau/h:undefined};
+    return {x:f.wax, y:f.way, fx:0, fy:0, tau};
   }
-  if(con.type==='rod'){
-    const [wax,way]=epWorld(con.a), [wbx,wby]=epWorld(con.b);
-    let dx=wax-wbx,dy=way-wby,L=Math.hypot(dx,dy)||1e-9;
-    const r={x:wax,y:way, fx:(dx/L)*(l[0]/h), fy:(dy/L)*(l[0]/h)};
-    let idx=1;
-    if(con.weldA){ r.tau=l[idx]/h; idx++; }
-    if(con.weldB && r.tau===undefined){ r.tau=l[idx]/h; }
-    return r;
-  }
-  if(con.type==='slot'){
-    // Row order mirrors rowsFor: prismaticA?, prismaticB?, then the lateral
-    // (point-on-line) row once both are locked.
-    const [wax,way]=epWorld(con.a);
-    let idx=0, tau;
-    if(con.prismaticA){ tau=l[idx]; idx++; }
-    if(con.prismaticB){ if(tau===undefined) tau=l[idx]; idx++; }
-    let fx=0, fy=0;
-    if(con.prismaticA && con.prismaticB && l[idx]!==undefined){
-      const railAngle=(con.b.id!=null?bodies[bodyIndex(con.b.id)].th:0)-con.restAngB;
-      const nx=-Math.sin(railAngle), ny=Math.cos(railAngle);
-      fx=nx*(l[idx]/h); fy=ny*(l[idx]/h);
-    }
-    return {x:wax,y:way, fx, fy, tau: tau!==undefined?tau/h:undefined};
+  if(con.type==='vertex'){
+    // Every joined incidence past the primary carries its own pair of rows, and the
+    // readout reports the FIRST -- the same rule the rest of §09.3 follows, and on a
+    // two-body vertex (what a pin was) it is the only one there is.
+    // The rows come x, y per incidence, so the first pair is the first held body's.
+    const [wx,wy]=vertexWorld(con);
+    const f=lamAll(con,'pin');
+    return {x:wx, y:wy, fx:(f[0]||0)/h, fy:(f[1]||0)/h};
   }
   const A=bodies[bodyIndex(con.a.id)]; if(!A) return null;
   const [wax,way]=epWorldPt(A,con.a.off);
   if(con.type==='knife'){ const hh=R(A.th,con.dir[0],con.dir[1]); const hl=Math.hypot(hh[0],hh[1])||1;
-    const nx=-hh[1]/hl, ny=hh[0]/hl; return {x:wax,y:way, fx:nx*(l[0]/h), fy:ny*(l[0]/h)}; }
-  if(con.type==='pin'){ return {x:wax,y:way, fx:l[0]/h, fy:l[1]/h}; }
+    const nx=-hh[1]/hl, ny=hh[0]/hl; const t=lam('knife')||0;
+    return {x:wax,y:way, fx:nx*t, fy:ny*t}; }
   return null;
 }

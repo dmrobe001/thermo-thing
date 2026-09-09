@@ -57,9 +57,14 @@ Every section header carries a token -- `§NN` for a top-level section, `§NN.M`
 All mutable world state lives in `js/state.js` (§04):
 
 - `bodies` -- array of body objects `{id, x, y, th, vx, vy, w, mass, I, invM, invI, r|hw,hh, static, sel}`. Three shapes: `'circle'`, `'rect'`, and `'vessel'` -- a gas vessel, which is an ordinary body carrying a **fourth configuration coordinate**, its length (`len`/`vlen`), plus the gas sealed inside it (`gas:{mass,gamma,Rs,kap}`) and that coordinate's own generalized mass `mu`. Vessels live here, not in a separate array, so islands, save/restore, selection and every constraint work on them unchanged. See `VESSEL.md`.
-- `constraints` -- array of typed joint objects; each carries `type`, endpoint refs (`a`, `b`), type-specific parameters, and transient solver outputs (`_lam`, `_rows`). A pin, rod, slot or rack may also carry `pts` -- its **extra control points**, the third and further ends attached to the same joint (`constraints.js` §06.2c). `conEndpoints(con)` is the one answer to "which bodies does this couple". A rod may also carry `posable`, the one joint field that says nothing about the running physics: it releases the rod to a bare rail while the player drags a body the rod is jointed to, with the sim paused (`constraints.js` §06.2d).
+- `constraints` -- array of **couplings**: everything that produces solver ROWS, as opposed to `bodies`, which is everything that produces COLUMNS. Each carries `type` and transient solver outputs (`_lam`, `_rows`, `_roles` -- what each of those rows *is*, so §09.3 can look a multiplier up by name). Two of the kinds are the scene model's spine and neither has the `a`/`b` endpoints the others do:
+  - a **vertex** (`type:'vertex'`, §06.2e) is a named point carrying a list of **incidences**, one per body it touches, each saying where the vertex sits in that body's frame and whether it is `join`ed and `weld`ed there -- and, for a line, whether it may `slide`. What the *panels* list is wider than that and is not stored anywhere: every body whose **extent** covers the point, joined or not, with `joined` as the only control either list needs (`VERTEX.md` §X.11) -- a line's share of that extent being a screen tolerance, since "on the line" is a question about whether the two glyphs touch. Where a vertex *is* comes from whichever comes first: what **grounds** it (a joined body or the background), what **carries** it (a line it is joined to, at its station -- it rides the bar and builds no rows, so the line's own frame is still derived without consulting it), or its own background mark. A joined incidence always wins; an incidence on a body it is not joined to marks a spot rather than saying where the point is, so dragging a body never carries along a vertex it is not holding. It compiles to two rows per joined incidence past the primary and one per welded incidence past the first. It replaced the pin.
+  - a **line** (`type:'line'`, §06.2f) is a straight massless bar: a body to anything naming one, with a numeric `id` from the same allocator bodies use, but with no coordinates of its own. Its frame, its extent, its origin and its joints' stations are all derived from the vertices joined to it, so it holds only `soft` (a compliance), `posable` and its meshing disks. It replaced the rod, the slot, the rack and the linear spring.
+
+  **A disk, a vertex and a line are three objects of equal standing.** A constraint between them is a statement *about* them and never a claim on their existence, so **no deletion cascades**: taking a body out removes the incidences that named it and nothing else (`dropBodyFromConstraints`, §06.2b, which calls `settleVertex` first so nothing moves), and taking a line out removes its joints' incidences and nothing else (`deleteConstraint`, the one path every delete goes through). An object left under-determined -- a vertex nothing holds, a line without two placed joints -- is in a *state*, not on its way out: it keeps its identity, its place and its label, stays drawn (`linePlacement`, as against `lineFrame`, which the rows are built from and is honestly null) and simply has no rows for as long as that lasts. Anything that made one object's existence conditional on another's would be the body-owns-its-joints model this one replaced. See `VERTEX.md` §X.15.
+
+  Both live here because a coupling is what they are, which is why islands, the row assembly, the position projection, Reset and the selection's membership rule work on them with no per-kind branching. See `VERTEX.md`. `conEndpoints(con)` is the one answer to "which bodies does this couple". A line may also carry `posable`, the one field that says nothing about the running physics: it releases the bar to a bare rail while the player drags a body it touches, with the sim paused (`constraints.js` §06.2d).
 - `cables` -- array of unilateral tetherball cable elements.
-- `springs` -- array of linear (Hookean) spring force elements, `{type:'spring', a, b, restLen, k, sel}` (`a`/`b` are rod-style `{id,off}` endpoints).
 - `rotSprings` -- array of rotational (torsional) spring force elements, `{type:'rotspring', a:{id}, b:{id}, restAngle, k, sel}`.
 - `interactions` -- array of heat and mass-exchange couplings, `{type:'heat'|'flow', body:{id}, vessel:{id}, k, sel}` (`vessel.id === null` is the background). They carry no force and no constraint row; two of the same kind sharing a `body` are a *pair* and couple what they each name through it. See `VESSEL.md` §V.10 and `js/physics.js` §08.0b.
 - `sim` -- simulation parameters (`h`, `beta`, `reg`, `running`, `gravity`, `g`, `bathQ`, ...).
@@ -82,10 +87,9 @@ by calling the constructors the tool dispatch calls, and rejects any key its led
 does not list. Two rules follow, and they are what keep the bench honest:
 
 - **Every kind of scene object has exactly one constructor** (`makeBody`,
-  `makeRectBody`, `makeVessel` in §05.2; `makeRodCon`, `makeSlotCon`, `makePinCon`,
-  `makeBeltCon`, `makeCvtCon`, `makeRackCon`, `makeKnifeCon`, `makeCableCon`,
-  `makeSpringCon`, `makeRotSpringCon` in §06.1/§06.2, `makeConPoint` in §06.2c;
-  `makeInteraction` in §17.1),
+  `makeRectBody`, `makeVessel` in §05.2; `makeBeltCon`, `makeCvtCon`, `makeKnifeCon`, `makeCableCon`,
+  `makeRotSpringCon` in §06.2, `makeVertex`/`makeVertexOn` in §06.2e, `makeLine` in
+  §06.2f; `makeInteraction` in §17.1),
   called from the tool dispatch (§13.5) and the scene reader (§17.4) and nowhere
   else. Do not build one from an object literal.
 - **A new field on a scene object needs a row in `SCENE_SCHEMA`**, classified as
@@ -102,9 +106,12 @@ does not list. Two rules follow, and they are what keep the bench honest:
 
 **No coordinate is frozen by assertion.** `static` and `lenLock` still exist, but as
 *derived* fields recomputed every substep from the constraints present
-(`constraints.js` §06.2b `refreshFrozen`): a body is pinned by a rod welded at both
-ends to fixed ground (or to an already-pinned body), and a vessel's length is locked
-by a rod between two of its own material planes. Zeroing an inverse mass is an
+(`constraints.js` §06.2b `refreshFrozen`): a body is pinned by a **line** welded at
+both of its two held joints between it and fixed ground (or an already-pinned body),
+and a vessel's length is locked by a line whose two held joints ride two of its own
+material planes. Those two are the rod's rules ported into the line's vocabulary, not
+`VERTEX.md` §X.9's general restatement -- so arrangements they miss, a body on two
+ground pins among them, are held exactly and simply not compiled away. Zeroing an inverse mass is an
 optimization -- it removes the coordinate from the system and lets islands split
 there -- and the constraint that earned it is compiled away (`_compiled`) rather than
 left as a row of zeros. Nothing may set either flag: not a tool, not the inspector,
@@ -140,17 +147,17 @@ Give new code a home in an existing section (and register it in that section's s
 | File | Section | What it does |
 |---|---|---|
 | `js/expr.js` | §19 | The expression language every numeric field is read through: `parseExpr`/`evalExpr`, `EXPR_CONSTS`, `EXPR_FUNCS`. Knows nothing of the world -- names come from an environment (§17.8) |
-| `js/state.js` | §04 | Canvas handles; `bodies`, `constraints`, `cables`, `springs`, `rotSprings`, `interactions`; `sim` (incl. `sim.bg`, the ambient atmosphere, and `sim.bathQ`); `cam` |
+| `js/state.js` | §04 | Canvas handles; `bodies`, `constraints` (the couplings: vertices, lines, belt, cvt, knife), `cables`, `rotSprings`, `interactions`; `sim` (incl. `sim.bg`, the ambient atmosphere, and `sim.bathQ`); `cam` |
 | `js/geometry.js` | §05 | `R` (rotation), `worldPt`, `makeBody`, `refreshInertia`, `setBodyMass`, `w2s`/`s2w`; §05.2d `makeVessel`/`refreshVessel`/gas state, §05.2c `epLocal`/`epWorldPt`/`epOffOf` (material endpoint offsets), §05.2e `bodyPolygon`/`clipPoly`/`contactArea` (interaction contact area) |
-| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `epFrame` (endpoint velocity columns, incl. a vessel's length column), `twoPointFrame`, `cableFrame`, `rowsFor`, §06.2b `recaptureConAngles`/`recaptureConPose` (re-read what a line joint holds off the live geometry), §06.2c extra control points (`conPoints`, `makeConPoint`, `linePointRows`, `conEndpoints`), §06.2d posable rods (`beginPosing`/`endPosing`, `withPosing`, `rodPosing`/`rodReleased`, `recapturePosable`), `makeSpringCon`, `makeRotSpringCon`, `rotSpringSpiralGeom` |
+| `js/constraints.js` | §06 | `bodyIndex`, `epWorld`, `epFrame` (an endpoint's velocity columns, incl. a vessel's length column), §06.1b `lineFrameOf`/`frameAngleRow` (a bar's own frame -- the third frame kind beside a body's and the background's, owning no coordinates), §06.2e the vertex (`makeVertex`/`makeVertexOn`/`vertexWorld`/`verticesOn`, plus `vertexSites`/`verticesInExtent` -- the same relation widened to what the point is *inside*, which is what the panels list), §06.2f the line (`makeLine`/`lineFrame`/`lineJoints`/`lineIsBar`/`lineSegments`/`lineStationAt`), `cableFrame`, `rowsFor` (every row tagged with its `role`), §06.2b `recaptureConAngles`/`recaptureConPose` (re-read what a line joint holds off the live geometry), §06.2d the pose-time release (`beginPosing`/`endPosing`, `withPosing`, `linePosing`/`lineReleased`, `recapturePosable`), `makeRotSpringCon`, `rotSpringSpiralGeom` |
 | `js/solver.js` | §07 | `solveLinear` -- dense Gauss-Jordan on the Schur complement |
 | `js/physics.js` | §08 | `substep` -- §08.0b `vesselExchangeStep` (heat & mass, at frozen geometry, ahead of everything) -> forces (gravity, drag, springs, vessel centrifugal) -> §08.1b `vesselGasStep` -> constraint solve -> position integration -> energy-conservation rescale |
-| `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` |
+| `js/projection.js` | §09 | `projectPositions`, `conMaxC`, `reactionOf` (reads a multiplier by its row's `role`, not by counting row order) |
 | `js/loop.js` | §10 | `frame` -- fixed-step accumulator, calls `substep` -> `render` -> `updateHUD` |
-| `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawVessel`, `drawConstraint`, `drawCable`, `drawSpring`, `drawRotSpring`, §11.4c `drawInteraction`, `drawReaction`, ... |
-| `js/hud.js` | §12 | `energy` (incl. spring PE, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
-| `js/tools.js` | §13 | `TOOLS` (incl. the heat/mass interaction tools), `setTool`, `pickBody`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
-| `js/inspector.js` | §14 | §14.0 `numRow`/`numVal`/`wireNumIns` (one editable number: arithmetic in, a number committed, the arrow keys stepping the value); `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel), §14.2b `renderVesselInspector`, `updateInspectorLive` |
+| `js/render.js` | §11 | `render` orchestrator; `drawBody`, `drawVessel`, `drawVertex`/`drawLabel`, `drawConstraint` (incl. the line: a bar between its extremes, a rail across the viewport), `drawCable`, `drawRotSpring`, §11.4c `drawInteraction`, `drawReaction`, ... |
+| `js/hud.js` | §12 | `energy` (incl. a compliant line's and a rotational spring's strain energy, gas internal energy and atmospheric potential), §12.1b `bathTotal` (net of the background bath), `updateHUD`, `drawSpark` |
+| `js/tools.js` | §13 | `TOOLS` (incl. the vertex and line tools and the heat/mass interaction tools), `setTool`/`setLineMode`, `pickBody`, `pickVertexAt`, `joinVertexToLine`, `pickVessel`, `pickInteraction`, `dropInteractionsOn`, `snapAnchor`, `conHandles`, pointer handlers |
+| `js/inspector.js` | §14 | §14.0 `numRow`/`numVal`/`wireNumIns` (one editable number: arithmetic in, a number committed, the arrow keys stepping the value); `clearSelection`, `select*`, `renderInspector` (incl. the interaction panel, the vertex panel and the vertex list a body shows), §14.2b `renderVesselInspector`, §14.2c the incidence row (`incidenceRow`/`wireIncidenceRows`/`setIncidenceJoin`/`commitIncidenceOff`/`commitIncidenceStation`) -- the one row a vertex's panel, a body's and a line's are all built out of, `updateInspectorLive` |
 | `js/examples.js` | §15 | `SCENES` -- every prebuilt machine as scene-file text, with its own reasoning as `#` comments; `loadExample` is `importScene` and nothing else |
 | `js/scene.js` | §17 | §17.8 `worldExprEnv`/`sceneExprEnv` (what a name in a numeric field means -- the ledger is the vocabulary); `SCENE_SCHEMA` (the ledger: one row per scene-object kind, carrying both the serialized `fields` and the `state` a run can change), `exportScene`/`importScene`, `clearScene`, the scene-file panel card, §17.6 `snapshotState`/`applyState`, §17.7 fragments (`exportFragment`/`pasteFragment` -- part of a bench, out and back in) |
 | `js/select.js` | §18 | §18.1 the group (`selGroup`, `groupMembers`, `makeGroup`, `selectGroup`), §18.2 the transform box (`groupApply`, `groupRecapture`, the handles and their drag), §18.3 the lasso (`lassoSelect`, `lassoToggle`), §18.4 widgets (`selectionFragment`, `copySelection`, `pasteWidget`, the stash), §18.5 the group inspector and stash cards |

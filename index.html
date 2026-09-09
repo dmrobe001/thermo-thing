@@ -172,6 +172,13 @@
   .field .numin.bad{border-color:var(--force);color:var(--force)}
   .chk{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--mid);cursor:pointer;margin-top:8px}
   .chk input{accent-color:var(--accent)}
+  /* One incidence: a vertex, a body, and what is held between them (inspector.js
+     §14.2c). A panel lists several, so each is ruled off from the next, and its
+     ticks sit on one line rather than stacking three deep. */
+  .inc{padding-bottom:2px}
+  .inc + .inc{border-top:1px solid var(--hair);padding-top:8px;margin-top:8px}
+  .chkrow{display:flex;flex-wrap:wrap;gap:6px 16px}
+  .chkrow .chk{margin-top:6px}
   .del{width:100%;margin-top:6px;font-family:var(--mono);font-size:11px;color:var(--force);
        background:transparent;border:1px solid rgba(236,91,82,.4);border-radius:6px;padding:7px;cursor:pointer}
   .del:hover{background:rgba(236,91,82,.12)}
@@ -241,6 +248,8 @@
     </div>
     <div class="spacer"></div>
     <div class="brand" id="modehint" style="color:var(--low)"></div>
+    <!-- The line tool's own mode, shown only while that tool is up (tools.js §13.1). -->
+    <button id="lineMode" class="tg" style="display:none" title="new: tap vertices to place a line. extend: tap a line, then tap vertices to join them to it.">new</button>
   </div>
 
   <!-- §03.2 · tool rail (populated by §13.1) -->
@@ -252,8 +261,9 @@
     <div id="hint">
       <b>Drop a mass:</b> pick the Body tool (2), then click-drag on the field.<br>
       <b>Drop a block:</b> Rectangle tool (q), click one corner then the opposite corner.<br>
-      <b>Make a hinge:</b> Pin tool (3), click one body then another.<br>
-      <b>Anchor it:</b> Rod tool (4), click empty space then a body -- it welds to the wall by default; tap an end to toggle pin/weld.<br>
+      <b>Make a hinge:</b> Vertex tool (3), tap one body, then tap the same spot again to join the body underneath.<br>
+      <b>Anchor it:</b> Vertex tool (3) on empty space is a ground pin -- position held, rotation free.<br>
+      <b>Join two points:</b> Line tool (4), tap two vertices; the bar is a drawn guide until you hold a joint in the line panel.<br>
       Or load an example from the panel ->
     </div>
     <div id="ledger">

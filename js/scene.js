@@ -30,12 +30,26 @@
 // Version 3 added the `pt` field -- the third and further ends a pin, rod, slot or
 // rack may carry (constraints.js §06.2c) -- and, with it, rewrote the rack. A rack
 // line used to be `rack <anchor> -- <pinion> angle=...`, one endpoint plus a heading
-// in that body's frame; it is now `rack <pin> -- <pin> pt=<pinion>/pinion`, two
+// in that body's frame; version 3 made it `rack <pin> -- <pin> pt=<pinion>/pinion`, two
 // ordinary endpoints naming the line and its pinions among the control points. The
 // version had to move because the old two-token form still parses under the new
 // reading and means something else (a rack with no pinion at all), which is exactly
 // the silent reinterpretation a version number exists to prevent.
-const SCENE_VERSION = 3;
+//
+// Version 4 added the `vertex` line and retired `pin`. A vertex is a named point and
+// the list of bodies it touches (constraints.js §06.2e), and a pin is what it looks
+// like with two joined incidences and nothing welded -- so the pin did not need
+// translating so much as absorbing. The version had to move because the kind is gone:
+// a version 3 file naming one is now a file this build cannot read, which is the
+// error the reader should give rather than a silent omission. See VERTEX.md §X.10.
+//
+// Version 5 added the `line` and retired `rod`, `slot`, `rack` and `spring`. A line
+// is a straight massless bar whose joints are the vertices naming it
+// (constraints.js §06.2f): a rod is one whose joints are all held, a rail one with a
+// slider on it, a rack one carrying a mesh, and a spring one with a compliance. The
+// version had to move for the same reason version 4 did -- four kinds are gone, and
+// `rod A -- B len=2.6` still parses under a reader that has only lines.
+const SCENE_VERSION = 5;
 
 // ---- §17.1 · the ledger ----
 // One row per kind of thing a scene can contain. Each row names:
@@ -91,18 +105,17 @@ const S_POSE = () => [
   ['vy', b=>b.vy, (b,v)=>{b.vy=v;}],  ['w',  b=>b.w,  (b,v)=>{b.w=v;}],
 ];
 
-// The repeatable `pt` field, one row's worth of the extra control points a joint
-// carries. `kind` is the constraint kind it sits on, which is what parsePt validates
-// each token against: only a rod and a rack station their points, only a rack has
-// pinions, and a pin's points carry nothing but an endpoint. Every point is CAPTURED
-// (SCENE.md §S.3) -- a station and a rest angle are read off the geometry at
-// creation and never recomputed, so the pose in the file does not imply them.
-const PT_FIELD = kind => ({ t:'pts', kind, always:true, get:c=>conPoints(c),
-  set:(c,arr)=>{ for(const o of arr) makeConPoint(c, o.ep, o); } });
-
+// A LABEL on something that also has an id: the name the canvas draws and the panel
+// edits, written only when it is not just the id (VERTEX.md §X.8). Bodies and lines
+// default to their number; a vertex's label is its whole identity and sits
+// positionally on the line instead. One namespace, and the grammar keeps the two
+// apart -- a vertex's label starts with a letter, a body's default is digits.
+const LABEL_FIELD = { t:'str', def:null, get:o=>o.label, set:(o,v)=>{o.label=v;},
+                      when:o=>o.label!==undefined && o.label!==String(o.id) };
 const SCENE_SCHEMA = [
   { kind:'body', list:'bodies', id:true, match:b=>b.shape==='circle',
     fields:{
+      label:LABEL_FIELD,
       x:{t:'num', always:true, get:b=>b.x},
       y:{t:'num', always:true, get:b=>b.y},
       r:{t:'num', always:true, get:b=>b.r},
@@ -116,6 +129,7 @@ const SCENE_SCHEMA = [
 
   { kind:'rect', list:'bodies', id:true, match:b=>b.shape==='rect',
     fields:{
+      label:LABEL_FIELD,
       x:{t:'num', always:true, get:b=>b.x},
       y:{t:'num', always:true, get:b=>b.y},
       // full width/height, as the inspector shows them -- `w` is taken, it is the
@@ -131,6 +145,7 @@ const SCENE_SCHEMA = [
 
   { kind:'vessel', list:'bodies', id:true, match:b=>b.shape==='vessel',
     fields:{
+      label:LABEL_FIELD,
       x:{t:'num', always:true, get:b=>b.x},
       y:{t:'num', always:true, get:b=>b.y},
       bore:{t:'num', always:true, get:b=>b.bore},
@@ -174,42 +189,41 @@ const SCENE_SCHEMA = [
             ['gas',  v=>[v.gas.kap, v.gas.mass], (v,a)=>{v.gas.kap=a[0]; v.gas.mass=a[1];}] ],
     restore:v=>{ v._vlen0=v.vlen; refreshVessel(v); } },
 
-  // `pt` is the third-and-further ends a joint carries (constraints.js §06.2c). It
-  // is the one REPEATABLE key in the format: a line writes one `pt=` per extra
-  // point, in order, and each token carries that point's whole record -- its
-  // endpoint, its captured station along the line where it holds one, and its own
-  // rotation lock. See fmtPt/parsePt (§17.2) for the grammar, and note that the
-  // per-kind validation there is what keeps a pin from claiming a station or a slot
-  // from claiming a pinion.
-  { kind:'pin', list:'constraints', match:c=>c.type==='pin',
-    ends:[['a','ep-body'], ['b','ep-body']],
-    fields:{ pt:PT_FIELD('pin') },
-    build:(q,e)=>makePinCon(e.a, e.b) },
+  { kind:'vertex', list:'constraints', label:true, match:c=>c.type==='vertex',
+    fields:{ on:{t:'ons', always:true, get:c=>vertexOns(c),
+                 set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
+    build:()=>makeVertex(null),
+    // Checked in evalScene, before the bench is touched: a vertex with no incidence
+    // has no position and nothing to say, and two incidences on one body would be
+    // the vertex claiming to be in two material places at once.
+    validate:(it)=>{
+      const ons = it.f.on || [];
+      if(!ons.length) return 'a vertex needs at least one on= incidence';
+      const seen=new Set();
+      for(const e of ons){
+        const k = e.id==null ? 'bg' : e.id;
+        if(seen.has(k)) return `two incidences on ${e.id==null?'the background':'body '+e.id} -- a vertex touches each body at one place`;
+        seen.add(k);
+      }
+      return null;
+    } },
 
-  { kind:'rod', list:'constraints', match:c=>c.type==='rod',
-    ends:[['a','ep'], ['b','ep']],
+  // A LINE (constraints.js §06.2f). It carries an id like a body, because a body is
+  // what it is as far as anything naming one is concerned -- a vertex's `on=` says
+  // "7" for a line exactly as it says "3" for a disk, and the two come from one
+  // allocator so the reader can tell which it got. What the line HOLDS is nothing at
+  // all: its frame, its extent, its origin and its stations are read off its joints,
+  // and the joints live on the vertices. Only these three are authored.
+  { kind:'line', list:'constraints', id:true, pass:1, match:c=>c.type==='line',
     fields:{
-      len:{t:'num', always:true, get:c=>c.len, set:(c,v)=>{c.len=v;}},
-      weld:{t:'ends', def:'none', get:c=>endsWord(c.weldA,c.weldB)},
-      // Authored, and the only rod field that says nothing about the running
-      // physics: it is what the rod does while the player POSES through it
-      // (constraints.js §06.2d). Read by build below, like `weld`.
-      posable:{t:'flag', def:false, get:c=>!!c.posable},
-      restAngA:{t:'num', always:true, when:c=>c.weldA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
-      restAngB:{t:'num', always:true, when:c=>c.weldB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
-      pt:PT_FIELD('rod'),
+      label:LABEL_FIELD,
+      // 1/k in m/N. Zero -- the default -- makes the axial relation a constraint;
+      // above zero it is a Hookean force between consecutive held joints (§08.1).
+      soft:{t:'num', def:0, get:c=>c.soft, set:(c,v)=>{c.soft=v;}},
+      posable:{t:'flag', def:false, get:c=>!!c.posable, set:(c,v)=>{c.posable=!!v;}},
+      mesh:{t:'refs', def:[], get:c=>c.mesh||[], set:(c,a)=>{c.mesh=a.slice();}},
     },
-    build:(q,e)=>{ const [A,B]=endsFlags(q('weld')); return makeRodCon(e.a, e.b, A, B, q('posable')); } },
-
-  { kind:'slot', list:'constraints', match:c=>c.type==='slot',
-    ends:[['a','ep'], ['b','ep']],
-    fields:{
-      lock:{t:'ends', def:'none', get:c=>endsWord(c.prismaticA,c.prismaticB)},
-      restAngA:{t:'num', always:true, when:c=>c.prismaticA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
-      restAngB:{t:'num', always:true, when:c=>c.prismaticB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
-      pt:PT_FIELD('slot'),
-    },
-    build:(q,e)=>{ const [A,B]=endsFlags(q('lock')); return makeSlotCon(e.a, e.b, A, B); } },
+    build:()=>makeLine() },
 
   { kind:'belt', list:'constraints', match:c=>c.type==='belt',
     ends:[['a','id'], ['b','id']],
@@ -232,16 +246,6 @@ const SCENE_SCHEMA = [
   // pinion and jointed body is a `pt`. Put both ends on the same body and the rack
   // rides that body's frame, which is what the old single-anchor-plus-angle form
   // could say and all it could say.
-  { kind:'rack', list:'constraints', match:c=>c.type==='rack',
-    ends:[['a','ep'], ['b','ep']],
-    fields:{
-      weld:{t:'ends', def:'none', get:c=>endsWord(c.weldA,c.weldB)},
-      restAngA:{t:'num', always:true, when:c=>c.weldA, get:c=>c.restAngA, set:(c,v)=>{c.restAngA=v;}},
-      restAngB:{t:'num', always:true, when:c=>c.weldB, get:c=>c.restAngB, set:(c,v)=>{c.restAngB=v;}},
-      pt:PT_FIELD('rack'),
-    },
-    build:(q,e)=>{ const [A,B]=endsFlags(q('weld')); return makeRackCon(e.a, e.b, A, B); } },
-
   { kind:'knife', list:'constraints', match:c=>c.type==='knife',
     ends:[['a','ep-body']],
     fields:{ dir:{t:'vec2', always:true, get:c=>c.dir} },
@@ -256,14 +260,6 @@ const SCENE_SCHEMA = [
     },
     build:(q,e)=>makeCableCon(e.tether, e.spool.id),
     state:[ ['spoolAngle', c=>c.spoolAngle, (c,x)=>{c.spoolAngle=x;}] ] },
-
-  { kind:'spring', list:'springs', match:()=>true,
-    ends:[['a','ep'], ['b','ep']],
-    fields:{
-      restLen:{t:'num', always:true, get:s=>s.restLen, set:(s,v)=>{s.restLen=v;}},
-      k:{t:'num', def:SPRING_DEFAULT_K, get:s=>s.k, set:(s,v)=>{s.k=v;}},
-    },
-    build:(q,e)=>makeSpringCon(e.a, e.b) },
 
   { kind:'rotspring', list:'rotSprings', match:()=>true,
     ends:[['a','id-bg'], ['b','id']],
@@ -449,78 +445,103 @@ function parseEp(tok, spec, ln, what, env){
   throw new SceneError(ln, `${what}: expected an endpoint (7, 7@(x,y) or bg(x,y)), got "${tok}"`);
 }
 
-// Extra-control-point syntax, the format's one repeatable key (constraints.js
-// §06.2c). A `pt=` token is a whole point in one word -- no spaces, because the line
-// tokenizes on whitespace -- built from the endpoint syntax above plus this joint's
-// own vocabulary, slash-separated:
-//
-//   pt=3                     body 3, jointed at the pivot (a pin's extra end)
-//   pt=3@(0,0.2)/s=1.25      ...at station 1.25 along a rod's or a rack's line
-//   pt=3/s=1.25/lock/restAng=0.4   ...and rotation-locked to that line
-//   pt=bg(2,1)/lock/restAng=0      a slot rider on the background (no station:
-//                                  a rider slides)
-//   pt=3/pinion              a rack's pinion: body 3, meshing wherever it sits
-//
-// Which of those a token may say depends on the kind it sits on, and saying anything
-// else is a load error rather than a field quietly ignored -- the same rule the
-// unknown-key check enforces for a line's own fields (SCENE.md §S.2).
-function fmtPt(fd, pt){
-  if(pt.kind==='pinion') return `${fmtEp(pt.ep,'id')}/pinion`;
-  const parts=[fmtEp(pt.ep,'ep')];
-  if(fd.kind==='rod' || fd.kind==='rack') parts.push(`s=${fmtNum(pt.s||0)}`);
-  if(pt.lock) parts.push('lock', `restAng=${fmtNum(pt.restAng||0)}`);
-  return parts.join('/');
-}
-// A point's options are slash-separated, and slash is also division: `s=1/4` is
-// one option, not two. The split is therefore at the slashes that sit outside every
-// parenthesis AND are followed by one of this format's option words -- nothing else
-// can begin a segment, and no expression can look like one.
-const PT_OPT = /^(s=|restAng=|lock(?=\/|$)|pinion(?=\/|$))/;
-function splitPt(tok){
+// Split a slash-separated option token -- `1@(0.2,0)/join/weld/restAng=0.3` -- at the
+// slashes that sit OUTSIDE every parenthesis and are followed by one of the format's
+// own option words. Slash is also division, so `s=1/2` is one option and not two, and
+// nothing else can begin a segment. Shared by every option token in the format;
+// `optRe` is the calling grammar's own word list (ON_OPT, §17.2).
+function splitOpts(tok, optRe){
   const out=[]; let depth=0, start=0;
   for(let i=0;i<tok.length;i++){
     const c=tok[i];
     if(c==='(') depth++;
     else if(c===')') depth--;
-    else if(c==='/' && depth===0 && PT_OPT.test(tok.slice(i+1))){ out.push(tok.slice(start,i)); start=i+1; }
+    else if(c==='/' && depth===0 && optRe.test(tok.slice(i+1))){ out.push(tok.slice(start,i)); start=i+1; }
   }
   out.push(tok.slice(start));
   return out;
 }
-function parsePt(fd, name, tok, ln, env){
-  const kind=fd.kind;
-  const parts=splitPt(String(tok));
+// The field types a line may repeat: one token per control point, one per incidence.
+const REPEATABLE = new Set(['ons','refs']);
+// One INCIDENCE of a vertex (constraints.js §06.2e), on the `pt=` pattern: an
+// endpoint, then slash-separated options. `join` and `weld` are flags, written when
+// true, so an incidence that merely marks a spot on a body is the bare endpoint --
+// which is also what makes the terse form mean the quiet thing.
+//
+//   1@(0.2,-0.1)/join/weld/restAng=0.3   held, and rigid, at that body-frame point
+//   bg(0,4.4)/join                       a ground pin
+//   3@(0,0.5)                            a feature point: marked, not held
+//   7/join/s=0.75                        a point riding line 7, joined to nothing else
+// While a FRAGMENT is being written this holds the ids the listing will contain, so
+// an incidence naming something outside it can be left out. A vertex whose bodies are
+// all in a selection is a member (SCENE.md §S.9) even when it also sits on a line that
+// is not -- that line is a coupling the selection cut through, exactly like any other
+// with a foot outside, and the fragment must not name it. Set and cleared inside one
+// synchronous call, the same discipline sceneBaselineText follows.
+let EMIT_SCOPE = null;
+const inScope = id => id==null || !EMIT_SCOPE || EMIT_SCOPE.has(id);
+function fmtOn(e){
+  const parts=[ e.kind==='line' ? String(e.id) : fmtEp(e,'ep') ];
+  if(e.join) parts.push('join');
+  // Sliding is the default on a line (constraints.js §06.2f), so the word is `fix`.
+  // The STATION is written separately from it, because the two say different things
+  // and only usually travel together: `fix` is the constraint -- this joint keeps its
+  // station rather than running along the bar -- while `s` is the station itself, and
+  // a vertex the line CARRIES (§06.2e vertexRide) has one whether or not it is fixed,
+  // that station being the whole of what says where the point is.
+  if(e.kind==='line' && e.join && !e.slide) parts.push('fix');
+  if(e.kind==='line' && e.join && e.s!==undefined) parts.push(`s=${fmtNum(e.s||0)}`);
+  if(e.weld) parts.push('weld', `restAng=${fmtNum(e.restAng||0)}`);
+  return parts.join('/');
+}
+const ON_OPT = /^(join(?=\/|$)|weld(?=\/|$)|fix(?=\/|$)|restAng=|s=)/;
+// `lines` is the set of ids the file gives to LINE items, which is how an incidence
+// token knows which kind it is: `on=7/join/fix/s=1.2` if 7 is a line, `on=7@(0.3,0)`
+// if it is a disk. One namespace, one token shape, and the reader tells them apart by
+// what the id actually names rather than by anything the token says.
+function parseOn(name, tok, ln, env, lines){
+  const parts=splitOpts(String(tok), ON_OPT);
   const out={};
-  const rest=parts.slice(1);
-  const takes = kind==='pin' ? [] : kind==='slot' ? ['lock','restAng']
-              : kind==='rod' ? ['s','lock','restAng'] : ['s','lock','restAng','pinion'];
-  for(const seg of rest){
+  for(const seg of parts.slice(1)){
     const eq=seg.indexOf('=');
     const key = eq<0 ? seg : seg.slice(0,eq);
-    if(!takes.includes(key))
-      throw new SceneError(ln, `${name}: a ${kind}'s point takes ${takes.join(', ')||'no options'}, got "${key}"`);
+    if(!['join','weld','fix','restAng','s'].includes(key))
+      throw new SceneError(ln, `${name}: an incidence takes join, weld, fix, restAng, s -- got "${key}"`);
     if(out[key]!==undefined) throw new SceneError(ln, `${name}: "${key}" given twice`);
-    if(key==='lock' || key==='pinion'){
-      if(eq>=0) throw new SceneError(ln, `${name}: "${key}" is a flag -- write it on its own`);
-      out[key]=true;
-    } else {
+    if(key==='restAng' || key==='s'){
       if(eq<0) throw new SceneError(ln, `${name}: "${key}" needs a value, as ${key}=...`);
       out[key]=numTok(seg.slice(eq+1), ln, `${name} ${key}`, env);
+    } else {
+      if(eq>=0) throw new SceneError(ln, `${name}: "${key}" is a flag -- write it on its own`);
+      out[key]=true;
     }
   }
-  if(out.pinion){
-    if(out.s!==undefined || out.lock)
-      throw new SceneError(ln, `${name}: a pinion meshes wherever it sits -- it takes no station and no lock`);
-    return {ep:parseEp(parts[0], 'id', ln, name, env), kind:'pinion'};
+  if(out.weld && !out.join)
+    throw new SceneError(ln, `${name}: weld means nothing on a body the vertex is not joined to`);
+  if(out.weld && out.restAng===undefined)
+    throw new SceneError(ln, `${name}: a welded incidence needs its captured rest angle, as restAng=...`);
+  if(!out.weld && out.restAng!==undefined)
+    throw new SceneError(ln, `${name}: restAng means nothing on an incidence that is not welded`);
+  // Is the id a line? The endpoint syntax is the same either way, so parse it as one
+  // and then ask what it named.
+  const bare=/^[1-9][0-9]*$/.test(parts[0]);
+  const onLine = bare && lines && lines.has(Number(parts[0]));
+  if(!onLine){
+    if(out.fix) throw new SceneError(ln, `${name}: "fix" is a joint on a LINE -- ${bare?`${parts[0]} is a body`:'this incidence names a body'}`);
+    if(out.s!==undefined) throw new SceneError(ln, `${name}: "s" is a station along a LINE, and this incidence does not name one`);
+    const ep=parseEp(parts[0], 'ep', ln, name, env);
+    return {id:ep.id, off:ep.off, join:!!out.join, weld:!!out.weld, restAng:out.restAng};
   }
-  const ep=parseEp(parts[0], 'ep', ln, name, env);
-  if((kind==='rod' || kind==='rack') && out.s===undefined)
-    throw new SceneError(ln, `${name}: a ${kind}'s point needs its captured station, as s=...`);
-  if(out.lock && out.restAng===undefined)
-    throw new SceneError(ln, `${name}: a locked point needs its captured rest angle, as restAng=...`);
-  if(!out.lock && out.restAng!==undefined)
-    throw new SceneError(ln, `${name}: restAng means nothing on a point that is not locked`);
-  return {ep, kind:'point', s:out.s, lock:!!out.lock, restAng:out.restAng};
+  if(out.fix && out.s===undefined)
+    throw new SceneError(ln, `${name}: a joint held on a line needs its captured station, as s=...`);
+  // A SLIDING joint may carry a station too, and then it is not a constraint but a
+  // position: it is a vertex the line CARRIES (constraints.js §06.2e vertexRide),
+  // nothing else holding it, and the station is the whole of what says where it is.
+  // Which is only meaningful without a join to hold it by.
+  if(out.s!==undefined && !out.join)
+    throw new SceneError(ln, `${name}: a station means nothing on a line this vertex is not joined to`);
+  return {id:Number(parts[0]), kind:'line', join:!!out.join, slide:!out.fix,
+          weld:!!out.weld, restAng:out.restAng, s:out.s};
 }
 
 // A field's value -> its token text, and back. `flag` fields have no token: they
@@ -531,6 +552,9 @@ function fmtVal(fd, v){
     case 'vec2':   return `(${fmtNum(v[0])},${fmtNum(v[1])})`;
     case 'onoff':  return v ? 'on' : 'off';
     case 'ends':   return v;
+    case 'str':    return String(v);
+    // A repeatable plain reference: `mesh=3 mesh=5`, one token per disk.
+    case 'refs':   return v.map(String).join(' ');
     case 'ref':    return String(v);
     case 'ref-bg': return v==null ? 'bg' : String(v);
     // A KEYED field (body=...), not one of the positional `ends` above, but the
@@ -538,8 +562,8 @@ function fmtVal(fd, v){
     // like every other body-frame anchor in the format (§17.2).
     case 'ep-centre': return fmtEp(v, 'ep-body');
     // A whole list in one string, for the field-by-field comparisons that read
-    // through fmtVal; emitFields below writes it as one `pt=` token per point.
-    case 'pts':    return v.map(pt=>fmtPt(fd,pt)).join(' ');
+    // through fmtVal; emitFields below writes it as one token per item.
+    case 'ons':    return v.map(e=>fmtOn(e)).join(' ');
   }
   throw new SceneError(0, `no formatter for field type ${fd.t}`);
 }
@@ -557,6 +581,11 @@ function parseVal(fd, name, tok, ln, env){
     case 'ends':
       if(['none','A','B','both'].includes(tok)) return tok;
       throw new SceneError(ln, `${name}: expected none, A, B or both, got "${tok}"`);
+    case 'str': {
+      if(!/^[A-Za-z_][A-Za-z0-9_]*$|^[1-9][0-9]*$/.test(tok))
+        throw new SceneError(ln, `${name}: expected a name (letters, digits, underscore), got "${tok}"`);
+      return tok;
+    }
     case 'ref': return idTok(tok, ln, name);
     case 'ref-bg': return tok==='bg' ? null : idTok(tok, ln, name);
     // Nothing yet gives an interaction a real off-centre anchor (physics.js
@@ -593,7 +622,8 @@ function emitFields(fields, o){
     if(fd.t==='flag'){ if(v) out.push(name); continue; }
     // The one repeatable key: one token per point, and nothing at all when a joint
     // carries none (so an ordinary two-ended constraint's line is unchanged).
-    if(fd.t==='pts'){ for(const pt of v) out.push(`${name}=${fmtPt(fd,pt)}`); continue; }
+    if(fd.t==='ons'){ for(const e of v) if(inScope(e.id)) out.push(`${name}=${fmtOn(e)}`); continue; }
+    if(fd.t==='refs'){ for(const r of v) if(inScope(r)) out.push(`${name}=${r}`); continue; }
     if(!fd.always){
       const d = typeof fd.def==='function' ? fd.def(q) : fd.def;
       if(isDefault(fd, v, d)) continue;
@@ -651,6 +681,7 @@ function emitSceneLine(list, o){
   const r = SCENE_SCHEMA.find(x => x.list===list && x.match(o));
   if(!r) throw new SceneError(0, `nothing in the scene table matches a ${list} entry of type "${o.type||o.shape}"`);
   const parts=[r.kind];
+  if(r.label) parts.push(String(o.label));
   if(r.id) parts.push(String(o.id));
   if(r.ends){
     const toks = r.ends.map(([name,spec]) => fmtEp(o[name], spec));
@@ -658,16 +689,24 @@ function emitSceneLine(list, o){
   }
   return parts.concat(emitFields(r.fields, o)).join(' ');
 }
-// The sections a listing is written in, in order, with the titles they carry.
-const SCENE_SECTIONS = [['bodies','bodies'], ['constraints','constraints'], ['cables','cables'],
-  ['springs','springs'], ['rotational springs','rotSprings'], ['interactions','interactions']];
+// The sections a listing is written in, in order, with the titles they carry, and
+// optionally a filter -- vertices and the other constraints share one world array
+// (constraints.js §06.2e) but read as two different things, and a file a person reads
+// should say so. Order between the sections is presentation only: the reader builds
+// bodies in a first pass and does not otherwise care.
+const SCENE_SECTIONS = [['bodies','bodies'],
+  ['lines','constraints', o=>o.type==='line'],
+  ['vertices','constraints', o=>o.type==='vertex'],
+  ['constraints','constraints', o=>o.type!=='vertex' && o.type!=='line'],
+  ['cables','cables'],
+  ['rotational springs','rotSprings'], ['interactions','interactions']];
 // The listing half of a file: one section per non-empty list. `pick(list)` says
 // which objects of that list to write -- the whole world for exportScene below, a
 // selected subset for exportFragment (§17.7).
 function emitSceneBody(pick){
   const L=[];
-  for(const [title, list] of SCENE_SECTIONS){
-    const arr = pick(list) || [];
+  for(const [title, list, only] of SCENE_SECTIONS){
+    const arr = (pick(list) || []).filter(o => !only || only(o));
     if(!arr.length) continue;
     L.push('', `# ${title}`);
     for(const o of arr) L.push(emitSceneLine(list, o));
@@ -677,7 +716,7 @@ function emitSceneBody(pick){
 // The live world arrays by their ledger `list` name. Read at call time, never
 // closed over: they are top-level `let` bindings (§04.2) that every filter-delete
 // reassigns. SCENE_LISTS below is the push-only twin of this.
-const worldList = name => ({bodies, constraints, cables, springs, rotSprings, interactions})[name];
+const worldList = name => ({bodies, constraints, cables, rotSprings, interactions})[name];
 
 // Bodies first, then everything that refers to them. The reader does not require
 // that order (it builds bodies in a first pass), but a file a person reads should
@@ -788,6 +827,10 @@ function worldExprEnv(){
 // which is the same answer the built body would have.
 function sceneExprEnv(scan, simVals){
   const fixed = EXPR_FIXED();
+  // Which ids this file gives to LINES, so an incidence token can tell a joint on a
+  // bar from an anchor on a disk (parseOn, §17.2). One namespace, told apart by what
+  // the id actually names.
+  const lineIds = new Set(scan.items.filter(it=>it.row.kind==='line').map(it=>it.id));
   const bgP = simVals['bg.P']!==undefined ? simVals['bg.P'] : SIM_FIELDS['bg.P'].def;
   const bgT = simVals['bg.T']!==undefined ? simVals['bg.T'] : SIM_FIELDS['bg.T'].def;
   const nums = new Map();                   // "<line>|<field>" -> its value
@@ -863,7 +906,7 @@ function sceneExprEnv(scan, simVals){
   // out, which is what the ledger's `always` on those three is checked against.
   function fieldsOf(it){
     if(vals.has(it)) return vals.get(it);
-    const f = evalKeyed(it.row.fields, it.raw, it.ln, it.row.kind, env, name=>fieldVal(it, name));
+    const f = evalKeyed(it.row.fields, it.raw, it.ln, it.row.kind, env, name=>fieldVal(it, name), lineIds);
     if(it.row.kind==='vessel'){ const g = vesselFill(it); for(const k of ['len','P','T']) f[k] = g[k]; }
     vals.set(it, f);
     return f;
@@ -892,7 +935,7 @@ function sceneExprEnv(scan, simVals){
 function parseScene(text){ return evalScene(scanScene(text)); }
 
 function scanScene(text){
-  const out = { version:null, sim:{}, simLn:0, cam:{}, camLn:0, items:[], byId:new Map() };
+  const out = { version:null, sim:{}, simLn:0, cam:{}, camLn:0, items:[], byId:new Map(), byLabel:new Map() };
   const lines = String(text).split(/\r?\n/);
   const kindRow = k => SCENE_SCHEMA.find(r => r.kind===k);
 
@@ -926,12 +969,30 @@ function scanScene(text){
     const row = kindRow(kind);
     if(!row) throw new SceneError(ln, `unknown kind "${kind}" -- a scene can only contain ${SCENE_SCHEMA.map(r=>r.kind).join(', ')}`);
 
-    const item = { row, ln, id:null, endToks:[], raw:null };
+    const item = { row, ln, id:null, label:null, endToks:[], raw:null };
+    // A LABEL is a name, where an id is a number: the thing the canvas draws and the
+    // inspector edits. Vertices carry one; bodies keep their numeric ids as labels
+    // until the version that gives them their own (VERTEX.md §X.8). The two share one
+    // namespace, and the GRAMMAR is what keeps them apart rather than a second check:
+    // a label must start with a letter or an underscore, so it can never be a body id,
+    // and an id is digits only, so it can never be a label.
+    if(row.label){
+      const lt = tok.shift();
+      if(lt===undefined) throw new SceneError(ln, `a ${kind} line needs a label`);
+      if(!/^[A-Za-z_][A-Za-z0-9_]*$/.test(lt))
+        throw new SceneError(ln, `${kind} label: expected a name (letters, digits, underscore; not starting with a digit), got "${lt}"`);
+      if(out.byLabel.has(lt)) throw new SceneError(ln, `duplicate label ${lt}`);
+      out.byLabel.set(lt, item);
+      item.label = lt;
+    }
     if(row.id){
       const idt = tok.shift();
       if(idt===undefined) throw new SceneError(ln, `a ${kind} line needs an id`);
       item.id = idTok(idt, ln, `${kind} id`);
-      if(out.byId.has(item.id)) throw new SceneError(ln, `duplicate body id ${item.id}`);
+      // Bodies and lines share one id space (constraints.js §06.2f), so one map and
+      // one duplicate check covers both -- which is also what makes `on=7` mean the
+      // same kind of thing whichever it turns out to name.
+      if(out.byId.has(item.id)) throw new SceneError(ln, `duplicate id ${item.id}`);
       out.byId.set(item.id, item);
     }
     if(row.ends){
@@ -963,10 +1024,10 @@ function scanKeyed(fields, tok, ln, kind){
     const name = eq<0 ? t : t.slice(0, eq);
     const fd = fieldOf(fields, name);
     if(!fd) throw new SceneError(ln, `${kind}: unknown field "${name}" -- this kind takes ${Object.keys(fields).join(', ')||'no fields'}`);
-    if(fd.t==='pts'){
+    if(REPEATABLE.has(fd.t)){
       if(eq<0) throw new SceneError(ln, `${kind}: "${name}" needs a value, as ${name}=...`);
       (f[name] || (f[name]=[])).push(t.slice(eq+1));
-      continue;                       // the one key a line may repeat, once per point
+      continue;                       // the keys a line may repeat, once per item
     }
     if(f[name]!==undefined) throw new SceneError(ln, `${kind}: "${name}" given twice`);
     if(fd.t==='flag'){
@@ -983,13 +1044,14 @@ function scanKeyed(fields, tok, ln, kind){
 // The text of one line's fields -> their values. `numOf` is how a numeric field is
 // read: plain evaluation for the singletons, and the environment's own memoized
 // reader for an item, so a field another line asked for is worked out exactly once.
-function evalKeyed(fields, raw, ln, kind, env, numOf){
+function evalKeyed(fields, raw, ln, kind, env, numOf, lineIds){
   const f = Object.create(null);
   for(const [name, fd] of Object.entries(fields)){
     const r = raw[name];
     if(r===undefined) continue;
     if(fd.t==='flag'){ f[name] = true; continue; }
-    if(fd.t==='pts'){ f[name] = r.map(t => parsePt(fd, name, t, ln, env)); continue; }
+    if(fd.t==='ons'){ f[name] = r.map(t => parseOn(name, t, ln, env, lineIds)); continue; }
+    if(fd.t==='refs'){ f[name] = r.map(t => idTok(t, ln, name)); continue; }
     f[name] = (fd.t==='num' && numOf) ? numOf(name) : parseVal(fd, name, r, ln, env);
   }
   return f;
@@ -1013,7 +1075,7 @@ function evalScene(scan){
     const ends = {};
     (it.row.ends||[]).forEach(([name, spec], e) =>
       { ends[name] = parseEp(it.endToks[e], spec, it.ln, `${it.row.kind} end ${name}`, bound.env); });
-    out.items.push({ row:it.row, ln:it.ln, id:it.id, ends, f:bound.fieldsOf(it) });
+    out.items.push({ row:it.row, ln:it.ln, id:it.id, label:it.label, ends, f:bound.fieldsOf(it) });
   }
 
   // Every body id anything names has to exist. Checked here, before the bench is
@@ -1026,11 +1088,17 @@ function evalScene(scan){
     for(const [name, fd] of Object.entries(it.row.fields)){
       if((fd.t==='ref' || fd.t==='ref-bg') && it.f[name]!=null) refs.push([it.f[name], name]);
       if(fd.t==='ep-centre' && it.f[name]!=null) refs.push([it.f[name].id, name]);
-      if(fd.t==='pts' && it.f[name]) for(const pt of it.f[name])
-        if(pt.ep.id!=null) refs.push([pt.ep.id, name]);
+      if(fd.t==='ons' && it.f[name]) for(const e of it.f[name])
+        if(e.id!=null) refs.push([e.id, name]);
+      if(fd.t==='refs' && it.f[name]) for(const r of it.f[name]) refs.push([r, name]);
     }
     for(const [id, what] of refs)
       if(!scan.byId.has(id)) throw new SceneError(it.ln, `${it.row.kind} ${what} names body ${id}, which this file does not define`);
+    // Whatever else a row wants to say about itself before anything is built.
+    if(it.row.validate){
+      const why = it.row.validate(it);
+      if(why) throw new SceneError(it.ln, `${it.row.kind}: ${why}`);
+    }
   }
   return out;
 }
@@ -1040,7 +1108,11 @@ function evalScene(scan){
 // the per-island energy bank (§08.6), whose key is a body id the next scene will
 // reuse. Shared with §15 so there is one answer to "what is a fresh bench".
 function clearScene(){
-  bodies=[]; constraints=[]; cables=[]; springs=[]; rotSprings=[]; interactions=[];
+  bodies=[]; constraints=[]; cables=[]; rotSprings=[]; interactions=[];
+  // A half-finished tool gesture names objects this scene is throwing away, so it
+  // goes with them: a `pending` first pick or a `bodyPreview` left over from the
+  // bench being replaced is a reference to something that no longer exists.
+  pending=null; bodyPreview=null; hover=null; hoverHandle=null; hoverSnap=null;
   uid=1; sim.bathQ=0;
   ENERGY_BANK.clear();
   refreshFrozen();
@@ -1055,7 +1127,6 @@ const SCENE_LISTS = {
   bodies:      o=>bodies.push(o),
   constraints: o=>constraints.push(o),
   cables:      o=>cables.push(o),
-  springs:     o=>springs.push(o),
   rotSprings:  o=>rotSprings.push(o),
   interactions:o=>interactions.push(o),
 };
@@ -1068,7 +1139,18 @@ const SCENE_LISTS = {
 function buildItem(it, fresh){
   const q = fieldReader(it.row.fields, it.f, it.ln);
   const o = it.row.build(q, it.ends);
-  if(it.row.id && !fresh) o.id = it.id;     // the file's ids are the scene's ids
+  // The file's ids are the scene's ids -- and a LABEL that is just the constructor's
+  // own id follows it across, so a body or line the file never renamed comes out
+  // named after the id it actually has rather than the one it was allocated.
+  if(it.row.id && !fresh){
+    const wasDefault = o.label===String(o.id);
+    o.id = it.id;
+    if(wasDefault) o.label = String(o.id);
+  }
+  // ...and its labels are the scene's labels, on the same terms: a PASTED fragment
+  // keeps the label the constructor just allocated, because a widget's names belong
+  // to the bench it was cut from (§17.7).
+  if(it.row.label && !fresh) o.label = it.label;
   applyFields(it.row.fields, o, it.f);
   if(it.row.finish) it.row.finish(o, it.f, q);
   SCENE_LISTS[it.row.list](o);
@@ -1076,16 +1158,25 @@ function buildItem(it, fresh){
 }
 const itemIsBody = it => it.row.list==='bodies';
 
+// Which build pass an item belongs to. Bodies go first, whatever order the file used,
+// because every constructor past them resolves endpoints through the live `bodies`
+// array. LINES go second: they own nothing but their id, and a vertex joined to one
+// has to be able to find it (constraints.js §06.2f makeVertexOn). Everything else
+// goes last.
+const itemPass = it => it.row.list==='bodies' ? 0 : (it.row.pass || 2);
+
 function commitScene(parsed){
   clearScene();
   // Bodies first, whatever order the file used: every constructor below this line
   // resolves endpoints through the live `bodies` array (§06.1 epWorld), and a belt
   // or cable reads its spool's radius at construction.
   const build = it => buildItem(it);
-  const isBody = itemIsBody;
-  for(const it of parsed.items) if(isBody(it)) build(it);
-  uid = bodies.reduce((m,b)=>Math.max(m,b.id), 0) + 1;
-  for(const it of parsed.items) if(!isBody(it)) build(it);
+  for(const it of parsed.items) if(itemPass(it)===0) build(it);
+  // `uid` has to clear every id the file used before the next constructor allocates
+  // one, and lines draw from the same allocator bodies do (§06.2f).
+  uid = parsed.items.reduce((m,it)=>Math.max(m, it.id||0), 0) + 1;
+  for(const it of parsed.items) if(itemPass(it)===1) build(it);
+  for(const it of parsed.items) if(itemPass(it)===2) build(it);
 
   applyFieldsFresh(SIM_FIELDS, sim, parsed.sim);
   applyFieldsFresh(CAM_FIELDS, cam, parsed.cam);
@@ -1104,8 +1195,14 @@ function commitScene(parsed){
   // (§06.2b) -- do it now so the first render, the first Reset baseline and any
   // inspector readout all see the same answer the substep will.
   refreshFrozen();
-  clearSelection();
+  // The baseline goes up BEFORE the selection is cleared, and the order is the whole
+  // point: clearSelection renders the panel, an empty panel draws the scene-file
+  // card, and that card writes the RESET BASELINE (sceneBaselineText) -- so with the
+  // old scene's snapshot still standing, drawing it borrows a pose belonging to a
+  // bench that no longer exists onto the one just built. Nothing downstream of an
+  // import should be able to see a baseline older than the import.
   saveState(true);
+  clearSelection();
 }
 
 // The whole of it: parse (throws on anything wrong), then commit.
@@ -1129,7 +1226,13 @@ function importScene(text){ commitScene(parseScene(text)); }
 // is using its own -- so a paste RENUMBERS: each body takes a fresh id from `uid`,
 // and every reference to it follows through remapItem below.
 function exportFragment(sel){
-  return [`scene ${SCENE_VERSION}`, ...emitSceneBody(list => sel[list])].join('\n') + '\n';
+  // Everything the listing will name, so an incidence or a mesh pointing outside the
+  // selection is left out rather than written as a dangling reference (see EMIT_SCOPE).
+  const ids=new Set();
+  for(const list of Object.keys(sel)) for(const o of (sel[list]||[])) if(o.id!=null) ids.add(o.id);
+  EMIT_SCOPE = ids;
+  try { return [`scene ${SCENE_VERSION}`, ...emitSceneBody(list => sel[list])].join('\n') + '\n'; }
+  finally { EMIT_SCOPE = null; }
 }
 
 // Rewrite every body id a parsed item names, through `map`. The places an id can
@@ -1147,10 +1250,9 @@ function remapItem(it, map){
     if(f[name]===undefined) continue;
     if(fd.t==='ref' || fd.t==='ref-bg') f[name] = at(f[name]);
     else if(fd.t==='ep-centre') f[name] = Object.assign({}, f[name], {id: at(f[name].id)});
-    else if(fd.t==='pts') f[name] = f[name].map(pt =>
-      Object.assign({}, pt, {ep: Object.assign({}, pt.ep, {id: at(pt.ep.id)})}));
+    else if(fd.t==='ons') f[name] = f[name].map(e => Object.assign({}, e, {id: at(e.id)}));
   }
-  return { row:it.row, ln:it.ln, id:it.id, ends, f };
+  return { row:it.row, ln:it.ln, id:it.id, label:it.label, ends, f };
 }
 
 // Read a fragment and ADD it to the bench -- the one import path that does not
@@ -1161,14 +1263,23 @@ function remapItem(it, map){
 function pasteFragment(text){
   const parsed = parseScene(text);          // strict: throws before anything is touched
   const map = new Map();
-  const made = { bodies:[], constraints:[], cables:[], springs:[], rotSprings:[], interactions:[] };
+  const made = { bodies:[], constraints:[], cables:[], rotSprings:[], interactions:[] };
   // Bodies first, and their new ids come from the constructors themselves, so the
   // bench's own `uid` stays the single allocator (§04.2).
-  for(const it of parsed.items) if(itemIsBody(it)){
+  for(const it of parsed.items) if(itemPass(it)===0){
     const o = buildItem(it, true); map.set(it.id, o.id); made.bodies.push(o);
   }
-  for(const it of parsed.items) if(!itemIsBody(it)){
-    const o = buildItem(remapItem(it, map)); made[it.row.list].push(o);
+  // Lines next, and they renumber into the same map: an id is an id, and a vertex's
+  // incidence names a line and a body the same way (§06.2f).
+  for(const it of parsed.items) if(itemPass(it)===1){
+    const o = buildItem(remapItem(it, map), true); map.set(it.id, o.id); made[it.row.list].push(o);
+  }
+  // `fresh` here is about LABELS, not ids: nothing outside `bodies` carries an id, so
+  // the flag was previously moot on this pass. A vertex does carry a label, and a
+  // widget's labels belong to the bench it was cut from exactly as its ids do -- so a
+  // paste takes the fresh one its constructor just allocated (§06.2e).
+  for(const it of parsed.items) if(itemPass(it)===2){
+    const o = buildItem(remapItem(it, map), true); made[it.row.list].push(o);
   }
   refreshFrozen();
   return made;
@@ -1185,7 +1296,7 @@ function pasteFragment(text){
 // them. What it shares with the format is the ledger, which is the part that was
 // being maintained twice.
 const SCENE_STATE_LISTS = () => [['bodies',bodies], ['constraints',constraints],
-  ['cables',cables], ['springs',springs], ['rotSprings',rotSprings], ['interactions',interactions]];
+  ['cables',cables], ['rotSprings',rotSprings], ['interactions',interactions]];
 
 function snapshotState(){
   const rec = {};
@@ -1193,7 +1304,13 @@ function snapshotState(){
     rec[list] = arr.map(o=>{
       const row = SCENE_SCHEMA.find(r => r.list===list && r.match(o));
       if(!row || !row.state) return null;
-      return { id:o.id, v:row.state.map(([,get]) => get(o)) };
+      // The KIND travels with the record. A state list is per-kind and they are not
+      // the same length -- a disk's is six values, a vessel's is nine -- so a record
+      // read off one kind and applied to another writes `undefined` into whatever
+      // the shorter list does not reach, which for a vessel is its length, its
+      // length rate and its gas. The id alone does not rule that out: two scenes
+      // each numbering their first body 1 is the ordinary case, not a strange one.
+      return { id:o.id, k:row.kind, v:row.state.map(([,get]) => get(o)) };
     });
   }
   rec.bathQ = sim.bathQ;
@@ -1208,6 +1325,8 @@ function applyState(rec){
       if(s.id!==undefined && o.id!==undefined && s.id!==o.id) return;  // structure moved under us
       const row = SCENE_SCHEMA.find(r => r.list===list && r.match(o));
       if(!row || !row.state) return;
+      if(s.k!==undefined && s.k!==row.kind) return;                    // ...or changed kind under us
+      
       row.state.forEach(([, , set], k)=>set(o, s.v[k]));
       if(row.restore) row.restore(o);
     });
@@ -1253,8 +1372,12 @@ const sceneStrip = t =>
 function sceneBaselineText(){
   if(!saved) return exportScene();
   const live = snapshotState();
-  applyState(saved);
-  try { return exportScene(); }
+  // The swap goes INSIDE the try. Outside it, anything that threw between the swap
+  // and the export -- an export of a bench the swap had just made inconsistent, say
+  // -- left the borrowed baseline sitting on the live world, where the next
+  // saveState would adopt it as the scene. A restore that only runs when nothing
+  // goes wrong is not a restore.
+  try { applyState(saved); return exportScene(); }
   finally { applyState(live); }
 }
 
@@ -1295,7 +1418,7 @@ function wireSceneCard(){
   const say=(ok,text)=>{ sceneMsg={ok,text}; renderInspector(); };
   document.getElementById('sc_export').onclick=()=>{
     sceneDraft=null; sceneText=null;          // back to the plain baseline export
-    say(true, `${bodies.length} bodies and ${constraints.length+cables.length+springs.length+rotSprings.length+interactions.length} couplings, at the reset baseline.`);
+    say(true, `${bodies.length} bodies and ${constraints.length+cables.length+rotSprings.length+interactions.length} couplings, at the reset baseline.`);
   };
   document.getElementById('sc_capture').onclick=()=>{
     let text;

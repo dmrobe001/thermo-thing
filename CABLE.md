@@ -3,7 +3,8 @@
 Design of the winding-cable constraint: a strand of fixed total length that wraps
 around one or two spools, carries tension only, and conserves energy exactly. This
 note is written to slot alongside `DEVELOPMENT.md`; it references that document's
-section numbers (§4.1 belt/rod rows, §4.3 unilateral/hard-stops, §6.5 row assembly,
+section numbers (§4.1/§4.1b the vertex and the line, §4.3 unilateral/hard-stops,
+§6.5 row assembly,
 §8.3 the velocity-projection solve) rather than repeating them.
 
 > **Status (as built):** The single-spool (point <-> spool) case described below --
@@ -14,7 +15,7 @@ section numbers (§4.1 belt/rod rows, §4.3 unilateral/hard-stops, §6.5 row ass
 ## C.1 The claim: the ideal wrapping cable is energy-conserving
 
 An inextensible, massless cable on a frictionless spool stores no energy and does no
-net work. Its tension is a workless constraint force, exactly like a rod's. Any
+net work. Its tension is a workless constraint force, exactly like a rigid line's. Any
 kinetic energy lost by the current implementation is a formulation artifact, not
 physics -- so the cable does **not** need to be modeled as an idealized elastic, and
 should not be. Elasticity would reintroduce stiff-ODE timestepping and a springy
@@ -44,10 +45,10 @@ in and `ell` shrinks. (This is the classic tetherball result: constant speed, sp
 radius, string always normal to the path.)
 
 **Consequence for the solver.** The taut constraint is a single row that removes the
-velocity component *along the current string direction* -- a slot-like row `s_hat·v = 0`
+velocity component *along the current string direction* -- a point-on-line row `s_hat·v = 0`
 with `s_hat` recomputed each step. Because the true motion is already perpendicular to
 `s_hat`, the §8.3 projection removes a component that is ~= 0, so the impulse it applies --
-and the energy it removes -- is near zero to integration order, exactly as for a rod.
+and the energy it removes -- is near zero to integration order, exactly as for a bar.
 If the current implementation instead phrases the row against distance-to-center or
 distance-to-a-fixed-anchor, its direction is not perpendicular to the involute
 motion, the projection fights real motion every step, and that is where the energy
@@ -69,7 +70,7 @@ collapses the whole family:
 
 | Ends | Radii | Result |
 |---|---|---|
-| point <-> point | R_1 = R_2 = 0 | plain rod, no wrap (already in library, §4.1) |
+| point <-> point | R_1 = R_2 = 0 | a plain bar, no wrap -- a line with two held joints (§4.1b) |
 | point <-> spool | one R = 0 | tetherball / falling-weight cable |
 | spool <-> spool | both R > 0 | two-pulley belt-cable |
 
@@ -78,8 +79,8 @@ geometry is per-end. This is §4's "one atomic operation applied to different
 features," with the feature being a per-end radius.
 
 > **As built:** Only point <-> spool exists (`cb.tether` is always a bare point;
-> `cb.spool` always carries a radius). Point <-> point stays the separate `rod`
-> constraint rather than a cable with both radii zero. Spool <-> spool (§C.5) is not
+> `cb.spool` always carries a radius). Point <-> point stays a **line** with both
+> joints held (§4.1b) rather than a cable with both radii zero. Spool <-> spool (§C.5) is not
 > implemented -- see the two-spool generalization below for what that would add.
 
 ### The wrap coordinate
@@ -95,9 +96,12 @@ The three awkward cases the cable must survive all map onto this coordinate:
 
 - **Fully unwound, tangent would fall past the anchor** -> the **lower end-stop**
   `Delta = 0`. Below it, the departure point cannot slide past the material tie-off, so
-  the constraint pivots at the anchor and becomes an ordinary rod to a point on the
-  spool. The transition is continuous: at `Delta = 0` the tangent point *is* the anchor,
-  so `s_hat` does not jump.
+  the constraint pivots at the anchor and becomes an ordinary taut segment to a point
+  on the spool -- the **anchor regime**, called the "rod regime" throughout the
+  pseudocode below after the shape it takes, not after any object in the library
+  (there is no `rod` constraint; §4.1b).
+  The transition is continuous: at `Delta = 0` the tangent point *is* the anchor, so
+  `s_hat` does not jump.
 - **Tether inside the spool perimeter** -> can occur *only* in that unwound rod
   regime, where it is harmless (a rod needs no tangent). In the wrapped regime the
   free segment is a tangent ray, which only reaches points with `d >= R`, so a wrapped

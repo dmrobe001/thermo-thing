@@ -4,6 +4,9 @@
 //    §14.0  numeric fields (numRow/numVal -- one editable number, as arithmetic)
 //    §14.1  selection state (clearSelection, select*, pickCable)
 //    §14.2  renderInspector    (build the panel DOM per selection type)
+//    §14.2b renderVesselInspector (the vessel's own panel)
+//    §14.2c the incidence row (one relation, three panels: a vertex's, a body's,
+//           a line's -- all built out of incidenceRow)
 //    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
 // ============================================================================
 // ---- §14.0 · numeric fields ----
@@ -74,26 +77,22 @@ function wireNumIns(){
   }
 }
 // ---- §14.1 · selection state ----
-let selBody=null, selConstraint=null, selCable=null, selSpring=null, selRotSpring=null, selInteraction=null;
+let selBody=null, selConstraint=null, selCable=null, selRotSpring=null, selInteraction=null;
 // `selGroup` (select.js §18.1) is the seventh: a MANY-body selection with a box
 // around it. It is cleared here with the rest -- one selection at a time is the
 // invariant every select* below keeps, and a group is a selection like any other.
 function clearSelection(){ bodies.forEach(b=>b.sel=false); constraints.forEach(c=>c.sel=false); cables.forEach(c=>c.sel=false);
-  springs.forEach(s=>s.sel=false); rotSprings.forEach(s=>s.sel=false); interactions.forEach(i=>i.sel=false);
-  selBody=null; selConstraint=null; selCable=null; selSpring=null; selRotSpring=null; selInteraction=null;
+  rotSprings.forEach(s=>s.sel=false); interactions.forEach(i=>i.sel=false);
+  selBody=null; selConstraint=null; selCable=null; selRotSpring=null; selInteraction=null;
   selGroup=null; groupDrag=null;
   renderInspector(); }
 function selectBody(i){ clearSelection(); bodies[i].sel=true; selBody=bodies[i]; renderInspector(); }
 function selectConstraint(i){ clearSelection(); constraints[i].sel=true; selConstraint=constraints[i]; renderInspector(); }
 function selectCable(i){ clearSelection(); cables[i].sel=true; selCable=cables[i]; renderInspector(); }
-function selectSpring(i){ clearSelection(); springs[i].sel=true; selSpring=springs[i]; renderInspector(); }
 function selectRotSpring(i){ clearSelection(); rotSprings[i].sel=true; selRotSpring=rotSprings[i]; renderInspector(); }
 function selectInteraction(i){ clearSelection(); interactions[i].sel=true; selInteraction=interactions[i]; renderInspector(); }
 function pickCable(wx,wy){
   for(let i=cables.length-1;i>=0;i--){ if(cableHit(cables[i],wx,wy)) return i; }
-  return -1; }
-function pickSpring(wx,wy){
-  for(let i=springs.length-1;i>=0;i--){ if(springHit(springs[i],wx,wy)) return i; }
   return -1; }
 function pickRotSpring(wx,wy){
   for(let i=rotSprings.length-1;i>=0;i--){ if(rotSpringHit(rotSprings[i],wx,wy)) return i; }
@@ -147,7 +146,9 @@ function renderVesselInspector(v){
       ${numRow('w', 'v_w', v.w.toFixed(3), {step:0.1})}
       ${numRow('len rate', 'v_vlen', v.vlen.toFixed(3), {step:0.1})}
     </div>
+    ${bodyVerticesCard(v)}
     <button class="del" id="v_del">Delete vessel</button>`;
+  wireIncidenceRows();
   const commit=()=>{ renderInspector(); saveState(); };
   // Geometry edits go through resizeVessel, which keeps the gas sealed (mass and
   // temperature carry over) and scales the shell mass with the footprint to hold
@@ -192,59 +193,292 @@ function renderVesselInspector(v){
   wireNumIns();
   document.getElementById('v_del').onclick=()=>{ const id=v.id;
     dropBodyFromConstraints(id);
-    springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
     rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
     cables=cables.filter(c=>c.spool.id!==id && c.tether.id!==id);
     dropInteractionsOn(id);
     bodies=bodies.filter(x=>x!==v); clearSelection(); saveState(); };
 }
 
+// ---- §14.2c · the two lists a vertex and a body show of each other ----
+// One relation, read from either side: a vertex lists what it is at, a body lists the
+// vertices at it. What each list holds is the EXTENT relation of constraints.js
+// §06.2e -- everything the point is inside, not just what has been joined to it --
+// so the two panels agree with each other and with the picture, and the tick that
+// says `joined` is the only control either of them needs.
+// What to call a body in a list: its label, and a line says so, because "line 7" and
+// "body 7" are two very different things to be attached to.
+function bodyName(id){
+  if(id==null) return 'the background';
+  const L=lineById(id); if(L) return `line ${L.label}`;
+  const b=bodies[bodyIndex(id)];
+  return b ? `body ${b.label!==undefined?b.label:b.id}` : `body ${id}`;
+}
+// ---- the incidence ROW, which all three panels are built out of ----
+// A vertex's panel, a body's and a line's show the same row from different sides, so
+// there is one builder and they cannot drift apart. It is also the one place that
+// says what an edit in such a row MEANS:
+//
+//   the coordinates  are where the vertex sits in that body's own frame -- its
+//                    station, for a line. Committing one moves something and then
+//                    asks the assembly to agree (projectPositions): where an
+//                    incidence holds the vertex there, it is that ANCHOR that moves
+//                    and the bodies that have to follow; where nothing holds it,
+//                    there is no anchor to move, so the VERTEX goes to the point
+//                    named and its own joins are re-read. Either way it is a solve
+//                    attempt and not an assertion -- a distance the mechanism cannot
+//                    take leaves the bench where the solver could get to.
+//   joined           makes the incidence, or releases it. Releasing leaves the body
+//                    on the list holding nothing, which is what a "remove" button
+//                    used to be for and is why there is no longer one.
+//   welded / slide   are what a joined incidence may additionally hold; both are
+//                    disabled without it, because both are things a JOIN does.
+//
+// `incRows` is the render-scoped registry the fields and ticks index into. It is
+// cleared by renderInspector before any panel is built, so a row's number means the
+// same thing to the markup that wrote it and the handler that reads it.
+let incRows=[];
+// Where a row's coordinates come from: the incidence's own stored offset where there
+// is one -- that is the authored number, and under a violation it is not what the
+// geometry reads -- and the live geometry where there is none to read.
+// The BACKGROUND row is the exception, and it is the vertex's own world coordinates.
+// An unjoined background incidence is not a mark on anything -- the background has no
+// material spots worth marking -- it is only the record of where the point is, read
+// back when nothing else locates it, and refreshed at the moment it takes over. So it
+// shows the live point, and editing it moves the vertex, exactly as its own x/y field
+// does. Joined, it is a ground pin, and then the stored number is the authored one.
+const incidenceStored = (v,id) => { const e=vertexOns(v).find(x=>x.id===id);
+  return (e && !isLineOn(e) && (id!=null || e.join)) ? e : null; };
+function incidenceOff(v, id){
+  const e=incidenceStored(v,id);
+  if(e) return e.off;
+  const [wx,wy]=vertexWorld(v);
+  if(id==null) return [wx,wy];
+  const b=bodies[bodyIndex(id)];
+  return b ? epOffOf(b,wx,wy) : [0,0];
+}
+function incidenceStation(v, line){
+  const e=vertexOns(v).find(x=>x.id===line.id);
+  if(e && e.join && e.s!==undefined) return e.s;
+  const [wx,wy]=vertexWorld(v);
+  return lineStationAt(line, wx, wy);
+}
+function incidenceRow(v, id, o={}){
+  const k=incRows.length;
+  incRows.push({v, id});
+  const line = id!=null ? lineById(id) : null;
+  const e = vertexOns(v).find(x=>x.id===id) || null;
+  const join = !!(e && e.join);
+  // Whose name the row carries: the BODY's on a vertex's panel, the VERTEX's on a
+  // body's or a line's -- and there it is a link, because the other panel is where
+  // the rest of what that vertex holds is said.
+  const name = o.selVertex ? `<a href="#" data-inc-sel="${k}">${v.label}</a>` : bodyName(id);
+  const b = id!=null ? bodies[bodyIndex(id)] : null;
+  // The right-hand word says what the TICKS cannot, and nothing they already say --
+  // "held" next to a `slide` tick and a `joined` tick was three ways of writing the
+  // same two bits, in a word the line panel uses for something narrower. What is left
+  // is the one fact the ticks leave open: which of these frames the point's position
+  // is actually read from (constraints.js §06.2e vertexWorld), and, for a body the
+  // vertex has let go of, that the coordinates below are the mark it left rather than
+  // where it now is.
+  const P = vertexPrimary(v), R = vertexRide(v);
+  // The background is never a "mark": it has no material spots worth marking, so an
+  // unjoined background incidence is only the vertex's world coordinates, and it is
+  // the locator whenever neither of the other two is (constraints.js §06.2e).
+  const bgLast = !P && !R && id==null ? e : null;
+  const what = e && (e===P || e===bgLast) ? 'locates it'
+             : e && e===R ? 'carries it'
+             : e && !join && id!=null && !line ? 'marks a spot'
+             : '';
+  const coords = line
+    ? numRow('station', `inc_s${k}`, incidenceStation(v,line).toFixed(3), {step:0.05})
+    : (()=>{ const off=incidenceOff(v,id);
+        const unit = b && b.shape==='vessel' ? ' material' : '';
+        return numRow('x'+unit, `inc_x${k}`, off[0].toFixed(3), {step:0.05})
+             + numRow('y'+unit, `inc_y${k}`, off[1].toFixed(3), {step:0.05}); })();
+  const slide = line
+    ? `<label class="chk"><input type="checkbox" data-inc-slide="${k}" ${e&&e.slide?'checked':''} ${join?'':'disabled'}> slide</label>` : '';
+  return `<div class="inc">
+    <div class="field"><span class="lab">${name}</span><span class="val">${what}</span></div>
+    ${coords}
+    <div class="chkrow">
+      <label class="chk"><input type="checkbox" data-inc-join="${k}" ${join?'checked':''}> joined</label>
+      ${slide}
+      <label class="chk"><input type="checkbox" data-inc-weld="${k}" ${e&&e.weld?'checked':''} ${join?'':'disabled'}> welded</label>
+    </div>
+  </div>`;
+}
+// Ticking `joined`. Where there is no incidence yet it makes one AT THE PLACE THE
+// VERTEX ALREADY IS, so the tick itself never snaps anything -- the discipline every
+// capture in the engine follows -- and a line's joint is made sliding, as the line
+// tool makes them (VERTEX.md §X.11).
+//
+// Then it solves, whichever it was. A fresh incidence is satisfied where it stands,
+// so on its own the projection is a no-op; what it is for is the rows this tick has
+// just brought to LIFE. A vertex lying near a line, joined to the line and to nothing
+// else, is not a joint at all -- a line is never a locator (§X.3), so there is nothing
+// for the row to move -- and the moment a body is ticked at that same vertex the
+// on-line row becomes real and is violated by however far off the line the point was
+// put. Solving here is what closes that gap, so the two ticks in either order end at
+// the same assembled bench.
+function setIncidenceJoin(v, id, want){
+  const e = vertexOns(v).find(x=>x.id===id) || null;
+  if(e){ setVertexJoin(v, e, want); if(want) projectPositions(12); return; }
+  if(!want) return;
+  const [wx,wy]=vertexWorld(v);
+  const b = id!=null ? bodies[bodyIndex(id)] : null;
+  const off = id==null ? [wx,wy] : b ? epOffOf(b,wx,wy) : [0,0];
+  if(!makeVertexOn(v, {id, off}, {join:true, slide:true})) return;
+  // Which of the vertex's frames now says where it is may have just changed -- ticking
+  // a line onto a vertex nothing grounds hands the point to that line, and the line
+  // needs its station to carry it (constraints.js §06.2e).
+  settleVertex(v, wx, wy);
+  projectPositions(12);
+}
+// The two commits a row's coordinates make, lifted out of the handlers so the panel
+// wiring is only wiring and each is one testable thing. Both snapshot the pose first:
+// whatever moves here is a rigid move like any other, so a rolling pair on it takes
+// it up as slip (projection.js §09.1). Both end in a projection, which is an ATTEMPT
+// -- a distance the mechanism cannot take leaves the bench wherever the solver got to,
+// exactly as typing a body's pose does.
+function commitIncidenceOff(v, id, x, y){
+  const e=incidenceStored(v, id);
+  if(vertexOns(v).some(z=>z.id===id && isLineOn(z))) return;   // a line holds a station
+  const q0=poseSnapshot();
+  if(e) e.off=[x,y];
+  else {
+    // Nothing stored to move, so the VERTEX goes to the point named: the same edit
+    // its own x/y field makes, said in this body's frame instead.
+    const b = id!=null ? bodies[bodyIndex(id)] : null;
+    const [wx,wy] = id==null ? [x,y] : b ? epWorldPt(b,[x,y]) : [x,y];
+    setVertexWorld(v, wx, wy);
+  }
+  projectPositions(8, null, q0);
+}
+// A HELD joint owns its station, so the number is stored and the bar rearranges
+// around it. A slider owns none -- and neither does a vertex merely lying on the line
+// -- so there the number says where to put the point, and the joins re-read.
+function commitIncidenceStation(v, line, s){
+  const q0=poseSnapshot();
+  const e=vertexOns(v).find(z=>z.id===line.id);
+  if(e && e.join && !e.slide) e.s=s;
+  else { const p=lineStationPoint(line, s); if(!p) return; setVertexWorld(v, p[0], p[1]); }
+  projectPositions(8, null, q0);
+}
+function wireIncidenceRows(){
+  const done=()=>{ renderInspector(); saveState(); };
+  const el=id=>document.getElementById(id);
+  incRows.forEach((R,k)=>{
+    const v=R.v, id=R.id, line = id!=null ? lineById(id) : null;
+    const fx=el(`inc_x${k}`), fy=el(`inc_y${k}`), fs=el(`inc_s${k}`);
+    if(fx && fy){
+      const commit=()=>{ const x=numVal(`inc_x${k}`), y=numVal(`inc_y${k}`);
+        if(!isFinite(x) || !isFinite(y)) return;
+        commitIncidenceOff(v, id, x, y); done(); };
+      fx.onchange=commit; fy.onchange=commit;
+    }
+    if(fs && line) fs.onchange=()=>{ const s=numVal(`inc_s${k}`);
+      if(!isFinite(s)) return;
+      commitIncidenceStation(v, line, s); done(); };
+  });
+  for(const t of document.querySelectorAll('[data-inc-join]')){
+    const R=incRows[Number(t.dataset.incJoin)]; if(!R) continue;
+    t.onchange=ev=>{ setIncidenceJoin(R.v, R.id, ev.target.checked); done(); }; }
+  for(const t of document.querySelectorAll('[data-inc-weld]')){
+    const R=incRows[Number(t.dataset.incWeld)]; if(!R) continue;
+    t.onchange=ev=>{ const e=vertexOns(R.v).find(z=>z.id===R.id);
+      if(e) setVertexWeld(R.v, e, ev.target.checked); done(); }; }
+  for(const t of document.querySelectorAll('[data-inc-slide]')){
+    const R=incRows[Number(t.dataset.incSlide)]; if(!R) continue;
+    t.onchange=ev=>{ const e=vertexOns(R.v).find(z=>z.id===R.id);
+      if(e) setVertexSlide(R.v, e, ev.target.checked); done(); }; }
+  for(const t of document.querySelectorAll('[data-inc-sel]')){
+    const R=incRows[Number(t.dataset.incSel)]; if(!R) continue;
+    t.onclick=ev=>{ ev.preventDefault(); selectConstraint(constraints.indexOf(R.v)); }; }
+}
+// A vertex's own panel: its label, where it is, and one row per site -- every body
+// whose extent covers the point, the background included, with the joined ones ticked.
+function vertexInspectorHTML(v){
+  const [wx,wy]=vertexWorld(v);
+  const welds=vertexOns(v).filter(e=>e.join&&e.weld).length;
+  const rows=vertexSites(v).map(s=>incidenceRow(v, s.id)).join('');
+  // A single weld holds nothing, and saying so is better than drawing a tick that
+  // does not do anything: welding ties one frame to another, and one frame has
+  // nothing to tie to (VERTEX.md §X.3).
+  const weldNote = welds===1
+    ? '<p class="muted" style="margin:8px 0 0">Only one thing is welded here, so nothing is held: a weld ties two frames together. Weld a second body at this vertex &mdash; or the background &mdash; to make the joint rigid.</p>' : '';
+  // A vertex with nothing but a line to hold it RIDES the line (constraints.js §06.2e
+  // vertexRide) -- it moves with the bar and holds nothing, because a point with no
+  // mass has nothing to hold anything with. Saying that is worth a line of prose: it
+  // is why the bar does not react to it, and why the next tick is the one that matters.
+  const ride = vertexRide(v);
+  const adriftNote = ride
+    ? `<p class="muted" style="margin:8px 0 0">Nothing but ${bodyName(ride.id)} holds this vertex, so it rides along the line and asks nothing of it &mdash; a point with no body at it has no mass to push with, and the <b>slide</b> tick changes nothing until there is one. Join a body here and it becomes a real joint on the line.</p>` : '';
+  return `
+    <h3>Vertex ${v.label}</h3><p class="sub">a named point, and the bodies it touches</p>
+    <div class="card"><div class="cardhead">label</div>
+      <div class="field"><span class="lab">name</span><input class="num" id="vt_label" type="text" value="${v.label}"></div>
+    </div>
+    <div class="card"><div class="cardhead">position</div>
+      ${numRow('x', 'vt_x', wx.toFixed(3), {step:0.05})}
+      ${numRow('y', 'vt_y', wy.toFixed(3), {step:0.05})}
+      <p class="muted" style="margin:8px 0 0">Moving the vertex re-reads every joined body's own anchor, so the bodies stay where they are and the point moves between them. A vertex a line carries has no anchor to re-read, so it runs <em>along</em> the line to the nearest place on it instead.</p>
+    </div>
+    <div class="card"><div class="cardhead">bodies at this vertex</div>
+      ${rows || '<p class="muted">none</p>'}${adriftNote}${weldNote}
+      <p class="muted" style="margin:8px 0 0">Everything whose extent covers this point, whether it is held here or not &mdash; the background always, since its extent is the whole plane. Tick <b>joined</b> to hold the vertex to one, untick it to let go; the body stays listed either way, because what is listed is where the point <em>is</em>. Editing a coordinate moves the anchor and asks the assembly to follow.</p>
+    </div>
+    <button class="del" id="vt_del">Delete vertex</button>`;
+}
+function wireVertexCard(v){
+  const el=id=>document.getElementById(id);
+  el('vt_label').onchange=ev=>{
+    const want=String(ev.target.value).trim();
+    const okName=/^[A-Za-z_][A-Za-z0-9_]*$/.test(want);
+    const taken=constraints.some(c=>isVertex(c)&&c!==v&&c.label===want);
+    if(okName && !taken) v.label=want;
+    renderInspector(); saveState(); };
+  const commitPos=()=>{ const x=numVal('vt_x'), y=numVal('vt_y');
+    if(!isFinite(x) || !isFinite(y)) return;
+    const q0=poseSnapshot();
+    setVertexWorld(v,x,y); projectPositions(8,null,q0);
+    renderInspector(); saveState(); };
+  el('vt_x').onchange=commitPos; el('vt_y').onchange=commitPos;
+  // A vertex leaves on its own: every line it was a joint on keeps its identity and
+  // its other joints, and every body it touched is untouched. Nothing here owns
+  // anything else (constraints.js §06.2b).
+  el('vt_del').onclick=()=>{ deleteConstraint(v); clearSelection(); saveState(); };
+}
+// ...and the same relation from the body's side: every vertex INSIDE this body, each
+// with its place in the body's frame and the same ticks the vertex's own panel shows.
+function bodyVerticesCard(b){
+  const vs=verticesInExtent(b.id);
+  const rows=vs.map(v=>incidenceRow(v, b.id, {selVertex:true})).join('');
+  return `<div class="card"><div class="cardhead">vertices on this body</div>
+    ${rows || '<p class="muted">none</p>'}
+    <p class="muted" style="margin:8px 0 0">Every vertex this body's extent covers, held here or not. Coordinates are in the body's own frame, and editing one moves the anchor and asks the assembly to follow.</p></div>`;
+}
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, cable, spring, rotational
 // spring, or the empty bench.
-// ---- the extra control points a joint carries (constraints.js §06.2c) ----
-// One row per point: what it is bound to, its rotation lock as a checkbox (the same
-// flag a tap on its canvas handle toggles), and a button to take it off again. Only
-// the EXTRA points are listed -- the base pair has its own named checkboxes above,
-// because on a rod or a slot those two are the constraint rather than passengers on
-// it. A joint carrying none shows no card at all.
-function conPointsCard(c){
-  if(!conTakesPoints(c)) return '';
-  const pts=conPoints(c);
-  if(!pts.length) return '';
-  const lockWord = c.type==='slot' ? 'prismatic' : 'welded';
-  const rows=pts.map((pt,k)=>{
-    const where = pt.ep.id==null ? 'background' : ('body '+pt.ep.id);
-    const what = pt.kind==='pinion' ? 'pinion' : (c.type==='pin' ? 'at the pivot'
-               : conPointHasStation(c) ? `station ${pt.s.toFixed(3)}` : 'rides the rail');
-    const lock = conPointLockable(c,pt)
-      ? `<label class="chk"><input type="checkbox" data-ptlock="${k}" ${pt.lock?'checked':''}> ${lockWord}</label>` : '';
-    return `<div class="field"><span class="lab">${where}</span><span class="val">${what}</span></div>
-            ${lock}<button class="del" data-ptdel="${k}">Remove this point</button>`;
-  }).join('');
-  return `<div class="card"><div class="cardhead">extra control points</div>${rows}</div>`;
-}
-function bindConPointsCard(c){
-  for(const el of document.querySelectorAll('[data-ptlock]')){
-    const k=Number(el.dataset.ptlock);
-    el.onchange=ev=>{ const pt=conPoints(c)[k]; if(pt) setConPointLock(c, pt, ev.target.checked);
-      renderInspector(); saveState(); };
-  }
-  for(const el of document.querySelectorAll('[data-ptdel]')){
-    const k=Number(el.dataset.ptdel);
-    el.onclick=()=>{ c.pts.splice(k,1); renderInspector(); saveState(); };
-  }
-}
 function renderInspector(){
   const p=document.getElementById('panelBody');
+  // Every incidence row any panel below draws numbers itself out of this, so it is
+  // cleared here, once, before any of them is built (§14.2c).
+  incRows=[];
   // A group is checked first: it is a selection of many bodies, so none of the
   // single-object branches below can speak for it (select.js §18.5).
   if(selGroup){ p.innerHTML=groupInspectorHTML(selGroup); wireGroupCard(); return; }
+  if(selConstraint && isVertex(selConstraint)){
+    p.innerHTML=vertexInspectorHTML(selConstraint);
+    wireVertexCard(selConstraint); wireIncidenceRows(); wireNumIns(); return; }
   if(selBody && selBody.shape==='vessel'){ renderVesselInspector(selBody); return; }
   if(selBody){
     const b=selBody; const isRect=b.shape==='rect';
     p.innerHTML=`
-      <h3>Body ${b.id}</h3><p class="sub">${isRect?'rigid rectangle':'rigid disk'}</p>
+      <h3>Body ${b.label!==undefined?b.label:b.id}</h3><p class="sub">${isRect?'rigid rectangle':'rigid disk'}</p>
+      <div class="card"><div class="cardhead">label</div>
+        <div class="field"><span class="lab">name</span><input class="num" id="f_label" type="text" value="${b.label!==undefined?b.label:b.id}"></div>
+      </div>
       <div class="card"><div class="cardhead">properties</div>
         ${isRect
           ? `${numRow('width', 'f_rw', (b.hw*2).toFixed(3), {step:0.05, min:0.16})}
@@ -263,7 +497,15 @@ function renderInspector(){
         ${numRow('vy', 'f_vy', b.vy.toFixed(3), {step:0.1})}
         ${numRow('w', 'f_w', b.w.toFixed(3), {step:0.1})}
       </div>
+      ${bodyVerticesCard(b)}
       <button class="del" id="f_del">Delete body</button>`;
+    wireIncidenceRows();
+    document.getElementById('f_label').onchange=ev=>{
+      const want=String(ev.target.value).trim();
+      const taken=bodies.some(x=>x!==b && String(x.label)===want)
+               || constraints.some(x=>x.label===want);
+      if(/^[A-Za-z_][A-Za-z0-9_]*$|^[1-9][0-9]*$/.test(want) && !taken) b.label=want;
+      renderInspector(); saveState(); };
     if(isRect){
       const commitSize=()=>{ const w=numVal('f_rw',x=>x>0.16), h=numVal('f_rh',x=>x>0.16);
         if(!isFinite(w) || !isFinite(h)) return;
@@ -300,18 +542,86 @@ function renderInspector(){
     document.getElementById('f_w').onchange=commitVel;
     document.getElementById('f_del').onclick=()=>{ const id=b.id;
       dropBodyFromConstraints(id);
-      springs=springs.filter(s=>s.a.id!==id && !(s.b&&s.b.id===id));
       rotSprings=rotSprings.filter(s=>s.a.id!==id && s.b.id!==id);
       dropInteractionsOn(id);
       bodies=bodies.filter(x=>x!==b); clearSelection(); saveState(); };
+  } else if(selConstraint && isLine(selConstraint)){
+    // ---- the LINE panel (constraints.js §06.2f) ----
+    // Its joints in station order, the distance between each consecutive pair that is
+    // HELD, and the one number it owns: the compliance.
+    const c=selConstraint;
+    // The PLACEMENT, so the panel describes the line the canvas is drawing -- one
+    // whose joints have lost their bodies included (constraints.js §06.2f).
+    const f=linePlacement(c);
+    const J=f?f.J:[];
+    const bar=lineIsBar(c);
+    // Every vertex the line's extent covers, in station order -- its joints, and the
+    // ones merely lying on it, which are a tick away from being joints (§14.2c). P
+    // sits at the highest station and Q at the lowest, which is the order lineFrame
+    // already sorts its own joints into.
+    const onLine = verticesInExtent(c.id)
+      .map(v=>({v, s:incidenceStation(v,c)}))
+      .sort((a,b2)=>b2.s-a.s);
+    const jointRows = onLine.map(K=>incidenceRow(K.v, c.id, {selVertex:true})).join('');
+    // One row per stretch between consecutive held joints -- editable, and editing one
+    // shifts the stations after it, which is what changing a bar's length means.
+    const segs = lineSegments(c);
+    const segRows = segs.map((sg,k)=>
+      numRow(`${sg.from.v.label}&ndash;${sg.to.v.label}`, `L_seg${k}`, sg.len.toFixed(3), {step:0.05, min:0.001})).join('');
+    p.innerHTML=`
+      <h3>Line ${c.label}</h3><p class="sub">${bar?'a bar &mdash; every joint held':'a rail &mdash; something slides on it'}</p>
+      <div class="card"><div class="cardhead">label</div>
+        <div class="field"><span class="lab">name</span><input class="num" id="L_label" type="text" value="${c.label}"></div>
+      </div>
+      <div class="card"><div class="cardhead">reaction</div>
+        <div class="field force"><span class="lab">|force|</span><span class="val" id="f_rf">--</span></div>
+        <div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>
+      </div>
+      <div class="card"><div class="cardhead">vertices along the line</div>
+        ${jointRows || '<p class="muted">none</p>'}
+        <p class="muted" style="margin:8px 0 0">Every vertex on this line, joined to it or not. A joint that <em>slides</em> may travel along it; one that is held keeps its station, and the distances below are what that comes to. A vertex with nothing else holding it is neither: the line simply carries it at its station, and it asks nothing of the bar. Editing a station moves that vertex and asks the assembly to follow.</p>
+        ${J.filter(K=>!K.e.slide).length===1 ? '<p class="muted" style="margin:8px 0 0">Only one joint here is held, so nothing is: a station is a distance from another held joint, and the first one is what the rest are measured from. Hold a second joint &mdash; one of the ones placing the line, if you want this one pinned in the world &mdash; and the distance between them becomes real.</p>' : ''}
+      </div>
+      ${segs.length?`<div class="card"><div class="cardhead">held distances</div>${segRows}</div>`:''}
+      <div class="card"><div class="cardhead">elasticity</div>
+        ${numRow('compliance 1/k', 'L_soft', String(c.soft), {step:0.001, min:0})}
+        <label class="chk"><input type="checkbox" id="L_posable" ${c.posable?'checked':''}> posable</label>
+        <p class="muted" style="margin:8px 0 0">Zero &mdash; the default &mdash; makes the held distances a <em>constraint</em>, solved exactly. Above zero each held stretch becomes a spring of stiffness 1/soft instead, and the line still holds everything on it in line. <b>Posable</b> changes nothing about the running line: while you drag a body it touches, with the sim paused, it is released to a bare rail and is rigid again at whatever pose the drag leaves.</p>
+      </div>
+      ${c.mesh&&c.mesh.length?`<div class="card"><div class="cardhead">meshing disks</div>${
+        c.mesh.map(id=>`<div class="field"><span class="lab">body ${id}</span><span class="val">rolls on the line</span></div>`).join('')}
+        <p class="muted" style="margin:8px 0 0">Rolling contact with perfect traction wherever the disk sits, at a pitch radius that is its own live distance from the line. Nonholonomic.</p></div>`:''}
+      <button class="del" id="f_del">Delete line</button>`;
+    wireIncidenceRows();
+    document.getElementById('L_label').onchange=ev=>{
+      const want=String(ev.target.value).trim();
+      const taken=constraints.some(x=>x!==c && x.label===want) || bodies.some(b2=>String(b2.label)===want);
+      if(/^[A-Za-z_][A-Za-z0-9_]*$|^[1-9][0-9]*$/.test(want) && !taken) c.label=want;
+      renderInspector(); saveState(); };
+    document.getElementById('L_soft').onchange=()=>{ const v=numVal('L_soft',x=>x>=0);
+      if(!isFinite(v)) return; c.soft=v; renderInspector(); saveState(); };
+    document.getElementById('L_posable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
+    segs.forEach((sg,k)=>{
+      document.getElementById(`L_seg${k}`).onchange=()=>{
+        const v=numVal(`L_seg${k}`,x=>x>0.001); if(!isFinite(v)) return;
+        // Editing one stretch shifts every station past it, so the rest of the bar
+        // keeps the distances it had -- the stations are relative, and only this one
+        // gap was asked to change.
+        const held=lineFrame(c).J.filter(K=>!K.e.slide);
+        const at=held.indexOf(sg.to);
+        const sign=Math.sign((sg.to.e.s||0)-(sg.from.e.s||0)) || 1;
+        const delta=sign*v - ((sg.to.e.s||0)-(sg.from.e.s||0));
+        for(let i=at;i<held.length;i++) held[i].e.s=(held[i].e.s||0)+delta;
+        projectPositions(8); renderInspector(); saveState(); };
+    });
+    // Deleting the line takes its joints' INCIDENCES and nothing else: the vertices
+    // it ran through stay where they are, each still whatever else it was joined to.
+    document.getElementById('f_del').onclick=()=>{
+      deleteConstraint(c); clearSelection(); saveState(); };
   } else if(selConstraint){
     const c=selConstraint;
-    const isRod=c.type==='rod', isSlot=c.type==='slot';
-    const title = isSlot ? ((c.prismaticA&&c.prismaticB)?'Prismatic slider':'Slot · rail')
-                : ({pin:'Pin · hinge',rod:'Rigid rod',
-                    belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)',rack:'Rack and pinion'})[c.type];
-    const isBelt=c.type==='belt', isCvt=c.type==='cvt', isRack=c.type==='rack';
-    const showTorque = ((isRod||isRack) && (c.weldA||c.weldB)) || (isSlot && (c.prismaticA||c.prismaticB));
+    const title = ({belt:'Belt',knife:'Knife-edge wheel',cvt:'Variable gear (CVT)'})[c.type];
+    const isBelt=c.type==='belt', isCvt=c.type==='cvt';
     const forceLabel = isBelt?'tension':'|force|';
     let extra='';
     if(isBelt) extra=`<label class="chk"><input type="checkbox" id="f_cross" ${c.sense<0?'checked':''}> crossed belt</label>
@@ -319,32 +629,17 @@ function renderInspector(){
         ${numRow('wrap rB', 'f_rB', c.rB.toFixed(3), {step:0.02, min:0.02})}
         <div class="field"><span class="lab">ratio</span><span class="val" id="f_bratio">${(c.rB/c.rA).toFixed(2)}</span></div>`;
     if(isCvt) extra=`<div class="field"><span class="lab">ratio (d-rA) / rA</span><span class="val" id="f_ratio">--</span></div>`;
-    if(isRack) extra=`<div class="field"><span class="lab">pitch radius</span><span class="val" id="f_pitchR">--</span></div>
-        <label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> pin A welded${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> pin B welded${c.b.id==null?' (background)':''}</label>`;
-    if(isRod) extra=`<label class="chk"><input type="checkbox" id="f_weldA" ${c.weldA?'checked':''}> end A welded${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_weldB" ${c.weldB?'checked':''}> end B welded${c.b.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_posable" ${c.posable?'checked':''}> posable</label>`;
-    if(isSlot) extra=`<label class="chk"><input type="checkbox" id="f_lockA" ${c.prismaticA?'checked':''}> end A prismatic${c.a.id==null?' (background)':''}</label>
-        <label class="chk"><input type="checkbox" id="f_lockB" ${c.prismaticB?'checked':''}> end B prismatic${c.b.id==null?' (background)':''}</label>`;
     const note = c.type==='knife' ? 'Nonholonomic: the contact point cannot move sideways, but slides along its heading and pivots freely.'
                : isCvt ? 'Nonholonomic: contact rides A\u2019s rim; the ratio changes as B moves nearer or farther.'
-               : isRack ? 'Nonholonomic: an infinite, massless rack line named by its two pins \u2014 pin A locates it, pin B aims it, and drag either to move the rack. Put both on one body and the rack rides that body\u2019s frame. A welded pin also locks its body\u2019s rotation to the rack\u2019s heading; tap a pin on the canvas to toggle it. Each pinion meshes wherever it sits, at a pitch radius that is its own live distance from the rack line.'
-               : isRod ? 'A welded end locks that side\u2019s rotation to the rod; tap an end on the canvas to toggle it, or use the checkboxes here. <b>Posable</b> changes nothing about the running rod: it says that while you drag a body this rod is jointed to, with the sim paused, it is released to a bare rail \u2014 length free, welds off, everything it joins pinned and free to slide along it \u2014 and is rigid again at whatever length and angles the pose leaves it at. Reaction is the Lagrange multiplier lambda / h -- run the sim to read it.'
-               : isSlot ? 'Two pins is a purely visual guide \u2014 no physical effect. A prismatic end locks its rotation to the rail; once both ends are prismatic the rail also confines position (a rigid prismatic joint). Tap an end on the canvas to toggle it, or use the checkboxes here.'
                : 'Reaction is the Lagrange multiplier lambda / h -- the force this joint carries. Run the sim to read it.';
     p.innerHTML=`
       <h3>${title}</h3><p class="sub">${c.type} constraint</p>
       <div class="card"><div class="cardhead">reaction</div>
         <div class="field force"><span class="lab">${forceLabel}</span><span class="val" id="f_rf">--</span></div>
-        ${showTorque?'<div class="field force"><span class="lab">torque</span><span class="val" id="f_rt">--</span></div>':''}
-        ${isRod?`${numRow('length', 'f_len', c.len.toFixed(3), {step:0.05, min:0.01})}`:''}
         ${extra}
         <p class="muted" style="margin:8px 0 0">${note}</p>
       </div>
-      ${conPointsCard(c)}
       <button class="del" id="f_del">Delete constraint</button>`;
-    bindConPointsCard(c);
     if(isBelt){
       // recapturing restPhase against the *current* body angles after a wrap-radius
       // edit is the same trick the crossed-belt toggle already uses just below --
@@ -359,27 +654,7 @@ function renderInspector(){
       document.getElementById('f_rA').onchange=commitWrap;
       document.getElementById('f_rB').onchange=commitWrap;
     }
-    if(isRack){
-      document.getElementById('f_weldA').onchange=ev=>{ setRackWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_weldB').onchange=ev=>{ setRackWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
-    }
-    if(isRod){
-      // Nothing to capture: `posable` says what the rod does while it is DRAGGED
-      // (constraints.js §06.2d), not what it holds, so unlike a weld the toggle has
-      // no rest angle to re-read and can never snap the geometry.
-      document.getElementById('f_posable').onchange=ev=>{ c.posable=ev.target.checked; renderInspector(); saveState(); };
-      document.getElementById('f_weldA').onchange=ev=>{ setRodWeld(c,'A',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_weldB').onchange=ev=>{ setRodWeld(c,'B',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_len').onchange=()=>{ const v=numVal('f_len',x=>x>0.01);
-        if(!isFinite(v)) return;
-        c.len=v; projectPositions(8);
-        renderInspector(); saveState(); };
-    }
-    if(isSlot){
-      document.getElementById('f_lockA').onchange=ev=>{ setSlotLock(c,'A',ev.target.checked); renderInspector(); saveState(); };
-      document.getElementById('f_lockB').onchange=ev=>{ setSlotLock(c,'B',ev.target.checked); renderInspector(); saveState(); };
-    }
-    document.getElementById('f_del').onclick=()=>{ constraints=constraints.filter(x=>x!==c); clearSelection(); saveState(); };
+    document.getElementById('f_del').onclick=()=>{ deleteConstraint(c); clearSelection(); saveState(); };
   } else if(selInteraction){
     const it=selInteraction, isHeat=it.type==='heat';
     const far = it.vessel.id==null ? 'background' : ('vessel '+it.vessel.id);
@@ -425,27 +700,6 @@ function renderInspector(){
       cb.Ltot=v;
       renderInspector(); saveState(); };
     document.getElementById('cb_del').onclick=()=>{ cables=cables.filter(x=>x!==cb); clearSelection(); saveState(); };
-  } else if(selSpring){
-    const sp=selSpring;
-    p.innerHTML=`
-      <h3>Linear spring</h3><p class="sub">force element · F = k(restLen-L)</p>
-      <div class="card"><div class="cardhead">state</div>
-        <div class="field force"><span class="lab">|force|</span><span class="val" id="sp_F">--</span></div>
-        <div class="field"><span class="lab">length</span><span class="val" id="sp_L">--</span></div>
-        ${numRow('rest length', 'sp_rest', sp.restLen.toFixed(3), {step:0.05, min:0.05})}
-        ${numRow('spring constant k', 'sp_k', sp.k.toFixed(2), {step:0.5, min:0})}
-        <p class="muted" style="margin:8px 0 0">Hookean force element, not a rigid constraint -- it stores and releases energy rather than being solved exactly. Drag the dashed control point (visible while selected) to set rest length, or type it here.</p>
-      </div>
-      <button class="del" id="sp_del">Delete spring</button>`;
-    document.getElementById('sp_rest').onchange=()=>{ const v=numVal('sp_rest',x=>x>0.05);
-      if(!isFinite(v)) return;
-      sp.restLen=v;
-      renderInspector(); saveState(); };
-    document.getElementById('sp_k').onchange=()=>{ const v=numVal('sp_k',x=>x>=0);
-      if(!isFinite(v)) return;
-      sp.k=v;
-      renderInspector(); saveState(); };
-    document.getElementById('sp_del').onclick=()=>{ springs=springs.filter(x=>x!==sp); clearSelection(); saveState(); };
   } else if(selRotSpring){
     const rs=selRotSpring;
     p.innerHTML=`
@@ -481,6 +735,7 @@ function renderInspector(){
           <button data-ex="integrator">Wheel integrator (CVT)</button>
           <button data-ex="rack">Rack and pinion</button>
           <button data-ex="cable">Cable ratchet</button>
+          <button data-ex="hinge">Ground pin and weld (vertices)</button>
           <button data-ex="gasspring">Gas spring (vessel on ground)</button>
           <button data-ex="spinvessel">Spinning vessel (free)</button>
           <button data-ex="heatpair">Heat exchange (two vessels)</button>
@@ -553,9 +808,7 @@ function updateInspectorLive(){
     if(c.type==='cvt'){ const A=bodies[bodyIndex(c.a.id)],B=bodies[bodyIndex(c.b.id)];
       const d=Math.hypot(B.x-A.x,B.y-A.y); const er=document.getElementById('f_ratio');
       if(er) er.textContent=((d-A.r)/A.r).toFixed(2); }
-    if(c.type==='rack'){ const er=document.getElementById('f_pitchR');
-      if(er){ const pt=rackFirstPinion(c); const g=pt?rackPitch(rackFrame(c),pt):null;
-        er.textContent = g ? Math.abs(g.rho).toFixed(3) : '--'; } } }
+  }
   if(selCable){ const cb=selCable; const f=cableFrame(cb);
     const eT=document.getElementById('cb_T');
     if(eT){ eT.textContent=(cb._lam&&cb._lam.length?Math.hypot(...cb._lam)/sim.h:0).toFixed(2);
@@ -563,13 +816,6 @@ function updateInspectorLive(){
       document.getElementById('cb_Lcur').textContent=cableCurrentLength(cb,f).toFixed(3);
       document.getElementById('cb_L').textContent=(f?f.paidLength:(cb._Lallow!=null?cb._Lallow:0)).toFixed(3);
       document.getElementById('cb_W').textContent=(f?f.windAngle/(2*Math.PI):0).toFixed(2); } }
-  if(selSpring){ const sp=selSpring;
-    const [wax,way]=epWorld(sp.a), [wbx,wby]=epWorld(sp.b);
-    const L=Math.hypot(wax-wbx,way-wby);
-    const eF=document.getElementById('sp_F');
-    if(eF){ eF.textContent=Math.abs(sp.k*(sp.restLen-L)).toFixed(3);
-      document.getElementById('sp_L').textContent=L.toFixed(3);
-      setLive('sp_rest',sp.restLen.toFixed(3)); setLive('sp_k',sp.k.toFixed(2)); } }
   if(selInteraction){ const it=selInteraction;
     const ea=document.getElementById('i_area');
     if(ea){

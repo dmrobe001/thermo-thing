@@ -22,16 +22,36 @@ These assumptions are what make the project tractable at full honesty. The rest 
 
 Open `index.html` in a browser. Use the tool rail on the left to place bodies and constraints; load a prebuilt example from the inspector panel on the right to see a working machine immediately.
 
-Nothing in a scene is fixed by a checkbox. A body is held still by a rod welded at both ends to fixed ground; a vessel's length is held by a rod between two of its own caps. The engine still freezes those coordinates internally -- that is what makes a fixed body a wall that islands split at -- but it *derives* which ones from the constraints you placed, so deleting the rod frees the body. See `SCENE.md` §S.8.
+Nothing in a scene is fixed by a checkbox. A body is held still by a line welded at both of its held joints between it and fixed ground; a vessel's length is held by a line between two of its own caps. The engine still freezes those coordinates internally -- that is what makes a fixed body a wall that islands split at -- but it *derives* which ones from the constraints you placed, so deleting the line frees the body. See `SCENE.md` §S.8.
 
-Bodies can be selected in bulk: pick the **lasso** (l), draw a loop around the part of
-the bench you want, and a box appears around everything caught. Drag inside it to move
-the selection, a corner to scale it, the stem above it to turn it -- every selected body
-turns by the box's own change in angle, and the couplings between them come along and
-are re-read where the transform changed their geometry. A selection can be copied
-(Ctrl/Cmd-C), placed again (Ctrl/Cmd-V), or kept in the **widget stash** as a named part
-to drop into any later bench. A widget is just a scene fragment, so a scene string
-pasted into the stash card becomes a part too. See `SCENE.md` §S.9.
+Points where things meet are **vertices**, and they are objects in their own right.
+Pick the vertex tool (3) and tap a body to plant one; tap the same spot again and the
+body underneath joins it, which is how a hinge is made. Select a vertex and the panel
+lists every body it touches, with where it sits in that body's frame and its ticks --
+**joined**, meaning the body is held to the point, and **welded**, meaning its angle
+is held to the vertex's frame as well, so everything welded there turns as one piece.
+Select a body and you get the same relation from the other side: every vertex on it.
+Joining a vertex to the background is a ground pin -- the point held, the rotation free.
+
+Rods, rails, racks and springs are all one object: a **line**. Pick the line tool (4)
+and tap vertices in turn; the first two place the line and every tap after joins
+another vertex to it, bringing it onto the line if it is not there already. Every
+joint starts out **sliding**, so a fresh line is a drawn guide that asks the solver
+for nothing -- untick *slide* on two joints and the distance between them is held, and
+that is a bar. A line with a slider on it is a rail, drawn across the viewport; one
+with nothing sliding is a bar, drawn between its ends. Give it a **compliance** and
+the held distances become springs instead of constraints. The panel lists its joints
+in order along it, and the distance between each consecutive held pair.
+
+Vertices, bodies and lines all carry editable **labels**, drawn beside them -- letters
+for vertices, numbers for bodies and lines.
+
+A body, a vertex and a line are objects of **equal standing**, and a constraint
+between them says something *about* them rather than holding them in existence. So
+deleting one takes the relations that named it and nothing else: delete a disk and the
+vertex at its centre stays exactly where it was, and the line running through it stays
+too, holding nothing until you say otherwise. Nothing you did not select disappears.
+See `VERTEX.md`.
 
 Numbers can be typed as arithmetic, in the inspector fields and in a scene file
 alike: `2*pi/3`, `0.4*sqrt(2)`, `bg.P/2`, `b3.x+b3.r` -- the constants, the usual
@@ -46,7 +66,7 @@ Any bench can be written out as a **scene file** -- a plain-text listing of ever
 
 **Key controls:** Space -- play/pause · R -- reset · wheel -- zoom · middle-drag or
 Alt-drag -- pan · Ctrl/Cmd-C, Ctrl/Cmd-V -- copy and place a selection · Delete --
-remove it · keys 1-9, b/f/g/h/k/l/t/v/c/q -- select tools.
+remove it · keys 1-9, b/f/g/h/k/l/v/c/q -- select tools (3 places vertices, 4 draws lines).
 
 ## Project layout
 
@@ -59,5 +79,6 @@ DEVELOPMENT.md          physics engine and constraint library design
 CABLE.md                design note for the winding-cable constraint (slots alongside DEVELOPMENT.md)
 VESSEL.md               design note for the gas vessel (slots alongside DEVELOPMENT.md)
 SCENE.md                design note for the scene file format and the constructible set
+VERTEX.md               design note for the vertex/line scene model
 ROADMAP.md              reference machines, scope boundaries, and implementation status
 ```

@@ -3,13 +3,14 @@
 Design of the gas vessel: a body of fixed bore and variable length whose interior
 holds a gas obeying the ideal equation of state. This note is written to slot
 alongside `DEVELOPMENT.md`; it references that document's section numbers (§3.2 the
-KKT solve, §3.3 the velocity-linear constraint class, §4.1 rod/slot rows, §6.1
-springs as force elements, §7 instrumentation) rather than repeating them.
+KKT solve, §3.3 the velocity-linear constraint class, §4.1/§4.1b the vertex and the
+line, §6.1 springs as force elements, §7 instrumentation) rather than repeating
+them.
 
 > **Status (as built):** Implemented -- §V.1 through §V.10, plus the length-locked
 > reservoir of §V.8. Code: `geometry.js` §05.2d (the vessel, its inertia and the gas
 > state), §05.2c (material endpoint offsets), §05.2e (contact area);
-> `constraints.js` §06.1 (`epFrame`'s length column, and the rod/slot rows rebuilt on
+> `constraints.js` §06.1 (`epFrame`'s length column, and the constraint rows built on
 > it); `physics.js` §08.0b (heat and mass exchange) and §08.1b (the gas force), plus
 > §08.1/§08.3/§08.4/§08.6; `render.js` §11.3 (`drawVessel`) and §11.4c
 > (interactions); `tools.js` §13.1/§13.5 (placement, corner resize, the two
@@ -211,8 +212,8 @@ velCols(dx,dy) = [[ i, dx, dy, dx*(-ry)+dy*rx, f*(dx*ux + dy*uy) ]]
 
 The fifth entry is the new `len` column; everything left of it is the ordinary rigid
 body form. Because `epFrame` (code §06.1) already hands `rowsFor` an opaque `velCols`
-closure, **pin, rod, and spring work on vessel endpoints with no changes to
-`rowsFor` at all**.
+closure, **a vertex and a line work on vessel endpoints with no changes to `rowsFor`
+at all** -- as did the pin, rod and spring they replaced, and for the same reason.
 
 This dissolves the "weird cases" rather than special-casing them, because the
 `f`-dependence does the reasoning automatically:
@@ -227,8 +228,8 @@ This dissolves the "weird cases" rather than special-casing them, because the
 One cap welded to the ground and the other free is not a puzzle: the centre simply
 translates as `len` changes. No degree of freedom is lost by having one length
 coordinate instead of two cap positions -- the map `(c_axial, len) <-> (cap1, cap2)`
-is a bijection. Two caps welded to each other is a rod between `f = -1/2` and
-`f = +1/2`, which constrains `len` directly, and the reaction it carries is readable
+is a bijection. Two caps held to each other is a line whose two held joints sit at
+`f = -1/2` and `f = +1/2`, which constrains `len` directly, and the reaction it carries is readable
 through the existing `reactionOf` instrumentation (code §09.3) -- the force in the
 vessel's own walls, for free.
 
@@ -273,11 +274,11 @@ Two consequences worth stating plainly:
 
 * **Omitting that term breaks conservation.** Treating `len` as an ordinary body
   coordinate with a constant mass and no `omega^2` coupling is the failure mode to
-  avoid; it is also the one that a two-bodies-and-a-prismatic implementation gets
+  avoid; it is also the one that a two-bodies-and-a-sliding-joint implementation gets
   right only by accident, through whatever inertia it happened to assign the caps.
 * **A fast spin genuinely flings a soft vessel out.** In the run above the vessel
   breathed between `len = 0.99` and `len = 7.5`. That is real physics (a spinning
-  elastic rod stretches), not instability, and it is the reason to expose a maximum
+  elastic member stretches), not instability, and it is the reason to expose a maximum
   length, not a reason to damp anything.
 
 The `lendot` mode carries **zero net linear momentum** (`integral f dm = 0`) and
@@ -360,7 +361,7 @@ of each scene rather than the large constant `U + P_bg*V` offset:
 |---|---|
 | gas spring (vessel welded to the ground by one cap) | worst `\|dE\|` = 2.1e-9 J, 7.6e-10 % of peak KE; peak-to-peak length swing identical to 6 significant figures across four successive windows -- no numerical damping |
 | free spinning vessel | worst `\|dE\|` = 5.9e-2 J (1.9e-3 % of peak KE) and **not secular** -- the excursion is the breathing turning point that `ENERGY_BANK` repays, with end-of-window drift 1e-10 J; angular momentum drift 5e-15 |
-| vessel driving a disk through a rod, or loaded by a spring | worst `\|dE\|` under 1e-9 J |
+| vessel driving a disk through a line, or loaded by a compliant one | worst `\|dE\|` under 1e-9 J |
 
 ## V.8 Per-vessel state
 
@@ -399,16 +400,16 @@ sealed -- mass and temperature carry over, so the pressure follows the new volum
 sets or a scene file carries. They are read off the constraints present, every
 substep (`constraints.js` §06.2b `refreshFrozen`), and they are independent:
 
-- `static` (the pose) is set by a rod welded at both ends between fixed ground and
-  the vessel's **mid-plane**, `f = 0`. Only that plane pins the pose. A vessel's
+- `static` (the pose) is set by a **line** welded at both of its two held joints,
+  between fixed ground and the vessel's **mid-plane**, `f = 0`. Only that plane pins the pose. A vessel's
   fourth coordinate moves its own material, so a point at fraction `f` sits `f*len`
   from the centre (§V.5): weld a *cap* and you have fixed the cap, not the body --
   the centre still rides the length. That is precisely the difference between the
   gas spring (welded at `f = -1/2`, and free to move as it breathes) and the heat
   pair's working vessel (welded at `f = 0`, pose fixed, length free).
-- `lenLock` (the length) is set by a rod with **both ends on this same vessel** at
-  different material fractions -- a strut inside it. Its pose columns cancel exactly,
-  so what such a rod holds is the length and nothing else. A **reservoir** is that:
+- `lenLock` (the length) is set by a **line** with **both held joints on this same
+  vessel** at different material fractions -- a strut inside it. Its pose columns
+  cancel exactly, so what such a line holds is the length and nothing else. A **reservoir** is that:
   a vessel with a strut in it and a large gas mass.
 
 A fixed pose therefore says nothing about the length, and vice versa. (`refreshVessel`
@@ -432,7 +433,7 @@ positionally are:
 |---|---|
 | `geometry.js` §05.2 `invMdiag` | return a 4th entry `invMu` |
 | `constraints.js` §06.1 `mergeCols` | carry a 4th component |
-| `physics.js` §08.1 spring force apply | accumulate into a new `FL[]` |
+| `physics.js` §08.1 force-element apply | accumulate into a new `FL[]` |
 | `physics.js` §08.2 `rowJv` | add the `jlen*vlen` term |
 | `physics.js` §08.3 `maps` / `Jv` / `K` / impulse apply | 4 sites, one extra term each |
 | `physics.js` §08.4 position integration | trapezoidal `len` update per §V.7 |
@@ -444,7 +445,7 @@ positionally are:
 That is roughly a dozen lines of arithmetic plus the vessel's own geometry, force,
 render, pick, and inspector code -- and it is what the implementation actually cost.
 Compare the alternative the spec floats -- two cap
-bodies sharing a prismatic joint with a springlike force pair -- which needs six
+bodies sharing a sliding joint with a springlike force pair -- which needs six
 coordinates plus two constraint rows to cancel the two spurious ones, needs the cap
 bodies hidden from picking and the inspector (the stripped implementation's
 `synthetic:true`), needs the gas inertia hand-assigned to a cap where §V.3 shows the
@@ -454,10 +455,10 @@ The four-coordinate body is both less code and more correct.
 
 One piece of genuinely new row algebra was required, as anticipated:
 `twoPointFrame` and `endpointAngleLockRow` built their columns by hand rather than
-through `velCols`, so a rod weld or slot prismatic on a vessel endpoint would have
-missed its length column. Rather than special-case it, all three of those row
-builders (the rod distance row, the endpoint angle lock, and the slot's lateral lock)
-were **rebuilt on `epFrame`'s closures**, which reproduces the previous hand-written
+through `velCols`, so a weld or a lateral lock on a vessel endpoint would have missed
+its length column. Rather than special-case it, all three of those row builders (the
+axial distance row, the endpoint angle lock, and the point-on-line row) were
+**rebuilt on `epFrame`'s closures**, which reproduces the previous hand-written
 columns exactly for two plain bodies and gets the vessel case right for free. Every
 bundled example still conserves energy to machine precision after that refactor,
 which is the check that it was exact and not merely close.

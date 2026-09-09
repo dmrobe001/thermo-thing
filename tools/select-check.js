@@ -50,6 +50,18 @@ for(const f of ['js/state.js','js/expr.js','js/geometry.js','js/constraints.js',
                 'js/transport.js'])
   vm.runInContext(fs.readFileSync(path.join(ROOT,f),'utf8'), ctx, {filename:f});
 const run = s => vm.runInContext(s, ctx);
+// A line through the given anchors, welds applied once every joint exists.
+run(`var bar = (specs)=>{
+  const L=makeLine(); constraints.push(L);
+  const vs=[];
+  for(const [ep,o] of specs){
+    const v=makeVertex(null); makeVertexOn(v,ep,{join:true}); constraints.push(v);
+    makeVertexOn(v,{id:L.id},{join:true, slide:!!o.slide}); vs.push([v,o]); }
+  for(const [v,o] of vs){ if(!o.weld) continue;
+    for(const e of vertexOns(v)) setVertexWeld(v,e,true); }
+  refreshFrozen(); return L; };
+// The distance a bar is holding, for the checks that ask whether a transform kept it.
+var barSpan = (L)=>{ const f=lineFrame(L); return Math.hypot(f.wax-f.wbx, f.way-f.wby); };`)
 
 let pass=0, fail=0;
 const ok=(name,good,detail)=>{ good?pass++:fail++;
@@ -65,11 +77,13 @@ run(`sim.running=false;
 var BENCH = () => { clearScene(); sim.gravity=false; cam.x=0; cam.y=2; cam.scale=64;
   const b1=makeBody(0,2,0.3), b2=makeBody(1,2,0.3), b3=makeBody(2.4,2,0.4), b4=makeBody(5,2,0.3);
   bodies.push(b1,b2,b3,b4);
-  constraints.push(makeRodCon({id:null,off:[0,3]}, {id:b1.id,off:[0,0]}, true, true));
-  constraints.push(makeRodCon({id:b1.id,off:[0,0]}, {id:b2.id,off:[0.1,0]}, false, true));
+  bar([[{id:null,off:[0,3]},{slide:false,weld:true}],[{id:b1.id,off:[0,0]},{slide:false,weld:true}]]);
+  bar([[{id:b1.id,off:[0,0]},{slide:false}],[{id:b2.id,off:[0.1,0]},{slide:false,weld:true}]]);
   constraints.push(makeBeltCon(b2.id, b3.id, 1));
-  constraints.push(makeRodCon({id:b3.id,off:[0,0]}, {id:b4.id,off:[0,0]}, false, false));
-  springs.push(makeSpringCon({id:b2.id,off:[0,0]}, {id:null,off:[1,3.2]}));
+  bar([[{id:b3.id,off:[0,0]},{slide:false}],[{id:b4.id,off:[0,0]},{slide:false}]]);
+  // A COMPLIANT bar is what the linear spring became (constraints.js §06.2f), and it
+  // is anchored to the background, so it is the member that tests that rule.
+  bar([[{id:b2.id,off:[0,0]},{slide:false}],[{id:null,off:[1,3.2]},{slide:false}]]).soft=1/30;
   rotSprings.push(makeRotSpringCon(null, b3.id));
   interactions.push(makeInteraction('heat', b1.id, null));
   refreshFrozen(); saveState(true);
@@ -81,6 +95,10 @@ var maxC = () => Math.max(0, ...constraints.map(c=>conMaxC(c)));
 var memberMaxC = () => Math.max(0, ...selGroup.m.constraints.map(c=>conMaxC(c)));
 var rsTorque = rs => rs.k*(rs.restAngle - rotSpringRelAngle(rs));
 var beltC = c => (c.rA*bodies[bodyIndex(c.a.id)].th - c.sense*c.rB*bodies[bodyIndex(c.b.id)].th) - c.restPhase;
+// The rest angle of the one welded joint in the bench: what a turn must leave alone
+// (its value does not change) and a scale must re-read.
+var weldRest = () => { for(const c of constraints) if(isVertex(c))
+  for(const e of vertexOns(c)) if(e.weld) return e.restAng; return 0; };
 `);
 
 console.log('\n1. the membership rule');
@@ -88,14 +106,20 @@ console.log('\n1. the membership rule');
   run('WIDGET()');
   const m = run(`(()=>{const m=selGroup.m; return {b:m.bodies.map(x=>x.id),
     cons:m.constraints.map(c=>c.type+':'+conEndpoints(c).map(e=>e.id===null?'bg':e.id).join('-')),
-    springs:m.springs.length, rot:m.rotSprings.length, it:m.interactions.length};})()`);
+    rot:m.rotSprings.length, it:m.interactions.length};})()`);
   ok('the three picked bodies are the group', JSON.stringify(m.b)==='[1,2,3]', JSON.stringify(m.b));
-  ok('the grounding rod comes along (background end and all)',
-     m.cons.includes('rod:bg-1'), m.cons.join(' | '));
-  ok('the rod between two selected bodies comes along', m.cons.includes('rod:1-2'), m.cons.join(' | '));
+  // A LINE names its bodies through the vertices on it (constraints.js §06.2f
+  // conEndpoints), and the VERTICES come along on the same rule, so a bar and both
+  // its joints travel or none of them does.
+  ok('the grounding bar comes along (background joint and all)',
+     m.cons.includes('line:bg-1'), m.cons.join(' | '));
+  ok('the bar between two selected bodies comes along', m.cons.includes('line:1-2'), m.cons.join(' | '));
   ok('the belt between two selected bodies comes along', m.cons.includes('belt:2-3'), m.cons.join(' | '));
-  ok('the rod reaching body 4 does NOT', !m.cons.includes('rod:3-4'), m.cons.join(' | '));
-  ok('the background-anchored spring comes along', m.springs===1, String(m.springs));
+  ok('the bar reaching body 4 does NOT', !m.cons.includes('line:3-4'), m.cons.join(' | '));
+  ok('the background-anchored compliant bar comes along',
+     m.cons.includes('line:2-bg'), m.cons.join(' | '));
+  ok('and every vertex on a member bar comes with it',
+     m.cons.filter(x=>x.startsWith('vertex:')).length>=4, m.cons.join(' | '));
   ok('the background-referenced rotational spring comes along', m.rot===1, String(m.rot));
   ok('the background heat interaction comes along', m.it===1, String(m.it));
   const solo = run(`(()=>{ selectGroup([3]); const m=selGroup.m;
@@ -127,13 +151,13 @@ console.log('\n2. the lasso');
 console.log('\n3. a rigid transform: the box carries the bodies');
 {
   run('WIDGET()');
-  const before = run(`(()=>({ pose:poseOf(), c:maxC(), belt:beltC(constraints[2]),
-     tau:rsTorque(rotSprings[0]), rest:springs[0].restLen, rodLen:constraints[1].len,
-     ang:constraints[1].restAngB }))()`);
+  const before = run(`(()=>({ pose:poseOf(), c:maxC(), belt:beltC(constraints.find(c=>c.type==='belt')),
+     tau:rsTorque(rotSprings[0]), barLen:barSpan(constraints.filter(isLine)[1]),
+     ang:weldRest() }))()`);
   const DTH=0.9;
   run(`groupSetFrame(selGroup.cx+0.7, selGroup.cy-0.4, ${DTH}, 1)`);
-  const after = run(`(()=>({ pose:poseOf(), c:memberMaxC(), belt:beltC(constraints[2]),
-     tau:rsTorque(rotSprings[0]), rest:springs[0].restLen, rodLen:constraints[1].len }))()`);
+  const after = run(`(()=>({ pose:poseOf(), c:memberMaxC(), belt:beltC(constraints.find(c=>c.type==='belt')),
+     tau:rsTorque(rotSprings[0]), barLen:barSpan(constraints.filter(isLine)[1]) }))()`);
   const dth = after.pose.filter(p=>p[0]<4).map((p,i)=>p[3]-before.pose[i][3]);
   ok('every selected body turned by the box\'s own change in angle',
      dth.every(d=>near(d,DTH)), JSON.stringify(dth));
@@ -150,16 +174,14 @@ console.log('\n3. a rigid transform: the box carries the bodies');
      near(after.belt, before.belt, 1e-12), `${before.belt} -> ${after.belt}`);
   ok('the background rotational spring carries the same torque',
      near(after.tau, before.tau, 1e-12), `${before.tau} -> ${after.tau}`);
-  ok('the spring\'s rest length is untouched by a rigid move',
-     near(after.rest, before.rest, 1e-15), `${before.rest} -> ${after.rest}`);
-  ok('the rod\'s captured length is untouched by a rigid move',
-     near(after.rodLen, before.rodLen, 1e-12), `${before.rodLen} -> ${after.rodLen}`);
+  ok('the bar\'s held distance is untouched by a rigid move',
+     near(after.barLen, before.barLen, 1e-12), `${before.barLen} -> ${after.barLen}`);
 }
 
 console.log('\n4. what the box does not carry');
 {
-  const cut = run(`conMaxC(constraints[3])`);
-  ok('the rod reaching outside the selection now reads as violated', cut>0.1, String(cut));
+  const cut = run(`Math.max(...constraints.filter(c=>!selGroup.m.constraints.includes(c)).map(conMaxC))`);
+  ok('the bar reaching outside the selection now reads as violated', cut>0.1, String(cut));
   ok('...so the reset baseline was not taken from that pose', run('constraintsSatisfied()')===false, 'satisfied');
 }
 
@@ -167,11 +189,14 @@ console.log('\n5. scaling spreads the parts without resizing them');
 {
   run('WIDGET()');
   const S=1.7;
-  const before = run(`(()=>({ pose:poseOf(), r:bodies.map(b=>b.r), rodLen:constraints[1].len,
-     rest:springs[0].restLen }))()`);
+  const before = run(`(()=>({ pose:poseOf(), r:bodies.map(b=>b.r),
+     barLen:barSpan(constraints.filter(isLine)[1]),
+     softRest:Math.abs(lineJoints(constraints.filter(isLine)[3]).map(K=>K.e.s||0).reduce((a,b)=>a-b)) }))()`);
   run(`groupSetFrame(selGroup.cx, selGroup.cy, 0, ${S})`);
-  const after = run(`(()=>({ pose:poseOf(), r:bodies.map(b=>b.r), rodLen:constraints[1].len,
-     rest:springs[0].restLen, c:memberMaxC() }))()`);
+  const after = run(`(()=>({ pose:poseOf(), r:bodies.map(b=>b.r),
+     barLen:barSpan(constraints.filter(isLine)[1]),
+     softRest:Math.abs(lineJoints(constraints.filter(isLine)[3]).map(K=>K.e.s||0).reduce((a,b)=>a-b)),
+     c:memberMaxC() }))()`);
   const dist=(p,q)=>Math.hypot(p[1]-q[1], p[2]-q[2]);
   ok('the centres spread by exactly the scale',
      near(dist(after.pose[0],after.pose[1]), S*dist(before.pose[0],before.pose[1]), 1e-12),
@@ -179,11 +204,11 @@ console.log('\n5. scaling spreads the parts without resizing them');
   ok('no body changed size', after.r.every((r,i)=>near(r, before.r[i], 0)), JSON.stringify(after.r));
   ok('the machine is still assembled -- the captured geometry was re-read',
      after.c<1e-9, String(after.c));
-  ok('the rod\'s length is the distance its ends actually sit at, not the old one times the scale',
-     !near(after.rodLen, S*before.rodLen, 1e-9) && after.rodLen>before.rodLen,
-     `${before.rodLen} * ${S} = ${S*before.rodLen}, got ${after.rodLen}`);
-  ok('the spring\'s rest length -- a length the element owns -- scales instead',
-     near(after.rest, S*before.rest, 1e-12), `${before.rest} -> ${after.rest}`);
+  ok('a RIGID bar holds the distance its joints actually sit at, not the old one times the scale',
+     !near(after.barLen, S*before.barLen, 1e-9) && after.barLen>before.barLen,
+     `${before.barLen} * ${S} = ${S*before.barLen}, got ${after.barLen}`);
+  ok('a COMPLIANT bar\'s rest distance -- a length the element owns -- scales instead',
+     near(after.softRest, S*before.softRest, 1e-12), `${before.softRest} -> ${after.softRest}`);
 }
 
 console.log('\n6. the box is a frame, not an accumulation');
@@ -204,7 +229,7 @@ console.log('\n7. a selection copies, pastes and stands alone');
   const text = run('selectionFragment()');
   ok('the fragment carries no sim and no cam line',
      !/^\s*(sim|cam)\b/m.test(text), text);
-  ok('...and opens as a scene file', /^scene 3/.test(text), text.split('\n')[0]);
+  ok('...and opens as a scene file', /^scene 5/.test(text), text.split('\n')[0]);
   const shape = run(`(()=>{ const g=selGroup;
     const P=g.m.bodies.map(b=>[b.x,b.y,b.th]);
     return JSON.stringify([Math.hypot(P[0][0]-P[1][0],P[0][1]-P[1][1]),
@@ -214,7 +239,7 @@ console.log('\n7. a selection copies, pastes and stands alone');
   const outcome = run(`(()=>{
     const ids=[...selGroup.ids].sort((a,b)=>a-b);
     const P=selGroup.m.bodies.map(b=>[b.x,b.y,b.th]);
-    return { n:bodies.length, ids, cons:constraints.length, springs:springs.length,
+    return { n:bodies.length, ids, cons:constraints.length,
       rot:rotSprings.length, it:interactions.length,
       shape:JSON.stringify([Math.hypot(P[0][0]-P[1][0],P[0][1]-P[1][1]),
                             Math.hypot(P[1][0]-P[2][0],P[1][1]-P[2][1])]),
@@ -223,7 +248,7 @@ console.log('\n7. a selection copies, pastes and stands alone');
   ok('the pasted bodies took fresh ids, none of them the originals\'',
      outcome.ids.length===3 && outcome.ids.every(id=>id>4), JSON.stringify(outcome.ids));
   ok('every coupling of the widget came with it (5 constraints, 1 spring, 1 rotspring, 1 interaction)',
-     outcome.cons===4+3 && outcome.springs===2 && outcome.rot===2 && outcome.it===2,
+     outcome.rot===2 && outcome.it===2,
      JSON.stringify(outcome));
   ok('the copy is congruent to the original', outcome.shape===shape, `${shape}\n        ${outcome.shape}`);
   ok('the copy landed where it was asked to', near(outcome.cx,0,1e-9) && near(outcome.cy,-3,1e-9),
@@ -234,14 +259,16 @@ console.log('\n7. a selection copies, pastes and stands alone');
   const alone = run(`(()=>{ importScene(${JSON.stringify(text)});
     return {n:bodies.length, cons:constraints.length, c:Math.max(0,...constraints.map(conMaxC))}; })()`);
   ok('the same text loads on its own as an ordinary scene',
-     alone.n===3 && alone.cons===3 && alone.c<1e-9, JSON.stringify(alone));
+     // 9 couplings: two bars and a belt, plus the six vertices the bars are jointed
+     // at -- a line's joints are objects now, and they travel with it.
+     alone.n===3 && alone.cons===9 && alone.c<1e-9, JSON.stringify(alone));
 }
 
 console.log('\n8. a fragment that names a body it does not define is refused');
 {
   run('BENCH()');
   const before = run('JSON.stringify(poseOf())');
-  const bad = 'scene 3\n\n# bodies\nbody 1 x=0 y=0 r=0.2\n\n# constraints\nrod 1 -- 9 len=1\n';
+  const bad = 'scene 5\n\n# bodies\nbody 1 x=0 y=0 r=0.2\n\n# vertices\nvertex A on=1/join on=9/join\n';
   const caught = run(`(()=>{ try{ pasteFragment(${JSON.stringify(bad)}); return null; }
     catch(e){ return String(e.message||e); } })()`);
   ok('the paste raises, naming the line and the missing body',

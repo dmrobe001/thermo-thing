@@ -11,7 +11,7 @@
 //           potential, on a vessel's length coordinate (defined ahead of §08.1,
 //           which calls it)
 //    §08.1  applied forces -> candidate velocities (gravity, drag spring,
-//           user-placed linear/rotational springs, vessel centrifugal term)
+//           user-placed rotational springs, compliant lines, vessel centrifugal term)
 //    §08.2  cable pre-pass (tetherball taut/slack + winding bookkeeping)
 //    §08.3  constraint assembly -> Schur solve (§07) -> impulse apply
 //    §08.4  position integration
@@ -42,19 +42,18 @@
 function ufFind(p,i){ while(p[i]!==i){ p[i]=p[p[i]]; i=p[i]; } return i; }
 function ufUnion(p,a,b){ const ra=ufFind(p,a), rb=ufFind(p,b); if(ra!==rb) p[ra]=rb; }
 // Every coupling type resolves to a LIST OF ENDPOINTS, all sharing the {id,...}
-// shape (constraints' a/b plus any extra control points, §06.2c; cables'
-// spool/tether; springs'/rotSprings' a/b) -- this table drives the union pass
+// shape (a coupling's endpoints through conEndpoints, §06.2c/§06.2e/§06.2f; cables'
+// spool/tether; rotSprings' a/b) -- this table drives the union pass
 // generically instead of special-casing each element type. A missing endpoint (e.g.
 // the single-ended 'knife' constraint) reads the same as a background-fixed one.
 // Wrapped in getters, not a plain array of the globals themselves: state.js §-level
-// code reassigns bodies/constraints/springs/rotSprings/cables wholesale (e.g.
+// code reassigns bodies/constraints/rotSprings/cables wholesale (e.g.
 // `constraints=constraints.filter(...)`, `bodies=[]` on load) rather than
 // mutating them in place, so a plain array captured once at script-load time
 // would keep pointing at whatever was live at that instant.
 const COUPLING_TABLES = [
   ()=>[constraints, conEndpoints],
   ()=>[cables,     cb=>[cb.spool, cb.tether]],
-  ()=>[springs,    sp=>[sp.a, sp.b]],
   ()=>[rotSprings, rs=>[rs.a, rs.b]],
 ];
 function computeIslands(){
@@ -74,7 +73,7 @@ function computeIslands(){
   const worldRoot=ufFind(p,WORLD);
   const byRoot=new Map();
   const islandOf=i=>{ const r=ufFind(p,i); let isl=byRoot.get(r);
-    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,springs:[],rotSprings:[]}; byRoot.set(r,isl); }
+    if(!isl){ isl={bodyIdx:[],anchored:r===worldRoot,rotSprings:[],lines:[]}; byRoot.set(r,isl); }
     return isl; };
   // frozenSolid, not `static`: a vessel pinned at its mid-plane still has a live
   // length, so it belongs to an island and its length energy is that island's.
@@ -82,8 +81,15 @@ function computeIslands(){
   // Bucket each force element's PE bookkeeping into its (now-final) island
   // for §08.6's per-island energy target, keyed off whichever endpoint is a
   // real body (an element always has at least one).
-  for(const sp of springs){ islandOf(bodyIndex((sp.a.id!=null?sp.a:sp.b).id)).springs.push(sp); }
   for(const rs of rotSprings){ islandOf(bodyIndex((rs.a.id!=null?rs.a:rs.b).id)).rotSprings.push(rs); }
+  // A line with a COMPLIANCE (constraints.js §06.2f) is a force element too, and its
+  // strain energy is its island's exactly as a spring's is. A rigid line is not: its
+  // rows are solved, and a constraint stores nothing.
+  for(const line of constraints){
+    if(!isLine(line) || !(line.soft>0)) continue;
+    const home = conEndpoints(line).find(ep => ep.id!=null && bodyIndex(ep.id)>=0);
+    if(home) islandOf(bodyIndex(home.id)).lines.push(line);
+  }
   return [...byRoot.values()];
 }
 // §08.6's rescale is a *multiplicative* correction (v *= sqrt(target/actual)),
@@ -490,25 +496,30 @@ function substep(h){
       }
     }
   }
-  // linear spring force elements: Hookean, F = k*(restLen-L) along the line
-  // joining the two endpoints -- same two-endpoint frame as rod (twoPointFrame,
-  // §06.1), reused as-is since a spring needs only L and the unit direction,
-  // never phi (there is no weld/angle-lock row for a force element).
-  for(const sp of springs){
-    // A force (Fx,Fy) applied at a point is exactly that point's velCols
-    // evaluated at (Fx,Fy) rather than a unit direction (virtual-work
-    // identity: dir.v_point = sum(jx*vx+jy*vy+jw*w) holds for any dir, so it
-    // holds component-wise for dir=(Fx,Fy) too).
-    const A=epFrame(sp.a), B=epFrame(sp.b);
-    const dx=A.wx-B.wx, dy=A.wy-B.wy, L=Math.hypot(dx,dy)||1e-9;
-    const ux=dx/L, uy=dy/L;
-    const Fmag=sp.k*(sp.restLen-L);
-    const Fx=Fmag*ux, Fy=Fmag*uy;
-    // No skip for a frozen body: its inverse masses are already zero, so the pose
-    // terms integrate to nothing, while a pinned VESSEL's length column -- which is
-    // not frozen with its pose -- still has to get its share.
-    for(const [idx,cx,cy,cw,cl] of mergeCols([A.velCols(Fx,Fy), B.velCols(-Fx,-Fy)])){
-      FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw; FL[idx]+=cl||0;
+  // A LINE with a COMPLIANCE (constraints.js §06.2f) carries its axial relation as a
+  // force instead of a row. `soft` is 1/k in m/N -- a plain compliance, not a
+  // modulus, so a segment's stiffness does not depend on how long it is -- and each
+  // stretch between CONSECUTIVE non-sliding joints is its own Hookean member:
+  //
+  //     F = (station distance - rest distance) / soft,  along the bar
+  //
+  // The on-line rows stay: a soft line is still a line, and its riders still ride it.
+  // Only the station rows go (§06.5), which is why a TWO-joint compliant line -- no
+  // riders, one stretch -- is exactly the linear spring this replaces, and a
+  // three-joint one is a sprung bar carrying a rider, which the bench could not build.
+  for(const line of constraints){
+    if(!isLine(line) || !(line.soft>0) || lineReleased(line)) continue;
+    const f=lineFrame(line); if(!f) continue;
+    const held=f.J.filter(K=>!K.e.slide);
+    for(let i=1;i<held.length;i++){
+      const A=held[i-1], B=held[i];
+      const rest=Math.abs((B.e.s||0)-(A.e.s||0));
+      const dx=A.ep.wx-B.ep.wx, dy=A.ep.wy-B.ep.wy, L=Math.hypot(dx,dy)||1e-9;
+      const Fmag=(rest-L)/line.soft;                 // pulls together when stretched
+      const Fx=Fmag*dx/L, Fy=Fmag*dy/L;
+      for(const [idx,cx,cy,cw,cl] of mergeCols([A.ep.velCols(Fx,Fy), B.ep.velCols(-Fx,-Fy)])){
+        FX[idx]+=cx; FY[idx]+=cy; TAU[idx]+=cw; FL[idx]+=cl||0;
+      }
     }
   }
   // rotational spring force elements: torsional, tau = k*(restAngle-thRel)
@@ -649,12 +660,23 @@ function substep(h){
   const rows=[];
   for(let ci=0;ci<constraints.length;ci++){
     constraints[ci]._rows=[];
+    // ...and what each of those rows IS (constraints.js §06.5 tags every row with a
+    // role and, where the kind has more than one of a role, which end or control
+    // point it belongs to). The reaction readout (projection.js §09.3) then looks a
+    // multiplier up by name instead of re-deriving the row order from the joint's
+    // flags -- arithmetic that was written out once per kind and had to be kept in
+    // step with rowsFor by hand.
+    constraints[ci]._roles=[];
     // A compiled-away constraint contributes nothing: it is the thing that froze
     // the coordinates it touches, so every column it would write is zero
     // (constraints.js §06.2b). Skipping it keeps a row of zeros out of the Schur
     // complement, where only the Tikhonov term would have kept it solvable.
     if(constraints[ci]._compiled) continue;
-    for(const r of rowsFor(constraints[ci])){ constraints[ci]._rows.push(rows.length); rows.push(r); }
+    for(const r of rowsFor(constraints[ci])){
+      constraints[ci]._rows.push(rows.length);
+      constraints[ci]._roles.push([r.role, r.at]);
+      rows.push(r);
+    }
   }
   for(const cb of cables){
     if(cb._active){
