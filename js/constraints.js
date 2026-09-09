@@ -674,23 +674,49 @@ function recaptureVertex(v){
     } else if(e.weld) e.restAng = incidenceAngle(e);
   }
 }
-// Move the whole coincident set to a world point: every joined incidence re-reads its
-// own offset, so the bodies stay where they are and the vertex moves between them.
+// Move the whole coincident set to a world point: every incidence re-reads its own
+// offset, so the bodies stay where they are and the vertex moves between them.
 // What the pivot handle drags (§13.3) and what the inspector's position field commits.
+//
+// EVERY incidence, joined or not, and that is the point of it: an offset is where the
+// vertex sits in that body's frame, and after the move it sits somewhere else. An
+// unjoined one is a spot the point is AT rather than a hold on it, so nothing about it
+// resists the move -- but it is still a statement about where the point is, and left
+// unread it would be the one number on the panel that had stopped saying so while the
+// row beside it kept up (§14.2c). Moving the BODY is the other direction and is
+// untouched: a mark is material, so the body takes it along and leaves the vertex.
 function setVertexWorld(v, wx, wy){
-  for(const e of vertexOns(v)){
+  const ons=vertexOns(v);
+  // Unless the point has left the body altogether. An unjoined incidence outside its
+  // body's extent is a coordinate neither list will show (verticesInExtent below is
+  // what both of them read) and no gesture could reach again, so the move that carried
+  // the point out is what ends it -- dropped here, at that gesture, rather than left
+  // stored where no panel can say it is there. A JOINED incidence is never dropped: it
+  // is what holds the vertex, and where it holds it from is its own business.
+  for(let i=ons.length-1;i>=0;i--){
+    const e=ons[i];
+    if(e.join || e.id==null) continue;
+    if(!extentCovers(e.id, wx, wy)) ons.splice(i,1);
+  }
+  // ...and nothing is ever left with nowhere to be: where the mark just dropped was
+  // the one saying where the vertex is, the background takes it over at the point,
+  // which is the same bottom of the chain settleVertex plants (§06.2e).
+  if(!vertexAnchorWorld(v) && !vertexRide(v)) makeVertexOn(v, {id:null, off:[wx,wy]}, {join:false});
+  for(const e of ons){
     if(isLineOn(e)) continue;                    // a line holds no offset to re-read
-    // The background incidence is re-read whether it is joined or not: joined it is a
-    // ground pin, unjoined it is simply where the vertex is (vertexWorld above), and
-    // either way it has to follow the point. A BODY's is re-read only when joined --
-    // an unjoined one marks a spot, and moving the vertex does not move the mark.
+    // The background incidence is re-read like the rest: joined it is a ground pin,
+    // unjoined it is simply where the vertex is (vertexWorld above), and either way it
+    // has to follow the point.
     if(e.id==null){ e.off=[wx,wy]; continue; }
-    if(!e.join) continue;
-    e.off = epOffOf(bodies[bodyIndex(e.id)], wx, wy);
+    const b=bodies[bodyIndex(e.id)]; if(!b) continue;
+    e.off = epOffOf(b, wx, wy);
   }
   // A vertex the line CARRIES has no offset anywhere that says where it is -- its
   // station does. Moving it therefore moves it ALONG the bar, to the station nearest
-  // the point asked for, which is the only place on the bar there is to put it.
+  // the point asked for, which is the only place on the bar there is to put it. A HELD
+  // joint's station is not re-read with the offsets above: it is the bar's own length
+  // to the next held joint, so re-reading it would let a drag silently restretch the
+  // bar instead of asking the mechanism to take the move (VERTEX.md §X.11).
   const R=vertexRide(v);
   if(R) R.s = lineStationAt(lineById(R.id), wx, wy);
 }

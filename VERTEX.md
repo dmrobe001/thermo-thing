@@ -119,6 +119,18 @@ body", and the vertex is simply not tied to it yet. Ticking `join` on recaptures
 offset from the live geometry first, so the tick never snaps anything -- the same
 discipline `captureRestAngle` and `setConPointLock` already follow (§06.1, §06.2c).
 
+The two directions are not symmetric, and the asymmetry is the whole of what "not
+held" means. Move the **body** and the spot is material: it goes with the body and
+leaves the vertex standing, which is why an unjoined incidence never locates the
+point. Move the **point** and every incidence re-reads its offset, this one included
+-- the spot it names is *where the point is on that body*, and the point is now
+somewhere else. A move that carries the point out of the body's extent ends the
+incidence outright: there is nothing left for it to say, neither list will show it
+(`§X.11`), and leaving it stored would be a coordinate in the file that no panel can
+reach. A **joined** incidence is never dropped that way -- it is what holds the
+vertex, and holding it from beyond its own outline is what a rod end at arm's length
+always was.
+
 **`weld`** is the one that repays the most. Today it appears as `weldA`, `weldB`,
 `prismaticA`, `prismaticB` and `pt.lock`; here it is one flag with one meaning:
 
@@ -639,18 +651,32 @@ constraint `fix` names but the whole of what says where the point is.
 
 **Every coordinate in one of those rows is editable, and committing one is a solve
 attempt.** Where an incidence holds the vertex there, the number *is* the anchor, so
-the anchor moves and the assembly has to follow; where nothing holds it, there is no
-anchor to move, so the vertex goes to the point named and its own joins are re-read
--- the same edit its own x/y field makes, said in another body's frame. A line's
-coordinate is its station: a held joint owns one, so the number is stored and the bar
-rearranges around it, while a slider -- or a vertex with no joint at all -- owns
-none, so the number says where along the bar to put the point. Either way it ends in
+the anchor moves and the assembly has to follow; where nothing holds it -- a body
+merely listed, and a body *marked* but not joined alike, since a mark holds nothing
+either -- there is no anchor to move, so the vertex goes to the point named and its
+own joins are re-read -- the same edit its own x/y field makes, said in another
+body's frame. A line's coordinate is its station: a held joint owns one, so the
+number is stored and the bar rearranges around it, while a slider -- or a vertex
+with no joint at all -- owns none, so the number says where along the bar to put the
+point. Either way it ends in
 `projectPositions`, which is an *attempt*: a distance the mechanism cannot take
 leaves the bench wherever the solver could get to, exactly as typing a body's pose
 does. Ticking `joined` on ends in the same projection. The tick itself is exact where
 it stands, so on its own that is a no-op; what it is for is the rows the tick has just
 brought to life, so that ticking a line and a body at one vertex lands on the same
 assembled bench in either order.
+
+**A row reads the point, not the editing history.** Move the vertex -- drag its
+handle, type a coordinate, commit one in any of these frames -- and every row on
+every panel that lists it says the new place, at once and while the gesture is still
+going on. That is one point read in several frames, so any two rows disagreeing would
+be one of them having stopped keeping up. Three things make it hold: a move re-reads
+each frame's own coordinate (`§X.3`), a row with no anchor behind it is read live off
+the geometry, and rows that *appear* and *disappear* -- the point dragged into a
+disk's outline, or out of it -- rebuild the panel, since a refreshed number cannot add
+a row. A held joint's **station** is the one number a move leaves alone: it is the
+bar's own length to the next held joint, and re-reading it would let a drag silently
+restretch the bar instead of asking the mechanism to take the move.
 
 **Canvas.** Vertices draw as dots -- one dot per joint, not the stack of coincident
 endpoints the pin draws today -- filled when joined, hollow when merely marking a

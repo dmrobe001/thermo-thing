@@ -7,7 +7,8 @@
 //    §14.2b renderVesselInspector (the vessel's own panel)
 //    §14.2c the incidence row (one relation, three panels: a vertex's, a body's,
 //           a line's -- all built out of incidenceRow)
-//    §14.3  updateInspectorLive (per-frame refresh of the live readouts)
+//    §14.3  updateInspectorLive (per-frame refresh of the live readouts, the
+//           incidence rows a moved vertex changes included)
 // ============================================================================
 // ---- §14.0 · numeric fields ----
 // Every editable number in the panel is built and read through this pair. What a
@@ -235,19 +236,33 @@ function bodyName(id){
 //
 // `incRows` is the render-scoped registry the fields and ticks index into. It is
 // cleared by renderInspector before any panel is built, so a row's number means the
-// same thing to the markup that wrote it and the handler that reads it.
-let incRows=[];
-// Where a row's coordinates come from: the incidence's own stored offset where there
-// is one -- that is the authored number, and under a violation it is not what the
-// geometry reads -- and the live geometry where there is none to read.
-// The BACKGROUND row is the exception, and it is the vertex's own world coordinates.
-// An unjoined background incidence is not a mark on anything -- the background has no
-// material spots worth marking -- it is only the record of where the point is, read
-// back when nothing else locates it, and refreshed at the moment it takes over. So it
-// shows the live point, and editing it moves the vertex, exactly as its own x/y field
-// does. Joined, it is a ground pin, and then the stored number is the authored one.
+// same thing to the markup that wrote it and the handler that reads it. `incRowsFrom`
+// is the list that produced it, kept so the per-frame refresh (§14.3) can ask the
+// panel again for the rows it would draw NOW and rebuild when one has appeared or
+// gone -- a vertex dragged into a body's outline, or out of it.
+let incRows=[], incRowsFrom=null;
+// Every panel's rows come through here, so each of them registers its own list once
+// and the refresh has one thing to re-read whichever panel is up.
+function incidenceRowsFrom(source, o){
+  incRowsFrom = source;
+  return source().map(r => incidenceRow(r[0], r[1], o)).join('');
+}
+// Where a row's coordinates come from: the ANCHOR where one is stored -- that is the
+// authored number, and under a violation it is not what the geometry reads -- and the
+// live geometry where there is none.
+//
+// A stored one is one a JOIN holds, and nothing else is. An unjoined incidence names a
+// spot the point is at without holding it there, so it has no say in where the point
+// went: the number to show is where the point IS in that frame, which is exactly what
+// a body carrying no incidence at all shows on the same list. (`setVertexWorld`
+// (§06.2e) keeps the stored offset abreast of the point for the file's sake, so the
+// two agree; when they cannot -- the body walked off with its mark -- the live reading
+// is the honest one.) The background is the same rule read once more: unjoined it is
+// not a mark on anything, only the record of where the point is, so it shows the live
+// point and editing it moves the vertex; joined, it is a ground pin, and then the
+// stored number is the authored one.
 const incidenceStored = (v,id) => { const e=vertexOns(v).find(x=>x.id===id);
-  return (e && !isLineOn(e) && (id!=null || e.join)) ? e : null; };
+  return (e && !isLineOn(e) && e.join) ? e : null; };
 function incidenceOff(v, id){
   const e=incidenceStored(v,id);
   if(e) return e.off;
@@ -262,6 +277,14 @@ function incidenceStation(v, line){
   const [wx,wy]=vertexWorld(v);
   return lineStationAt(line, wx, wy);
 }
+// Every vertex a line's extent covers, in station order -- its joints, and the ones
+// merely lying on it, which are a tick away from being joints. P sits at the highest
+// station and Q at the lowest, which is the order lineFrame already sorts its own
+// joints into.
+const lineExtentVertices = line => verticesInExtent(line.id)
+  .map(v=>({v, s:incidenceStation(v, line)}))
+  .sort((a,b)=>b.s-a.s)
+  .map(k=>k.v);
 function incidenceRow(v, id, o={}){
   const k=incRows.length;
   incRows.push({v, id});
@@ -278,8 +301,9 @@ function incidenceRow(v, id, o={}){
   // same two bits, in a word the line panel uses for something narrower. What is left
   // is the one fact the ticks leave open: which of these frames the point's position
   // is actually read from (constraints.js §06.2e vertexWorld), and, for a body the
-  // vertex has let go of, that the coordinates below are the mark it left rather than
-  // where it now is.
+  // vertex has let go of, that this body names the point without holding it. The
+  // coordinates below are still where the point is: a mark follows the vertex when the
+  // vertex is moved, and goes when the point leaves the body (§06.2e setVertexWorld).
   const P = vertexPrimary(v), R = vertexRide(v);
   // The background is never a "mark": it has no material spots worth marking, so an
   // unjoined background incidence is only the vertex's world coordinates, and it is
@@ -400,7 +424,7 @@ function wireIncidenceRows(){
 function vertexInspectorHTML(v){
   const [wx,wy]=vertexWorld(v);
   const welds=vertexOns(v).filter(e=>e.join&&e.weld).length;
-  const rows=vertexSites(v).map(s=>incidenceRow(v, s.id)).join('');
+  const rows=incidenceRowsFrom(()=>vertexSites(v).map(s=>[v, s.id]));
   // A single weld holds nothing, and saying so is better than drawing a tick that
   // does not do anything: welding ties one frame to another, and one frame has
   // nothing to tie to (VERTEX.md §X.3).
@@ -425,7 +449,7 @@ function vertexInspectorHTML(v){
     </div>
     <div class="card"><div class="cardhead">bodies at this vertex</div>
       ${rows || '<p class="muted">none</p>'}${adriftNote}${weldNote}
-      <p class="muted" style="margin:8px 0 0">Everything whose extent covers this point, whether it is held here or not &mdash; the background always, since its extent is the whole plane. Tick <b>joined</b> to hold the vertex to one, untick it to let go; the body stays listed either way, because what is listed is where the point <em>is</em>. Editing a coordinate moves the anchor and asks the assembly to follow.</p>
+      <p class="muted" style="margin:8px 0 0">Everything whose extent covers this point, whether it is held here or not &mdash; the background always, since its extent is the whole plane. Tick <b>joined</b> to hold the vertex to one, untick it to let go; the body stays listed either way, because what is listed is where the point <em>is</em>. Editing a coordinate moves the anchor where something is held here and moves the point itself where nothing is, and either way the assembly is asked to follow. Move the point and every row follows it at once &mdash; and a body it is not held to drops off the list as soon as the point is outside it.</p>
     </div>
     <button class="del" id="vt_del">Delete vertex</button>`;
 }
@@ -451,11 +475,10 @@ function wireVertexCard(v){
 // ...and the same relation from the body's side: every vertex INSIDE this body, each
 // with its place in the body's frame and the same ticks the vertex's own panel shows.
 function bodyVerticesCard(b){
-  const vs=verticesInExtent(b.id);
-  const rows=vs.map(v=>incidenceRow(v, b.id, {selVertex:true})).join('');
+  const rows=incidenceRowsFrom(()=>verticesInExtent(b.id).map(v=>[v, b.id]), {selVertex:true});
   return `<div class="card"><div class="cardhead">vertices on this body</div>
     ${rows || '<p class="muted">none</p>'}
-    <p class="muted" style="margin:8px 0 0">Every vertex this body's extent covers, held here or not. Coordinates are in the body's own frame, and editing one moves the anchor and asks the assembly to follow.</p></div>`;
+    <p class="muted" style="margin:8px 0 0">Every vertex this body's extent covers, held here or not. Coordinates are in the body's own frame and follow each point as it moves; editing one moves the anchor where this body holds the point, and the point itself where it does not.</p></div>`;
 }
 // ---- §14.2 · renderInspector (panel DOM per selection type) ----
 // One branch per selection: body, constraint, cable, spring, rotational
@@ -463,8 +486,9 @@ function bodyVerticesCard(b){
 function renderInspector(){
   const p=document.getElementById('panelBody');
   // Every incidence row any panel below draws numbers itself out of this, so it is
-  // cleared here, once, before any of them is built (§14.2c).
-  incRows=[];
+  // cleared here, once, before any of them is built (§14.2c) -- with the list that
+  // produced them, which is null until a panel that draws rows registers its own.
+  incRows=[]; incRowsFrom=null;
   // A group is checked first: it is a selection of many bodies, so none of the
   // single-object branches below can speak for it (select.js §18.5).
   if(selGroup){ p.innerHTML=groupInspectorHTML(selGroup); wireGroupCard(); return; }
@@ -556,13 +580,8 @@ function renderInspector(){
     const J=f?f.J:[];
     const bar=lineIsBar(c);
     // Every vertex the line's extent covers, in station order -- its joints, and the
-    // ones merely lying on it, which are a tick away from being joints (§14.2c). P
-    // sits at the highest station and Q at the lowest, which is the order lineFrame
-    // already sorts its own joints into.
-    const onLine = verticesInExtent(c.id)
-      .map(v=>({v, s:incidenceStation(v,c)}))
-      .sort((a,b2)=>b2.s-a.s);
-    const jointRows = onLine.map(K=>incidenceRow(K.v, c.id, {selVertex:true})).join('');
+    // ones merely lying on it, which are a tick away from being joints (§14.2c).
+    const jointRows = incidenceRowsFrom(()=>lineExtentVertices(c).map(v=>[v, c.id]), {selVertex:true});
     // One row per stretch between consecutive held joints -- editable, and editing one
     // shifts the stations after it, which is what changing a bar's length means.
     const segs = lineSegments(c);
@@ -770,11 +789,45 @@ function renderInspector(){
   wireNumIns();
 }
 // ---- §14.3 · updateInspectorLive (per-frame readout refresh) ----
+// The incidence rows, wherever they are drawn -- a vertex's panel, a body's, a line's.
+// A vertex moved by a drag on its handle (tools.js §13.3), or carried along by a body
+// that is, is at a new place in EVERY frame that lists it at once, and this is what
+// keeps all of those rows saying so while the gesture is still going on. It reads the
+// same two functions the markup was built from, so a refreshed row and a rebuilt one
+// cannot disagree.
+//
+// A refresh can only rewrite numbers, though, and a move also adds and removes rows:
+// drag a point into a disk and that disk joins its list, drag it out and the row goes
+// (constraints.js §06.2e). So the panel's own list is asked what it would draw NOW, and
+// anything but the same rows in the same order is a rebuild. Returns false when it
+// rebuilt, because every field the rest of the refresh was about to write has just
+// been replaced by a fresh one already holding the live value.
+function updateIncidenceLive(){
+  const want = incRowsFrom ? incRowsFrom() : [];
+  if(want.length!==incRows.length
+     || want.some((r,k)=>r[0]!==incRows[k].v || r[1]!==incRows[k].id)){
+    // Never mid-edit: a rebuild would take the field out from under the keystrokes,
+    // which is the same discipline setLive follows for a value.
+    const a=document.activeElement;
+    if(a && a.tagName==='INPUT' && a.closest && a.closest('#panelBody')) return true;
+    renderInspector();
+    return false;
+  }
+  incRows.forEach((R,k)=>{
+    const line = R.id!=null ? lineById(R.id) : null;
+    if(line){ setLive(`inc_s${k}`, incidenceStation(R.v, line).toFixed(3)); return; }
+    const off=incidenceOff(R.v, R.id);
+    setLive(`inc_x${k}`, off[0].toFixed(3));
+    setLive(`inc_y${k}`, off[1].toFixed(3));
+  });
+  return true;
+}
 // refresh an input's value from live sim state, but never while the user has
 // it focused -- clobbering mid-edit would fight their keystrokes
 function setLive(id,v){ const el=document.getElementById(id); if(el && document.activeElement!==el) el.value=v; }
 function updateInspectorLive(){
   if(selGroup){ updateGroupLive(); return; }
+  if(!updateIncidenceLive()) return;            // the panel was rebuilt; its fields are new
   if(selBody && selBody.shape==='vessel' && document.getElementById('v_len')){
     const v=selBody, P=gasP(v), T=gasT(v);
     setLive('v_len',v.len.toFixed(4)); setLive('v_bore',v.bore.toFixed(3));
@@ -801,6 +854,14 @@ function updateInspectorLive(){
       else setLive('f_r',b.r.toFixed(3));
       setLive('f_mass',b.mass.toFixed(3));
       document.getElementById('f_I').textContent=b.I.toFixed(3); } }
+  // A vertex's own position, and a line's held distances: the two readouts a moved
+  // vertex changes that are not themselves incidence rows. A held distance is a
+  // difference of two stations, so a drag anywhere along the bar rewrites it.
+  if(selConstraint && isVertex(selConstraint)){
+    const [wx,wy]=vertexWorld(selConstraint);
+    setLive('vt_x',wx.toFixed(3)); setLive('vt_y',wy.toFixed(3)); }
+  if(selConstraint && isLine(selConstraint))
+    lineSegments(selConstraint).forEach((sg,k)=>setLive(`L_seg${k}`, sg.len.toFixed(3)));
   if(selConstraint){ const c=selConstraint; const r=reactionOf(c); const el=document.getElementById('f_rf');
     if(el){ if(c.type==='belt') el.textContent=(r?Math.abs(r.val):0).toFixed(2);
       else if(r&&r.fx!==undefined){ el.textContent=Math.hypot(r.fx,r.fy).toFixed(2);
