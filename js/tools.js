@@ -682,7 +682,11 @@ function pickConstraintOfType(type,wx,wy){
 // Nothing moves for the first two joints, whose own placement defines the line.
 function joinVertexToLine(line, v){
   if(vertexOns(v).some(e=>e.id===line.id)) return false;
+  const [wx,wy]=vertexWorld(v);
   makeVertexOn(v, {id:line.id}, {join:true, slide:true});
+  // A vertex nothing grounds is now CARRIED by this line, which needs the station to
+  // carry it by (constraints.js §06.2e). One that something grounds is unaffected.
+  settleVertex(v, wx, wy);
   projectPositions(12);
   return true;
 }
@@ -789,55 +793,6 @@ function runToolClick(wx,wy){
       bodies.splice(bi,1); clearSelection(); saveState(); }
     return;
   }
-  if(tool==='line'){
-    // TAP VERTICES IN TURN. Each tap takes the vertex under the cursor, or plants one
-    // where you tapped -- on a body, or on the background -- if there is none there.
-    //
-    //   NEW      the first two taps place a line through those two vertices; every
-    //            tap after that joins another vertex to the SAME line, so a rail with
-    //            three riders is five taps and never a mode change.
-    //   EXTEND   the first tap picks an existing line instead, and every tap after
-    //            joins a vertex to it. The same gesture, started differently.
-    //
-    // Every joint is created SLIDING (constraints.js §06.2f), so the first two ask the
-    // solver for nothing and the line is a drawn guide until you say otherwise. From
-    // the third tap on there IS something to solve -- a vertex tapped where the line
-    // does not go -- and that is what joinVertexToLine's projection is for: drop the
-    // bodies roughly where you want them, then say they are in a line.
-    const vi=pickVertexAt(wx,wy);
-    let v = vi>=0 ? constraints[vi] : null;
-    if(!v){
-      const t=anchorTarget(wx,wy);
-      v=makeVertex(null, t ? t.wp : [wx,wy]);
-      makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
-      constraints.push(v);
-    }
-    if(!pending){
-      if(lineExtendMode){
-        const ci=pickConstraintOfType('line',wx,wy);
-        if(ci<0) return;                       // nothing to extend -- wait for a line
-        pending={line:constraints[ci].id};
-        joinVertexToLine(constraints[ci], v);
-        selectConstraint(ci); saveState(); return;
-      }
-      pending={vertex:v, wp:vertexWorld(v)};    // NEW: wait for the second vertex
-      return;
-    }
-    if(pending.line!=null){
-      const L=lineById(pending.line);
-      if(L) joinVertexToLine(L, v);
-      saveState(); return;
-    }
-    // NEW, second tap. The line does not exist until there are two vertices to put it
-    // through: one point has no direction, and a line with one joint is not a line.
-    if(v===pending.vertex) return;
-    const L=makeLine(); constraints.push(L);
-    joinVertexToLine(L, pending.vertex);
-    joinVertexToLine(L, v);
-    pending={line:L.id};
-    selectConstraint(constraints.indexOf(L)); saveState();
-    return;
-  }
   if(tool==='belt' || tool==='cvt'){
     // two bodies: A first, then B (occluded B reachable via except-pick).
     // Both are rim-based (a wrap radius for belt, a rolling contact for
@@ -880,25 +835,28 @@ function runToolClick(wx,wy){
     return;
   }
   if(tool==='vertex'){
-    // ONE tap. On a body it takes an incidence there, joined; on empty space it takes
-    // one on the background, joined -- a ground anchor, which is what a rod end
-    // clicked in empty space has always meant.
+    // ONE tap plants a point, wherever it lands and whatever it lands on (below).
     //
-    // On an EXISTING vertex it JOINS another body to it instead: the topmost body
-    // under the cursor the vertex does not already touch, at the vertex's own point.
-    // So pinning two bodies together is the same gesture twice in the same place --
-    // the first tap plants the vertex on the top body, the second reaches through it
-    // to the one underneath. A vessel is no exception here, unlike on a rod: a rod's
-    // two ends may ride two material planes of one vessel, but a VERTEX is at one
-    // material place on each thing it touches, so it takes one incidence per body.
+    // On an EXISTING vertex it JOINS a body to it instead: the topmost body under the
+    // cursor the vertex does not already touch, at the vertex's own point. So pinning
+    // two bodies together is the same gesture three times in the same place -- one tap
+    // for the point, then one for each body, reaching down through them in draw order.
+    // A vessel is no exception here, unlike on a rod: a rod's two ends may ride two
+    // material planes of one vessel, but a VERTEX is at one material place on each
+    // thing it touches, so it takes one incidence per body.
     const vi=pickVertexAt(wx,wy);
     if(vi>=0){ joinBodyToVertex(constraints[vi], wx, wy); selectConstraint(vi); saveState(); return; }
+    // A fresh vertex is a POINT and nothing else: one background incidence, unjoined,
+    // holding the world coordinates of the place tapped. It is not attached to the
+    // body it happens to have landed on -- which body that would be is a question
+    // about draw order, and a point should not silently take its frame from whatever
+    // is on top. Attaching is a tick in the panel, where every body the point is
+    // inside is already listed (constraints.js §06.2e, VERTEX.md §X.11). The snap is
+    // still honoured, so a tap near a rim or a centre lands exactly on it.
     const t=anchorTarget(wx,wy);
-    // The point it was tapped at is the vertex's OWN place from the start
-    // (constraints.js §06.2e), so it has one before anything is joined to it and
-    // still has one after everything is taken away again.
-    const v=makeVertex(null, t ? t.wp : [wx,wy]);
-    makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
+    const wp = t ? t.wp : [wx,wy];
+    const v=makeVertex(null);
+    makeVertexOn(v, {id:null, off:[wp[0],wp[1]]}, {join:false});
     constraints.push(v); selectConstraint(constraints.length-1); saveState();
     return;
   }
@@ -921,7 +879,7 @@ function runToolClick(wx,wy){
     let v = vi>=0 ? constraints[vi] : null;
     if(!v){
       const t=anchorTarget(wx,wy);
-      v=makeVertex(null, t ? t.wp : [wx,wy]);
+      v=makeVertex(null);
       makeVertexOn(v, t ? {id:t.body.id, off:offOf(t.body,t.wp)} : {id:null, off:[wx,wy]}, {join:true});
       constraints.push(v);
     }

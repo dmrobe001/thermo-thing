@@ -301,15 +301,16 @@ Grammar notes:
   background with its rotation left free, and a body merely MARKED at a vertex rather
   than held there.
 
-  It also carries its own place, `at=(x,y)`, and that key follows §S.3's rule to the
-  letter: it is written exactly when nothing else in the file says where the point is,
-  and omitted -- as derived geometry -- the moment something does. So a vertex a body
-  or the background locates writes no `at` at all, and a vertex left standing on its
-  own after the bodies around it were deleted writes the one thing there is left to
-  say about it. `vertex A` alone is legal: a named point at the origin, with no
-  relations. That is not an edge case to tolerate, it is the model -- a vertex is an
-  object of the same standing as a disk or a line, so **no deletion cascades** and
-  nothing's existence is conditional on anything else's (`VERTEX.md` §X.15).
+  It always has somewhere it is, and the format says so with an ordinary incidence
+  rather than a new key: a vertex nothing else places carries an **unjoined background
+  incidence**, `on=bg(x,y)`, which is simply its world coordinates. It is planted at
+  the place the vertex was already standing, whenever the relation that had been
+  placing it goes away, so the file can describe a bench whose bodies have been
+  deleted out from under it -- two vertices on their own marks with a line still
+  running between them. That is not an edge case to tolerate, it is the model: a
+  vertex is an object of the same standing as a disk or a line, so **no deletion
+  cascades** and nothing's existence is conditional on anything else's
+  (`VERTEX.md` §X.15).
 
   A **line** is a straight massless bar whose joints are the vertices naming it -- a
   bar with all its joints held (`fix`), a rail with a slider on it, a rack with a

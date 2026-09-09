@@ -516,6 +516,13 @@ function drawReaction(con){
 // because drawPending visualises it, but §13 is what writes and consumes it.
 let pending=null;      // first pick of a two-step constraint tool
 function drawPending(){
+  // A pending pick without a world point has no dot to draw -- and reaching into one
+  // that is not there would throw, which in here is fatal: an exception inside
+  // render() kills the rAF chain in §10 outright and the bench never repaints again
+  // (the panel and the scene box keep working, which is what makes it look like a
+  // freeze rather than a crash). Every two-step tool carries `wp`; this is the guard
+  // that keeps a tool that forgets to from taking the page down with it.
+  if(!pending || !pending.wp) return;
   const [sx,sy]=w2s(pending.wp[0],pending.wp[1]);
   ctx.strokeStyle='#5aa9f0';ctx.lineWidth=2;ctx.setLineDash([4,4]);
   ctx.beginPath();ctx.arc(sx,sy,7,0,Math.PI*2);ctx.stroke();

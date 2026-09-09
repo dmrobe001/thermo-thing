@@ -23,8 +23,12 @@
 //   5. the captures never snap: ticking join or weld on holds the pose it found.
 //   6. the file: it round-trips byte-for-byte, its incidences come back with their
 //      flags and rest angles, and a scaled selection box leaves it assembled.
-//   7. the tool: one tap plants a vertex, and the same tap again in the same place
-//      reaches through to join the body underneath -- which is how a hinge is made.
+//   7. the tool: one tap plants a POINT -- a background incidence, unjoined, holding
+//      the coordinates of the place tapped, whatever body it landed on -- and the same
+//      tap again reaches through to join the bodies under it, topmost first, which is
+//      how a hinge is made by hand. Plus what that buys: a body dragged out from under
+//      an unjoined vertex leaves it where it was, and so does letting go of the last
+//      body it was held to.
 //   8. the two lists the panels show: EXTENT, not incidence. A vertex lists every
 //      body whose outline covers it -- the background always, and the one underneath
 //      exactly like the one on top -- and a body lists every vertex inside it. Ticking
@@ -35,6 +39,15 @@
 //  10. the same from a line's side: a vertex merely lying on the bar is listed by it
 //      and has a station, ticking `joined` makes it a slider, and a held joint takes
 //      the station it is given.
+//  11. what "lying on the bar" means, which is a question about the PICTURE: the two
+//      glyphs touching, so the same 4 cm is on the line at one zoom and off it at the
+//      next. Then the gesture the lists exist for -- put a point down and tick it onto
+//      a line and onto a body -- and what the line does with a point nothing else
+//      holds: it CARRIES it, at its station, so the point rides the bar and asks
+//      nothing of it until a body is ticked at the vertex and it becomes an ordinary
+//      joint. Which way the two ticks move things depends on which came first, and
+//      that is the same rule twice rather than an inconsistency: a tick holds what it
+//      finds.
 const fs=require('fs'), path=require('path'), vm=require('vm');
 const ROOT=path.join(__dirname,'..');
 const stubEl = () => new Proxy({}, { get:(t,k)=>
@@ -185,30 +198,29 @@ ok('unjoining drops the weld with it', run(`(()=>{ clearScene();
   setVertexJoin(v,e,false);
   return e.weld===false && e.restAng===undefined; })()`)===true);
 // A vertex is an object, not a body's property, so no body's departure takes it --
-// and it does not move when the thing that was locating it goes, because its own
-// place is read off the live geometry first (constraints.js §06.2e captureVertexAt).
+// and it does not move when the thing that was placing it goes, because settleVertex
+// reads where it stood first and leaves it a mark there (§06.2e).
 ok('a vertex OUTLIVES the last body it touched, where it stood', run(`(()=>{ clearScene();
   const a=makeBody(0,0,0.3); bodies.push(a);
   const b=makeBody(1,0,0.3); bodies.push(b);
-  const v=makeVertex(null,[0,0]);
+  const v=makeVertex(null);
   makeVertexOn(v,{id:a.id,off:[0,0]},{join:true});
   makeVertexOn(v,{id:b.id,off:[-1,0]},{join:true});
   constraints.push(v);
-  dropBodyFromConstraints(a.id);
+  dropBodyFromConstraints(a.id); bodies=bodies.filter(x=>x!==a);
   const after1 = constraints.length;                    // one body left: still a vertex
-  dropBodyFromConstraints(b.id);
+  dropBodyFromConstraints(b.id); bodies=bodies.filter(x=>x!==b);
   const w=vertexWorld(v);
   return after1===1 && constraints.length===1 && constraints[0]===v
-      && Math.abs(w[0])<1e-12 && Math.abs(w[1])<1e-12
-      && vertexOns(v).length===0; })()`)===true);
+      && Math.abs(w[0])<1e-12 && Math.abs(w[1])<1e-12; })()`)===true);
 // The bench the report was made on: two circles, a vertex at each centre, a line
 // between them. Deleting one circle used to take the vertex at its centre AND the
-// line with it -- the ownership this model exists to be rid of.
+// line with it -- the ownership this model exists to be rid of (VERTEX.md §X.15).
 ok('deleting a body takes NEITHER the vertex nor the line', run(`(()=>{ clearScene();
   const a=makeBody(-1,0,0.3); bodies.push(a);
   const b=makeBody( 1,0,0.3); bodies.push(b);
-  const A=makeVertex(null,[-1,0]); makeVertexOn(A,{id:a.id,off:[0,0]},{join:true}); constraints.push(A);
-  const B=makeVertex(null,[ 1,0]); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
+  const A=makeVertex(null); makeVertexOn(A,{id:a.id,off:[0,0]},{join:true}); constraints.push(A);
+  const B=makeVertex(null); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
   const L=makeLine(); constraints.push(L); joinVertexToLine(L,A); joinVertexToLine(L,B);
   dropBodyFromConstraints(a.id); bodies=bodies.filter(x=>x!==a);
   const w=vertexWorld(A);
@@ -300,37 +312,72 @@ run(`clearSelection(); selectGroup(new Set([1,2]));
 }
 
 console.log('\n7. the tool');
-// One tap plants a vertex; the same tap again in the same place reaches THROUGH the
-// body it landed on to the one underneath, which is the whole gesture for a hinge.
-// Two overlapping disks, and a point well clear of both centres and both rims, so
-// the tap falls through snapAnchor to the plain topmost pick rather than to a snap.
+// One tap plants a POINT: a background incidence, unjoined, holding the world
+// coordinates of the place tapped -- and nothing else, whatever body happens to be
+// under it. Which body that would be is a question about draw order, and a point must
+// not take its frame from whatever is on top. Tapping the same place again reaches
+// through to join a body, topmost first, which is still how a hinge is made by hand.
+// Two overlapping disks, and a point well clear of both centres and both rims, so the
+// tap falls through snapAnchor to the plain pick rather than to a snap.
 run(`(()=>{ clearScene(); sim.gravity=false;
   bodies.push(makeBody(0,0,1.0));
   bodies.push(makeBody(0.5,0,0.8));    // overlapping, and on top
   setTool('vertex'); cam.scale=64; })()`);
 run(`runToolClick(0.45, 0.3)`);
 {
-  const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>e.id))');
-  ok('one tap plants a vertex on the topmost body',
-     vs.length===1 && vs[0].length===1 && vs[0][0]===2, JSON.stringify(vs));
+  const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>[e.id,e.off,!!e.join]))');
+  ok('one tap plants a point in the BACKGROUND frame, joined to nothing',
+     JSON.stringify(vs)==='[[[null,[0.45,0.3],false]]]', JSON.stringify(vs));
+}
+{
+  // ...and it stays where it was put when the disk it is sitting in is dragged away.
+  run(`bodies[1].x = 4`);
+  const w=J('vertexWorld(constraints[0])');
+  ok('dragging the body it is inside does not move it',
+     near(w[0],0.45,1e-12) && near(w[1],0.3,1e-12), JSON.stringify(w));
+  run(`bodies[1].x = 0.5`);
 }
 run(`runToolClick(0.45, 0.3)`);
 {
   const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>e.id))');
-  ok('the same tap again joins the body underneath',
-     vs.length===1 && vs[0].length===2 && vs[0][1]===1, JSON.stringify(vs));
+  ok('the same tap again joins the topmost body',
+     vs.length===1 && vs[0].length===2 && vs[0][1]===2, JSON.stringify(vs));
 }
 run(`runToolClick(0.45, 0.3)`);
 {
   const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>e.id))');
-  ok('a third tap finds nothing left to join and adds nothing',
-     vs.length===1 && vs[0].length===2, JSON.stringify(vs));
+  ok('...and again reaches the body underneath',
+     vs.length===1 && vs[0].length===3 && vs[0][2]===1, JSON.stringify(vs));
+}
+run(`runToolClick(0.45, 0.3)`);
+{
+  const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>e.id))');
+  ok('a fourth tap finds nothing left to join and adds nothing',
+     vs.length===1 && vs[0].length===3, JSON.stringify(vs));
 }
 run(`(()=>{ clearScene(); setTool('vertex'); runToolClick(3,4); })()`);
 {
-  const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>[e.id,e.off]))');
-  ok('a tap on empty space anchors to the background there',
-     JSON.stringify(vs)==='[[[null,[3,4]]]]', JSON.stringify(vs));
+  const vs=J('constraints.filter(isVertex).map(v=>vertexOns(v).map(e=>[e.id,e.off,!!e.join]))');
+  ok('a tap on empty space is the same thing -- a point, not a ground pin',
+     JSON.stringify(vs)==='[[[null,[3,4],false]]]', JSON.stringify(vs));
+}
+{
+  // Letting go of the last body a vertex is held to leaves it exactly where it was:
+  // the background incidence takes over, re-read at the point rather than at whatever
+  // it last happened to hold.
+  run(`(()=>{ clearScene(); sim.gravity=false;
+    const b=makeBody(0,0,0.5); bodies.push(b);
+    const v=makeVertex(null); makeVertexOn(v,{id:b.id,off:[0.2,0.1]},{join:true});
+    constraints.push(v); bodies[0].x=3; })()`);
+  const before=J('vertexWorld(constraints[0])');
+  run(`setIncidenceJoin(constraints[0], 1, false)`);
+  const after=J('vertexWorld(constraints[0])');
+  ok('unticking the last join leaves the point where it stood',
+     near(before[0],after[0],1e-12) && near(before[1],after[1],1e-12), JSON.stringify([before,after]));
+  run(`bodies[0].x = 9`);
+  const later=J('vertexWorld(constraints[0])');
+  ok('...and the body may then move without taking it along',
+     near(after[0],later[0],1e-12) && near(after[1],later[1],1e-12), JSON.stringify(later));
 }
 
 
@@ -449,6 +496,128 @@ run(`(()=>{ clearScene(); sim.gravity=false;
   ok('...which the solve made true of the disk carrying it',
      near(J('bodies[0].x'), -1.5, 1e-6) && near(J('bodies[0].y'), 0, 1e-6),
      JSON.stringify([J('bodies[0].x'), J('bodies[0].y')]));
+}
+
+
+console.log('\n11. a line lists what TOUCHES it on screen, and the tick that follows');
+// A held bar along y=0, and a vertex a little above it. Whether that vertex is "on"
+// the line is a question about the picture -- do the two glyphs touch -- so the answer
+// has to change with the zoom, and a fixed distance in metres cannot give it.
+const BAR = `(()=>{ clearScene(); sim.gravity=false; cam.scale=100;
+  const mk=(x,y)=>{ const v=makeVertex(null); makeVertexOn(v,{id:null,off:[x,y]},{join:true}); constraints.push(v); return v; };
+  const L=makeLine(); constraints.push(L);
+  for(const v of [mk(-1,0),mk(1,0)]) makeVertexOn(v,{id:L.id},{join:true,slide:false});
+  refreshFrozen(); return L; })()`;
+const theBar = 'constraints.find(isLine)';
+run(BAR);
+run(`(()=>{ const v=makeVertex(null); makeVertexOn(v,{id:null,off:[0,0.04]},{join:false});
+  constraints.push(v); })()`);
+{
+  // 0.04 m off the bar. At 100 px/m that is 4 px -- the dot and the stroke touch.
+  run(`cam.scale=100`);
+  ok('a vertex 4px off the bar is listed by it',
+     J(`verticesInExtent(${theBar}.id).length`)===3, JSON.stringify(J(`verticesInExtent(${theBar}.id).map(v=>v.label)`)));
+  // Zoom in and the same 0.04 m is 8 px: the glyphs have come apart.
+  run(`cam.scale=200`);
+  ok('...and zooming IN, at the same 0.04m, drops it',
+     J(`verticesInExtent(${theBar}.id).length`)===2, String(J(`verticesInExtent(${theBar}.id).length`)));
+  // Zoom out and it is well inside the stroke again. A tolerance in metres could not
+  // do this: it would be the same distance at every zoom, which is not what a person
+  // tapping two glyphs together is judging.
+  run(`cam.scale=40`);
+  ok('...and zooming OUT brings it back', J(`verticesInExtent(${theBar}.id).length`)===3);
+  run(`cam.scale=100`);
+  ok('the vertex says the same thing from its own side',
+     J(`vertexSites(constraints[2]).map(s=>s.id)`).includes(J(`${theBar}.id`)),
+     JSON.stringify(J(`vertexSites(constraints[2]).map(s=>s.id)`)));
+}
+// A disk straddling the bar, and a point inside the disk 4px above the bar -- which
+// is the state a tap leaves, and the state from which both ticks are offered.
+const BAR_AND_DISK = `(()=>{ clearScene(); sim.gravity=false; cam.scale=100;
+  const mk=(x,y)=>{ const v=makeVertex(null); makeVertexOn(v,{id:null,off:[x,y]},{join:true}); constraints.push(v); return v; };
+  const L=makeLine(); constraints.push(L);
+  for(const v of [mk(-1,0),mk(1,0)]) makeVertexOn(v,{id:L.id},{join:true,slide:false});
+  bodies.push(makeBody(0.25, 0.15, 0.30)); refreshFrozen();
+  const v=makeVertex(null); makeVertexOn(v,{id:null,off:[0.25,0.04]},{join:false});
+  constraints.push(v); })()`;
+const V='constraints[constraints.length-1]';
+{
+  // LINE FIRST. Nothing grounds the point, so the line takes it: it goes onto the bar
+  // and rides there. It is not a joint -- it places nothing and holds nothing, having
+  // no body at it to hold anything with -- so the bar is untouched.
+  run(BAR_AND_DISK);
+  run(`setIncidenceJoin(${V}, ${theBar}.id, true)`);
+  ok('joining only the line makes no joint: the line CARRIES the point instead',
+     J(`lineJoints(${theBar}).length`)===2 && J(`!!vertexRide(${V})`)===true,
+     String(J(`lineJoints(${theBar}).length`)));
+  ok('...and the point went onto the bar, which is what riding it means',
+     near(J(`vertexWorld(${V})[1]`), 0, 1e-9), JSON.stringify(J(`vertexWorld(${V})`)));
+  ok('...leaving the disk exactly where it was', near(J('bodies[0].y'), 0.15, 1e-12));
+  // It rides: swing the bar by lifting one of its ground pins and the point goes too.
+  const was=J(`vertexWorld(${V})`);
+  run(`(()=>{ const a=constraints.filter(isVertex)[0]; setVertexWorld(a, -1, 0.5); })()`);
+  const now=J(`vertexWorld(${V})`);
+  ok('...and swinging the bar carries the point with it',
+     Math.abs(now[1]-was[1])>1e-3, JSON.stringify([was,now]));
+  ok('...at the same station on it',
+     near(J(`vertexOns(${V}).find(e=>e.kind==='line').s`),
+          run(`lineStationAt(${theBar}, vertexWorld(${V})[0], vertexWorld(${V})[1])`), 1e-9));
+  run(BAR_AND_DISK);
+  run(`setIncidenceJoin(${V}, ${theBar}.id, true)`);
+  run(`setIncidenceJoin(${V}, bodies[0].id, true)`);
+  ok('...and ticking the disk at it makes the joint real',
+     J(`lineJoints(${theBar}).length`)===3 && J(`!!vertexRide(${V})`)===false);
+  ok('...taking the disk at the point, so nothing had to move',
+     run(`conMaxC(${theBar})`)<1e-9 && near(J('bodies[0].y'), 0.15, 1e-12),
+     String(J('bodies[0].y')));
+  ok('...and the station is gone, the joint being an ordinary slider now',
+     J(`vertexOns(${V}).find(e=>e.kind==='line').s===undefined`)===true);
+}
+{
+  // DISK FIRST, which is the other thing that can be ticked, and it lands somewhere
+  // else -- not an inconsistency but the same rule twice: a tick holds what it finds.
+  // Held to the disk, the point cannot move on its own, so the DISK moves to put it
+  // on the line.
+  run(BAR_AND_DISK);
+  run(`setIncidenceJoin(${V}, bodies[0].id, true)`);
+  ok('joining the disk first grounds the point there, moving nothing',
+     near(J('bodies[0].y'), 0.15, 1e-12) && near(J(`vertexWorld(${V})[1]`), 0.04, 1e-12));
+  run(`setIncidenceJoin(${V}, ${theBar}.id, true)`);
+  ok('...and joining the line then brings the DISK to the bar instead',
+     J(`lineJoints(${theBar}).length`)===3 && run(`conMaxC(${theBar})`)<1e-8
+       && near(J('bodies[0].y'), 0.15-0.04, 1e-6), String(J('bodies[0].y')));
+}
+{
+  // Letting the body go hands the point back to the line, where it stands.
+  const before=J(`vertexWorld(${V})`);
+  run(`setIncidenceJoin(${V}, bodies[0].id, false)`);
+  const after=J(`vertexWorld(${V})`);
+  ok('releasing the body gives the point back to the line, where it stood',
+     J(`!!vertexRide(${V})`)===true && near(before[0],after[0],1e-9) && near(before[1],after[1],1e-9),
+     JSON.stringify([before,after]));
+  ok('...and it is no longer a joint the bar has to place',
+     J(`lineJoints(${theBar}).length`)===2);
+}
+{
+  // A carried point has no offset anywhere that says where it is -- its station does
+  // -- so dragging it runs it ALONG the bar rather than off it.
+  run(`setVertexWorld(${V}, 0.9, 3)`);
+  ok('dragging a carried point slides it along the bar',
+     near(J(`vertexWorld(${V})[1]`), 0, 1e-9) && near(J(`vertexWorld(${V})[0]`), 0.9, 1e-9),
+     JSON.stringify(J(`vertexWorld(${V})`)));
+}
+{
+  // ...and the file carries the station, `fix` or not: for a rider it is not the
+  // constraint `fix` names but the whole of what says where the point is.
+  const txt=run(`exportScene()`);
+  ok('the file writes a rider as a joined line and a station',
+     /on=\d+\/join\/s=/.test(txt), txt.split('\n').filter(l=>l.startsWith('vertex')).join(' | '));
+  ok('...and it round-trips, with the point still riding where it was',
+     run(`(()=>{ const t=exportScene(); const w=vertexWorld(${V});
+       importScene(t);
+       const v=constraints[constraints.length-1];
+       return t===exportScene() && !!vertexRide(v)
+         && Math.abs(vertexWorld(v)[0]-w[0])<1e-9 && Math.abs(vertexWorld(v)[1]-w[1])<1e-9; })()`)===true);
 }
 
 console.log(`\n${pass} ok, ${fail} failed\n`);

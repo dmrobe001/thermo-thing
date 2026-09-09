@@ -213,6 +213,7 @@ const rejects = [
   ['an authored length lock',    'scene 5\nvessel 1 x=0 y=0 bore=1 len=1 lenlock'],
   ['a prototype key',            'scene 5\nbody 1 x=0 y=0 r=1 constructor=1'],
   ['a retired kind',             'scene 5\nbody 1 x=0 y=0 r=1\nbody 2 x=2 y=0 r=1\nrod 1 -- 2 len=2'],
+  ['a vertex with no incidence',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A'],
   ['two incidences on one body',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=1@(0.5,0)/join'],
   ['a weld with nothing joined',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/weld/restAng=0'],
   ['a weld with no rest angle',   'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/weld'],
@@ -224,7 +225,10 @@ const rejects = [
   // the same way a line's own keys are: what a point may say depends on what it is
   // attached to, and anything else is a load error rather than a field ignored.
   ['fix on a body incidence',    'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join/fix/s=0'],
-  ['a station with no fix',      'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/join/s=0'],
+  // A station with no `fix` is legal -- that is a vertex the line CARRIES, and the
+  // station is what says where on the bar it rides (constraints.js §06.2e). What is
+  // still meaningless is a station on a line the vertex is not joined to at all.
+  ['a station with no join',     'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/s=0'],
   ['a fix with no station',      'scene 5\nbody 1 x=0 y=0 r=1\nline 2\nvertex A on=1/join on=2/join/fix'],
   ['a dangling line reference',  'scene 5\nbody 1 x=0 y=0 r=1\nvertex A on=1/join on=9/join'],
   ['a dangling mesh reference',  'scene 5\nbody 1 x=0 y=0 r=1\nline 2 mesh=9'],
@@ -356,29 +360,31 @@ const MULTI = [
   }
 }
 
-// A vertex stands on its own (constraints.js §06.2e), so the format has to be able to
-// say so: `at=` is written exactly when nothing else in the file says where the point
-// is, and omitted -- as derived geometry -- the moment something does. A bench that
-// could not write a free vertex would delete one every time it saved.
+// Nothing owns anything (VERTEX.md §X.15), so the format has to be able to write a
+// bench whose bodies have been deleted out from under it: two vertices standing on
+// their own marks and a line still running between them. A bench that could not write
+// this would be deleting objects every time it saved.
 {
-  const FREE = ['scene 5', 'sim gravity=off', 'cam x=0 y=0 scale=64', '',
-                'body 1 x=0 y=0 r=0.3', 'line 3', 'vertex A at=(-1,0.5) on=3/join',
-                'vertex B on=1/join on=3/join', 'vertex C at=(2,2)'].join('\n')+'\n';
-  let err=null, t1=null, t2=null;
-  try { run(`importScene(${JSON.stringify(FREE)})`); t1=run('exportScene()');
-        run(`importScene(${JSON.stringify(t1)})`);   t2=run('exportScene()'); }
-  catch(e){ err=e; }
-  ok('a vertex with no incidence at all loads', !err, err&&(err.stack||String(err)));
-  if(!err){
-    ok('a free vertex round-trips byte-for-byte', t1===t2, firstDiff(t1,t2));
-    const ls=t1.split('\n');
-    ok('...writing at= for the point nothing locates', ls.includes('vertex A at=(-1,0.5) on=3/join'), t1);
-    ok('...and for the one with no relations whatever', ls.includes('vertex C at=(2,2)'), t1);
-    ok('...and NOT for the one a body locates', ls.includes('vertex B on=1/join on=3/join'), t1);
-    ok('a line placed by a free vertex is still drawn',
-       run(`(()=>{ const L=constraints.find(isLine); const f=linePlacement(L);
-             return !!f && Math.abs(Math.hypot(f.wax-f.wbx, f.way-f.wby)-Math.hypot(1,0.5))<1e-9; })()`)===true);
-  }
+  let err=null, t1=null, t2=null, shape=null;
+  try {
+    run(`(()=>{ clearScene(); sim.gravity=false;
+      const a=makeBody(-1,0,0.3); bodies.push(a);
+      const b=makeBody( 1,0,0.3); bodies.push(b);
+      const A=makeVertex(null); makeVertexOn(A,{id:a.id,off:[0,0]},{join:true}); constraints.push(A);
+      const B=makeVertex(null); makeVertexOn(B,{id:b.id,off:[0,0]},{join:true}); constraints.push(B);
+      const L=makeLine(); constraints.push(L);
+      makeVertexOn(A,{id:L.id},{join:true}); makeVertexOn(B,{id:L.id},{join:true});
+      for(const id of bodies.map(x=>x.id)){ dropBodyFromConstraints(id); bodies=bodies.filter(x=>x.id!==id); } })()`);
+    shape = run(`JSON.stringify([constraints.length,
+      constraints.filter(isVertex).map(v=>vertexWorld(v)), !!linePlacement(constraints.find(isLine))])`);
+    t1=run('exportScene()');
+    run('importScene('+JSON.stringify(t1)+')');
+    t2=run('exportScene()');
+  } catch(e){ err=e; }
+  ok('a bench whose bodies were all deleted still exports and reloads', !err, err&&(err.stack||String(err)));
+  ok('...with both vertices where they stood, and the line still placed',
+     shape==='[3,[[-1,0],[1,0]],true]', shape);
+  if(!err) ok('...and it round-trips byte-for-byte', t1===t2, firstDiff(t1,t2));
 }
 
 console.log('\n9. a scene loads the same whatever was on the bench before it');

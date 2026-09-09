@@ -189,28 +189,16 @@ const SCENE_SCHEMA = [
             ['gas',  v=>[v.gas.kap, v.gas.mass], (v,a)=>{v.gas.kap=a[0]; v.gas.mass=a[1];}] ],
     restore:v=>{ v._vlen0=v.vlen; refreshVessel(v); } },
 
-  // A VERTEX (constraints.js §06.2e). `at` is its own place, and it is written only
-  // when nothing else in the file says where the vertex is -- SCENE.md §S.3's rule
-  // exactly: what the geometry implies is derived and stays out, what it does not is
-  // authored and goes in. A vertex a body or the background locates therefore writes
-  // no `at` at all and reads the same as it always did; a vertex standing on its own
-  // -- every body it once touched now deleted -- writes the one thing left to say
-  // about it. `when` also fires for a FRAGMENT whose locator fell outside the
-  // selection, so a copied part carries its own places rather than landing at the
-  // origin.
   { kind:'vertex', list:'constraints', label:true, match:c=>c.type==='vertex',
-    fields:{
-      at:{t:'vec2', always:true, when:v=>{ const e=vertexLocator(v); return !e || !inScope(e.id); },
-          get:c=>vertexWorld(c), set:(c,p)=>{ c.at=[p[0],p[1]]; }},
-      on:{t:'ons', always:true, get:c=>vertexOns(c),
-          set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
+    fields:{ on:{t:'ons', always:true, get:c=>vertexOns(c),
+                 set:(c,arr)=>{ for(const e of arr) makeVertexOn(c, {id:e.id, off:e.off}, e); }} },
     build:()=>makeVertex(null),
-    // Checked in evalScene, before the bench is touched: two incidences on one body
-    // would be the vertex claiming to be in two material places at once. A vertex
-    // with NO incidence is legal -- it is a named point with a place and no
-    // relations, which is what a vertex is before anything is said about it.
+    // Checked in evalScene, before the bench is touched: a vertex with no incidence
+    // has no position and nothing to say, and two incidences on one body would be
+    // the vertex claiming to be in two material places at once.
     validate:(it)=>{
       const ons = it.f.on || [];
+      if(!ons.length) return 'a vertex needs at least one on= incidence';
       const seen=new Set();
       for(const e of ons){
         const k = e.id==null ? 'bg' : e.id;
@@ -483,6 +471,7 @@ const REPEATABLE = new Set(['ons','refs']);
 //   1@(0.2,-0.1)/join/weld/restAng=0.3   held, and rigid, at that body-frame point
 //   bg(0,4.4)/join                       a ground pin
 //   3@(0,0.5)                            a feature point: marked, not held
+//   7/join/s=0.75                        a point riding line 7, joined to nothing else
 // While a FRAGMENT is being written this holds the ids the listing will contain, so
 // an incidence naming something outside it can be left out. A vertex whose bodies are
 // all in a selection is a member (SCENE.md §S.9) even when it also sits on a line that
@@ -494,10 +483,14 @@ const inScope = id => id==null || !EMIT_SCOPE || EMIT_SCOPE.has(id);
 function fmtOn(e){
   const parts=[ e.kind==='line' ? String(e.id) : fmtEp(e,'ep') ];
   if(e.join) parts.push('join');
-  // Sliding is the default on a line (constraints.js §06.2f), so the word is `fix`
-  // and it comes with the station it captured -- the one thing about a held joint
-  // the pose does not imply.
-  if(e.kind==='line' && e.join && !e.slide) parts.push('fix', `s=${fmtNum(e.s||0)}`);
+  // Sliding is the default on a line (constraints.js §06.2f), so the word is `fix`.
+  // The STATION is written separately from it, because the two say different things
+  // and only usually travel together: `fix` is the constraint -- this joint keeps its
+  // station rather than running along the bar -- while `s` is the station itself, and
+  // a vertex the line CARRIES (§06.2e vertexRide) has one whether or not it is fixed,
+  // that station being the whole of what says where the point is.
+  if(e.kind==='line' && e.join && !e.slide) parts.push('fix');
+  if(e.kind==='line' && e.join && e.s!==undefined) parts.push(`s=${fmtNum(e.s||0)}`);
   if(e.weld) parts.push('weld', `restAng=${fmtNum(e.restAng||0)}`);
   return parts.join('/');
 }
@@ -541,8 +534,12 @@ function parseOn(name, tok, ln, env, lines){
   }
   if(out.fix && out.s===undefined)
     throw new SceneError(ln, `${name}: a joint held on a line needs its captured station, as s=...`);
-  if(!out.fix && out.s!==undefined)
-    throw new SceneError(ln, `${name}: "s" is the station of a HELD joint -- a sliding one has none`);
+  // A SLIDING joint may carry a station too, and then it is not a constraint but a
+  // position: it is a vertex the line CARRIES (constraints.js §06.2e vertexRide),
+  // nothing else holding it, and the station is the whole of what says where it is.
+  // Which is only meaningful without a join to hold it by.
+  if(out.s!==undefined && !out.join)
+    throw new SceneError(ln, `${name}: a station means nothing on a line this vertex is not joined to`);
   return {id:Number(parts[0]), kind:'line', join:!!out.join, slide:!out.fix,
           weld:!!out.weld, restAng:out.restAng, s:out.s};
 }
@@ -1112,6 +1109,10 @@ function evalScene(scan){
 // reuse. Shared with §15 so there is one answer to "what is a fresh bench".
 function clearScene(){
   bodies=[]; constraints=[]; cables=[]; rotSprings=[]; interactions=[];
+  // A half-finished tool gesture names objects this scene is throwing away, so it
+  // goes with them: a `pending` first pick or a `bodyPreview` left over from the
+  // bench being replaced is a reference to something that no longer exists.
+  pending=null; bodyPreview=null; hover=null; hoverHandle=null; hoverSnap=null;
   uid=1; sim.bathQ=0;
   ENERGY_BANK.clear();
   refreshFrozen();

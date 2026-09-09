@@ -240,9 +240,17 @@ let incRows=[];
 // Where a row's coordinates come from: the incidence's own stored offset where there
 // is one -- that is the authored number, and under a violation it is not what the
 // geometry reads -- and the live geometry where there is none to read.
+// The BACKGROUND row is the exception, and it is the vertex's own world coordinates.
+// An unjoined background incidence is not a mark on anything -- the background has no
+// material spots worth marking -- it is only the record of where the point is, read
+// back when nothing else locates it, and refreshed at the moment it takes over. So it
+// shows the live point, and editing it moves the vertex, exactly as its own x/y field
+// does. Joined, it is a ground pin, and then the stored number is the authored one.
+const incidenceStored = (v,id) => { const e=vertexOns(v).find(x=>x.id===id);
+  return (e && !isLineOn(e) && (id!=null || e.join)) ? e : null; };
 function incidenceOff(v, id){
-  const e=vertexOns(v).find(x=>x.id===id);
-  if(e && !isLineOn(e)) return e.off;
+  const e=incidenceStored(v,id);
+  if(e) return e.off;
   const [wx,wy]=vertexWorld(v);
   if(id==null) return [wx,wy];
   const b=bodies[bodyIndex(id)];
@@ -250,7 +258,7 @@ function incidenceOff(v, id){
 }
 function incidenceStation(v, line){
   const e=vertexOns(v).find(x=>x.id===line.id);
-  if(e && e.join && !e.slide) return e.s||0;
+  if(e && e.join && e.s!==undefined) return e.s;
   const [wx,wy]=vertexWorld(v);
   return lineStationAt(line, wx, wy);
 }
@@ -264,11 +272,23 @@ function incidenceRow(v, id, o={}){
   // body's or a line's -- and there it is a link, because the other panel is where
   // the rest of what that vertex holds is said.
   const name = o.selVertex ? `<a href="#" data-inc-sel="${k}">${v.label}</a>` : bodyName(id);
-  const P = vertexPrimary(v);
   const b = id!=null ? bodies[bodyIndex(id)] : null;
-  const what = line
-    ? (!e ? 'lies on it' : !join ? 'not held' : e.slide ? 'slides along it' : 'held')
-    : (!e ? 'inside it' : !join ? 'marks a spot' : e===P ? 'joined &middot; locates it' : 'joined');
+  // The right-hand word says what the TICKS cannot, and nothing they already say --
+  // "held" next to a `slide` tick and a `joined` tick was three ways of writing the
+  // same two bits, in a word the line panel uses for something narrower. What is left
+  // is the one fact the ticks leave open: which of these frames the point's position
+  // is actually read from (constraints.js §06.2e vertexWorld), and, for a body the
+  // vertex has let go of, that the coordinates below are the mark it left rather than
+  // where it now is.
+  const P = vertexPrimary(v), R = vertexRide(v);
+  // The background is never a "mark": it has no material spots worth marking, so an
+  // unjoined background incidence is only the vertex's world coordinates, and it is
+  // the locator whenever neither of the other two is (constraints.js §06.2e).
+  const bgLast = !P && !R && id==null ? e : null;
+  const what = e && (e===P || e===bgLast) ? 'locates it'
+             : e && e===R ? 'carries it'
+             : e && !join && id!=null && !line ? 'marks a spot'
+             : '';
   const coords = line
     ? numRow('station', `inc_s${k}`, incidenceStation(v,line).toFixed(3), {step:0.05})
     : (()=>{ const off=incidenceOff(v,id);
@@ -287,21 +307,32 @@ function incidenceRow(v, id, o={}){
     </div>
   </div>`;
 }
-// Ticking `joined` on. Where there is no incidence yet it makes one AT THE PLACE THE
-// VERTEX ALREADY IS, so the tick never snaps anything -- the discipline every capture
-// in the engine follows. A line's joint is made sliding, as the line tool makes them
-// (VERTEX.md §X.11), and gets the quick solve that brings the vertex onto the bar; a
-// body's is exact where it stands and needs none.
+// Ticking `joined`. Where there is no incidence yet it makes one AT THE PLACE THE
+// VERTEX ALREADY IS, so the tick itself never snaps anything -- the discipline every
+// capture in the engine follows -- and a line's joint is made sliding, as the line
+// tool makes them (VERTEX.md §X.11).
+//
+// Then it solves, whichever it was. A fresh incidence is satisfied where it stands,
+// so on its own the projection is a no-op; what it is for is the rows this tick has
+// just brought to LIFE. A vertex lying near a line, joined to the line and to nothing
+// else, is not a joint at all -- a line is never a locator (§X.3), so there is nothing
+// for the row to move -- and the moment a body is ticked at that same vertex the
+// on-line row becomes real and is violated by however far off the line the point was
+// put. Solving here is what closes that gap, so the two ticks in either order end at
+// the same assembled bench.
 function setIncidenceJoin(v, id, want){
   const e = vertexOns(v).find(x=>x.id===id) || null;
-  if(e){ setVertexJoin(v, e, want); return; }
+  if(e){ setVertexJoin(v, e, want); if(want) projectPositions(12); return; }
   if(!want) return;
-  const line = id!=null ? lineById(id) : null;
   const [wx,wy]=vertexWorld(v);
   const b = id!=null ? bodies[bodyIndex(id)] : null;
   const off = id==null ? [wx,wy] : b ? epOffOf(b,wx,wy) : [0,0];
   if(!makeVertexOn(v, {id, off}, {join:true, slide:true})) return;
-  if(line) projectPositions(12);
+  // Which of the vertex's frames now says where it is may have just changed -- ticking
+  // a line onto a vertex nothing grounds hands the point to that line, and the line
+  // needs its station to carry it (constraints.js §06.2e).
+  settleVertex(v, wx, wy);
+  projectPositions(12);
 }
 // The two commits a row's coordinates make, lifted out of the handlers so the panel
 // wiring is only wiring and each is one testable thing. Both snapshot the pose first:
@@ -310,8 +341,8 @@ function setIncidenceJoin(v, id, want){
 // -- a distance the mechanism cannot take leaves the bench wherever the solver got to,
 // exactly as typing a body's pose does.
 function commitIncidenceOff(v, id, x, y){
-  const e=vertexOns(v).find(z=>z.id===id);
-  if(e && isLineOn(e)) return;             // a line holds a station, not an offset
+  const e=incidenceStored(v, id);
+  if(vertexOns(v).some(z=>z.id===id && isLineOn(z))) return;   // a line holds a station
   const q0=poseSnapshot();
   if(e) e.off=[x,y];
   else {
@@ -375,6 +406,13 @@ function vertexInspectorHTML(v){
   // nothing to tie to (VERTEX.md §X.3).
   const weldNote = welds===1
     ? '<p class="muted" style="margin:8px 0 0">Only one thing is welded here, so nothing is held: a weld ties two frames together. Weld a second body at this vertex &mdash; or the background &mdash; to make the joint rigid.</p>' : '';
+  // A vertex with nothing but a line to hold it RIDES the line (constraints.js §06.2e
+  // vertexRide) -- it moves with the bar and holds nothing, because a point with no
+  // mass has nothing to hold anything with. Saying that is worth a line of prose: it
+  // is why the bar does not react to it, and why the next tick is the one that matters.
+  const ride = vertexRide(v);
+  const adriftNote = ride
+    ? `<p class="muted" style="margin:8px 0 0">Nothing but ${bodyName(ride.id)} holds this vertex, so it rides along the line and asks nothing of it &mdash; a point with no body at it has no mass to push with, and the <b>slide</b> tick changes nothing until there is one. Join a body here and it becomes a real joint on the line.</p>` : '';
   return `
     <h3>Vertex ${v.label}</h3><p class="sub">a named point, and the bodies it touches</p>
     <div class="card"><div class="cardhead">label</div>
@@ -383,10 +421,10 @@ function vertexInspectorHTML(v){
     <div class="card"><div class="cardhead">position</div>
       ${numRow('x', 'vt_x', wx.toFixed(3), {step:0.05})}
       ${numRow('y', 'vt_y', wy.toFixed(3), {step:0.05})}
-      <p class="muted" style="margin:8px 0 0">Moving the vertex re-reads every joined body's own anchor, so the bodies stay where they are and the point moves between them.</p>
+      <p class="muted" style="margin:8px 0 0">Moving the vertex re-reads every joined body's own anchor, so the bodies stay where they are and the point moves between them. A vertex a line carries has no anchor to re-read, so it runs <em>along</em> the line to the nearest place on it instead.</p>
     </div>
     <div class="card"><div class="cardhead">bodies at this vertex</div>
-      ${rows || '<p class="muted">none</p>'}${weldNote}
+      ${rows || '<p class="muted">none</p>'}${adriftNote}${weldNote}
       <p class="muted" style="margin:8px 0 0">Everything whose extent covers this point, whether it is held here or not &mdash; the background always, since its extent is the whole plane. Tick <b>joined</b> to hold the vertex to one, untick it to let go; the body stays listed either way, because what is listed is where the point <em>is</em>. Editing a coordinate moves the anchor and asks the assembly to follow.</p>
     </div>
     <button class="del" id="vt_del">Delete vertex</button>`;
@@ -541,7 +579,7 @@ function renderInspector(){
       </div>
       <div class="card"><div class="cardhead">vertices along the line</div>
         ${jointRows || '<p class="muted">none</p>'}
-        <p class="muted" style="margin:8px 0 0">Every vertex on this line, held here or not. A joint that <em>slides</em> may travel along it; one that is held keeps its station, and the distances below are what that comes to. Editing a station moves that joint and asks the assembly to follow.</p>
+        <p class="muted" style="margin:8px 0 0">Every vertex on this line, joined to it or not. A joint that <em>slides</em> may travel along it; one that is held keeps its station, and the distances below are what that comes to. A vertex with nothing else holding it is neither: the line simply carries it at its station, and it asks nothing of the bar. Editing a station moves that vertex and asks the assembly to follow.</p>
         ${J.filter(K=>!K.e.slide).length===1 ? '<p class="muted" style="margin:8px 0 0">Only one joint here is held, so nothing is: a station is a distance from another held joint, and the first one is what the rest are measured from. Hold a second joint &mdash; one of the ones placing the line, if you want this one pinned in the world &mdash; and the distance between them becomes real.</p>' : ''}
       </div>
       ${segs.length?`<div class="card"><div class="cardhead">held distances</div>${segRows}</div>`:''}
