@@ -367,6 +367,39 @@ ok('...with the loose end carried by the bar', J(`!!vertexRide(${loose})`)===tru
   ok('a bar two joints still place writes none', !/ang=/.test(run(`exportScene()`)),
      run(`exportScene()`).split('\n').filter(l=>l.startsWith('line')).join(' | '));
 }
+{
+  // Three points on the arm, one of them held by the body: dragging the far one turns
+  // the whole bar about that joint, and the one in the middle stays where it is ALONG
+  // the bar -- it has a station of its own, and a drag on somebody else's end is not
+  // an instruction about it. Which side of the held joint each of them is on is not
+  // the drag's to change either: a point taken across it would swing every other one
+  // through half a turn to follow.
+  run(`(()=>{ clearScene(); sim.gravity=false; cam.scale=64;
+    const b=makeBody(0,0,0.3); bodies.push(b);
+    const A=makeVertex(null); makeVertexOn(A,{id:b.id,off:[0,0]},{join:true}); constraints.push(A);
+    const B=makeVertex(null); makeVertexOn(B,{id:null,off:[1,0]},{join:false}); constraints.push(B);
+    const C=makeVertex(null); makeVertexOn(C,{id:null,off:[2,0]},{join:false}); constraints.push(C);
+    const L=makeLine(); constraints.push(L);
+    for(const v of [A,B,C]) makeVertexOn(v,{id:L.id},{join:true,slide:false});
+    for(const v of [A,B,C]) settleVertex(v, ...vertexWorld(v));
+    captureLineHeading(L); refreshFrozen(); })()`);
+  const at = lab => J(`vertexWorld(constraints.find(c=>isVertex(c)&&c.label==='${lab}'))`);
+  run(`(()=>{ const p=vertexWorld(constraints.find(c=>isVertex(c)&&c.label==='C'));
+    const h=pickHandle(p[0],p[1]); if(!h) throw new Error('no handle'); applyHandle(h, 0, 2.5); })()`);
+  const A=at('A'), B=at('B'), C=at('C');
+  ok('dragging one end of a three-point arm turns the whole bar about its held joint',
+     near(C[0],0,1e-9) && near(C[1],2.5,1e-9) && near(Math.hypot(B[0]-A[0],B[1]-A[1]), 1, 1e-9),
+     JSON.stringify([A,B,C]));
+  ok('...with the middle point still between them, on the side it was on',
+     near(B[0],0,1e-9) && near(B[1],1,1e-9), JSON.stringify(B));
+  run(`bodies[0].x += 1; bodies[0].th += Math.PI/2;`);
+  const A2=at('A'), B2=at('B'), C2=at('C');
+  ok('...and the whole arm rides the body, in order and to scale',
+     near(Math.hypot(B2[0]-A2[0],B2[1]-A2[1]), 1, 1e-9)
+       && near(Math.hypot(C2[0]-A2[0],C2[1]-A2[1]), 2.5, 1e-9)
+       && near((B2[0]-A2[0])*(C2[0]-A2[0])+(B2[1]-A2[1])*(C2[1]-A2[1]), 2.5, 1e-9),
+     JSON.stringify([A2,B2,C2]));
+}
 
 console.log(`\n${pass} ok, ${fail} failed\n`);
 process.exit(fail?1:0);

@@ -750,8 +750,15 @@ function setVertexWorld(v, wx, wy){
     // Both are the point's to say -- there is nothing else on the bar to disagree, and
     // no row anywhere to refuse it -- so the bar swings to the place asked for and the
     // station is the distance to it (§06.2f lineRiddenPlacement).
-    line.ang = Math.atan2(wy-A[0].wy, wx-A[0].wx) - anchorFrameAngle(A[0].v);
-    R.s = A[0].e.s + Math.hypot(wx-A[0].wx, wy-A[0].wy);
+    // Which SIDE of that joint the point is on is not the drag's to change: everything
+    // else on the bar is at a station too, and a point taken across the joint it hangs
+    // from would swing them all through half a turn to follow it. So the heading is
+    // aimed to keep the point where it already sits along the bar, and it is the
+    // distance that the drag sets.
+    const sgn = (R.s - A[0].e.s) < 0 ? -1 : 1;
+    const aim = Math.atan2(wy-A[0].wy, wx-A[0].wx) - anchorFrameAngle(A[0].v);
+    line.ang = sgn<0 ? aim + Math.PI : aim;
+    R.s = A[0].e.s + sgn*Math.hypot(wx-A[0].wx, wy-A[0].wy);
     rebaseLineStations(line);             // back onto the origin's own scale (§06.2f)
     return;
   }
@@ -1108,16 +1115,30 @@ function lineRiddenPlacement(line, A, J){
                                           // along itself too, which one number cannot say
   const phi=anchorFrameAngle(A.v) + line.ang;
   const ux=Math.cos(phi), uy=Math.sin(phi);
-  const out=[];
-  for(const K of J){
-    if(K===A){ out.push({K, wx:A.wx, wy:A.wy}); continue; }
-    if(K.e.s===undefined) continue;       // nothing says where along the bar it is
-    const d=K.e.s - A.e.s;
-    out.push({K, wx:A.wx+ux*d, wy:A.wy+uy*d});
+  // Stations measured from the joint the bar hangs off, which puts it at zero. The
+  // heading is what the bar HOLDS here, so `u` is taken from it rather than re-derived
+  // from the points: a direction read back off two of them can come out reversed when
+  // a station changes -- which end is furthest along is exactly what a drag on a loose
+  // end changes -- and the bar would turn end for end under the hand.
+  const K=[];
+  for(const j of J){
+    if(j===A){ K.push({j, du:0, wx:A.wx, wy:A.wy}); continue; }
+    if(j.e.s===undefined) continue;       // nothing says where along the bar it is
+    const d=j.e.s - A.e.s;
+    K.push({j, du:d, wx:A.wx+ux*d, wy:A.wy+uy*d});
   }
-  if(out.length<2) return null;
-  for(const o of out){ o.K.wx=o.wx; o.K.wy=o.wy; }
-  return out.map(o=>o.K);
+  if(K.length<2) return null;
+  let P=K[0], Q=K[0];
+  for(const k of K){ if(k.du>P.du) P=k; if(k.du<Q.du) Q=k; }
+  const L=P.du-Q.du;
+  if(!(L>1e-9)) return null;              // every joint at one point: no bar to draw
+  const out=[];
+  for(const k of K){ k.j.du = k.du - P.du; k.j.wx=k.wx; k.j.wy=k.wy; out.push(k.j); }
+  const O = out.find(x => !x.e.slide) || null;   // joint order, as everywhere else
+  out.sort((a,b)=>b.du-a.du);                    // P first, Q last
+  return { J:out, P:P.j, Q:Q.j, O, epA:null, epB:null,
+           wax:P.wx, way:P.wy, wbx:Q.wx, wby:Q.wy,
+           ux, uy, nx:-uy, ny:ux, L, phi, placedOnly:true };
 }
 // A station is a distance from the ORIGIN, so the origin's own station is zero and
 // every reading of the geometry counts on it (`lineStationPoint` adds the origin back).
@@ -1147,7 +1168,7 @@ function linePlacement(line){
   // vertices on their own marks with a line between them is the bench a deleted body
   // leaves, and nothing there moves for a stale point to lie about.
   const A=J.filter(K=>vertexPrimary(K.v));
-  if(A.length===1) J = lineRiddenPlacement(line, A[0], J) || lineJointsAll(line);
+  if(A.length===1){ const r=lineRiddenPlacement(line, A[0], J); if(r) return r; }
   if(J.length<2) return null;
   let P=null, Q=null, best=-1;
   for(let i=0;i<J.length;i++) for(let j=i+1;j<J.length;j++){

@@ -709,9 +709,12 @@ It builds no rows either way. A bar with one joint has nothing to hold, and a lo
 end has no mass to hold it with -- which is the same reason a vertex a line carries
 asks nothing of the bar. **Dragging that loose end aims the bar**: nothing else places
 it, so the point is its free end and the drag says both things at once -- which way
-the bar points, and how far along it the point sits. On a bar something else places,
-a carried point still runs *along* it, because there the bar's own place is not the
-point's to set.
+the bar points, and how far along it the point sits. What it does not say is which
+**side** of the held joint the point is on: everything else on the bar has a station
+too, and a point taken across the joint the bar hangs from would swing all of them
+through half a turn to follow it. So the arm turns about that joint and the rest of
+it keeps its place along the bar. On a bar something else places, a carried point
+still runs *along* it, because there the bar's own place is not the point's to set.
 
 Dragging the vertex is the *only* gesture that sets a station, and the case that says
 so is a **body** drag. A body a line grounds is pinned -- that is what grounding is,
